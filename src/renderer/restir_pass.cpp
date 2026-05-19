@@ -52,7 +52,7 @@ void issueBarrier(VkCommandBuffer cmd, VkImageMemoryBarrier2& b) {
 }
 } // anon
 
-void RestirPass::init(Device& d) {
+void RestirPass::init(Device& d, bool hwRtAvailable) {
     m_device = &d;
 
     VkSamplerCreateInfo si{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
@@ -64,21 +64,27 @@ void RestirPass::init(Device& d) {
     si.maxLod = 0.0f;
     VK_CHECK(vkCreateSampler(d.device(), &si, nullptr, &m_linearClamp));
 
-    // 共享 pool：3 个 set
-    std::array<VkDescriptorPoolSize, 5> ps{{
-        {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 3},
-        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 3},   // 每 set 一个 light SSBO
-        {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,  16},  // 多 GBuffer + 3D + reservoir reads
-        {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,  4},   // reservoir writes + restir out
+    // 共享 pool：3 个 set（+1 如果启用 RT shade）
+    uint32_t maxSets = hwRtAvailable ? 4u : 3u;
+    std::array<VkDescriptorPoolSize, 6> ps{{
+        {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 4},
+        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 4},
+        {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,  20},
+        {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,  5},
         {VK_DESCRIPTOR_TYPE_SAMPLER,        1},
+        {VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 1},
     }};
     VkDescriptorPoolCreateInfo pci{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
-    pci.maxSets = 3; pci.poolSizeCount = (uint32_t)ps.size(); pci.pPoolSizes = ps.data();
+    pci.maxSets = maxSets; pci.poolSizeCount = (uint32_t)ps.size(); pci.pPoolSizes = ps.data();
     VK_CHECK(vkCreateDescriptorPool(d.device(), &pci, nullptr, &m_pool));
 
     initInitPipeline();
     initSpatialPipeline();
     initShadePipeline();
+
+    if (hwRtAvailable) {
+        initShadeRtPipeline();
+    }
 }
 
 void RestirPass::initInitPipeline() {
@@ -179,6 +185,99 @@ void RestirPass::initShadePipeline() {
     VK_CHECK(vkCreateComputePipelines(m_device->device(), VK_NULL_HANDLE, 1, &cpci, nullptr, &m_shadePipeline));
 }
 
+void RestirPass::initShadeRtPipeline() {
+    // M10 RT shade: bindings 0=Frame, 1=albedo, 2=normal, 3=depth, 4=lights SSBO,
+    //                        5=reservoir sampled, 6=TLAS, 7=outRestir storage
+    std::array<VkDescriptorSetLayoutBinding, 8> b{};
+    b[0] = {0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
+    b[1] = {1, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,  1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
+    b[2] = {2, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,  1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
+    b[3] = {3, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,  1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
+    b[4] = {4, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
+    b[5] = {5, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,  1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
+    b[6] = {6, VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
+    b[7] = {7, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,  1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
+
+    VkDescriptorSetLayoutCreateInfo li{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+    li.bindingCount = (uint32_t)b.size(); li.pBindings = b.data();
+    VK_CHECK(vkCreateDescriptorSetLayout(m_device->device(), &li, nullptr, &m_shadeRtSetLayout));
+    VkDescriptorSetAllocateInfo dai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+    dai.descriptorPool = m_pool; dai.descriptorSetCount = 1; dai.pSetLayouts = &m_shadeRtSetLayout;
+    VK_CHECK(vkAllocateDescriptorSets(m_device->device(), &dai, &m_shadeRtSet));
+
+    VkPushConstantRange pc{VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(ShadePC)};
+    VkPipelineLayoutCreateInfo plci{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+    plci.setLayoutCount = 1; plci.pSetLayouts = &m_shadeRtSetLayout;
+    plci.pushConstantRangeCount = 1; plci.pPushConstantRanges = &pc;
+    VK_CHECK(vkCreatePipelineLayout(m_device->device(), &plci, nullptr, &m_shadeRtPlLayout));
+
+    ShaderModule cs(*m_device, shaderDir() / "gi" / "restir" / "restir_shade_rt.spv");
+    VkPipelineShaderStageCreateInfo stage{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
+    stage.stage = VK_SHADER_STAGE_COMPUTE_BIT; stage.module = cs.handle(); stage.pName = "cs_main";
+    VkComputePipelineCreateInfo cpci{VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
+    cpci.stage = stage; cpci.layout = m_shadeRtPlLayout;
+    VK_CHECK(vkCreateComputePipelines(m_device->device(), VK_NULL_HANDLE, 1, &cpci, nullptr, &m_shadeRtPipeline));
+}
+
+void RestirPass::bindResourcesRt(Device& d,
+                                  const RestirResources& res,
+                                  const RenderTargets& rt,
+                                  VkBuffer frameUbo,
+                                  VkAccelerationStructureKHR tlas) {
+    if (m_shadeRtSet == VK_NULL_HANDLE) return;
+
+    VkDevice dev = d.device();
+    auto sampledRO = [](VkImageView v) {
+        VkDescriptorImageInfo i{};
+        i.imageView = v; i.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        return i;
+    };
+    VkDescriptorBufferInfo uboInfo{frameUbo, 0, VK_WHOLE_SIZE};
+    VkDescriptorBufferInfo lightInfo{res.lightBuffer(), 0, VK_WHOLE_SIZE};
+    VkDescriptorImageInfo am  = sampledRO(rt.gAlbedoMetal.view());
+    VkDescriptorImageInfo nr  = sampledRO(rt.gNormalRough.view());
+    VkDescriptorImageInfo dp  = sampledRO(rt.depth.view());
+    VkDescriptorImageInfo rB  = sampledRO(res.reservoirB().view());
+    VkDescriptorImageInfo outR{};
+    outR.imageView = rt.restir.view(); outR.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+
+    auto setBuf = [&](VkWriteDescriptorSet& W, VkDescriptorSet ds, uint32_t bi,
+                      VkDescriptorType t, const VkDescriptorBufferInfo* p) {
+        W = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+        W.dstSet = ds; W.dstBinding = bi; W.descriptorCount = 1;
+        W.descriptorType = t; W.pBufferInfo = p;
+    };
+    auto setImg = [&](VkWriteDescriptorSet& W, VkDescriptorSet ds, uint32_t bi,
+                      VkDescriptorType t, const VkDescriptorImageInfo* p) {
+        W = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+        W.dstSet = ds; W.dstBinding = bi; W.descriptorCount = 1;
+        W.descriptorType = t; W.pImageInfo = p;
+    };
+
+    // TLAS acceleration structure write descriptor
+    VkWriteDescriptorSetAccelerationStructureKHR tlasInfo{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR};
+    tlasInfo.accelerationStructureCount = 1;
+    tlasInfo.pAccelerationStructures = &tlas;
+
+    std::array<VkWriteDescriptorSet, 8> w{};
+    setBuf(w[0], m_shadeRtSet, 0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, &uboInfo);
+    setImg(w[1], m_shadeRtSet, 1, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,  &am);
+    setImg(w[2], m_shadeRtSet, 2, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,  &nr);
+    setImg(w[3], m_shadeRtSet, 3, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,  &dp);
+    setBuf(w[4], m_shadeRtSet, 4, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, &lightInfo);
+    setImg(w[5], m_shadeRtSet, 5, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,  &rB);
+    setImg(w[7], m_shadeRtSet, 7, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,  &outR);
+
+    // Binding 6: TLAS
+    w[6] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+    w[6].dstSet = m_shadeRtSet; w[6].dstBinding = 6; w[6].descriptorCount = 1;
+    w[6].descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
+    w[6].pNext = &tlasInfo;
+
+    vkUpdateDescriptorSets(dev, (uint32_t)w.size(), w.data(), 0, nullptr);
+    m_rtShadeReady = true;
+}
+
 void RestirPass::destroy() {
     if (!m_device) return;
     auto dev = m_device->device();
@@ -190,9 +289,11 @@ void RestirPass::destroy() {
     destroyTriple(m_initPipeline,    m_initPlLayout,    m_initSetLayout);
     destroyTriple(m_spatialPipeline, m_spatialPlLayout, m_spatialSetLayout);
     destroyTriple(m_shadePipeline,   m_shadePlLayout,   m_shadeSetLayout);
+    destroyTriple(m_shadeRtPipeline, m_shadeRtPlLayout, m_shadeRtSetLayout);
     if (m_pool)        { vkDestroyDescriptorPool(dev, m_pool, nullptr); m_pool = VK_NULL_HANDLE; }
     if (m_linearClamp) { vkDestroySampler(dev, m_linearClamp, nullptr); m_linearClamp = VK_NULL_HANDLE; }
-    m_initSet = m_spatialSet = m_shadeSet = VK_NULL_HANDLE;
+    m_initSet = m_spatialSet = m_shadeSet = m_shadeRtSet = VK_NULL_HANDLE;
+    m_rtShadeReady = false;
     m_device = nullptr;
 }
 
@@ -289,7 +390,8 @@ void RestirPass::record(VkCommandBuffer cmd,
                         float    spatialRadiusPx,
                         uint32_t shadowStepsArg,
                         float    intensityScaleArg,
-                        uint32_t frameIndex) {
+                        uint32_t frameIndex,
+                        bool     useRtVisibility) {
     uint32_t W = rt.extent.width, H = rt.extent.height;
     uint32_t gx = (W + 7) / 8, gy = (H + 7) / 8;
 
@@ -345,17 +447,25 @@ void RestirPass::record(VkCommandBuffer cmd,
     }
 
     // ----- 3. shade: 读 reservoirB → 写 rt.restir -----
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_shadePipeline);
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
-        m_shadePlLayout, 0, 1, &m_shadeSet, 0, nullptr);
     ShadePC shp{};
     shp.outX = W; shp.outY = H;
     shp.invX = 1.0f / (float)W; shp.invY = 1.0f / (float)H;
     shp.numLights = numLightsArg;
     shp.shadowSteps = (float)shadowStepsArg;
     shp.intensityScale = intensityScaleArg;
-    vkCmdPushConstants(cmd, m_shadePlLayout, VK_SHADER_STAGE_COMPUTE_BIT,
-                       0, sizeof(shp), &shp);
+
+    if (useRtVisibility && m_rtShadeReady) {
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_shadeRtPipeline);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
+            m_shadeRtPlLayout, 0, 1, &m_shadeRtSet, 0, nullptr);
+    } else {
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_shadePipeline);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
+            m_shadePlLayout, 0, 1, &m_shadeSet, 0, nullptr);
+    }
+    vkCmdPushConstants(cmd,
+        useRtVisibility && m_rtShadeReady ? m_shadeRtPlLayout : m_shadePlLayout,
+        VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(shp), &shp);
     vkCmdDispatch(cmd, gx, gy, 1);
 
     // 收尾：reservoirA/B 转回 GENERAL 给下一帧用

@@ -23,7 +23,7 @@ class Device;
 
 class RestirPass {
 public:
-    void init(Device& d);
+    void init(Device& d, bool hwRtAvailable = false);
     void destroy();
 
     // 资源 binding：在 init 后调用一次；resize / scene 切换时重调。
@@ -33,8 +33,16 @@ public:
                        const RenderTargets& rt,
                        VkBuffer frameUbo);
 
+    // M10 RT shade 资源 binding：绑定 TLAS 替代 voxel grid。
+    void bindResourcesRt(Device& d,
+                         const RestirResources& res,
+                         const RenderTargets& rt,
+                         VkBuffer frameUbo,
+                         VkAccelerationStructureKHR tlas);
+
     // 一次跑完 init → spatial → shade。调用方负责把 reservoirA/B 在首帧
     // transition 到 GENERAL，rt.restir 转 GENERAL（可写）。
+    // useRtVisibility=true 使用 M10 RT shade pipeline（需先调用 bindResourcesRt）。
     void record(VkCommandBuffer cmd,
                 const RestirResources& res,
                 const RenderTargets& rt,
@@ -44,7 +52,8 @@ public:
                 float    spatialRadiusPx,
                 uint32_t shadowSteps,
                 float    intensityScale,
-                uint32_t frameIndex);
+                uint32_t frameIndex,
+                bool     useRtVisibility = false);
 
     bool enabled = false;
     int  numCandidates  = 8;
@@ -57,6 +66,7 @@ private:
     void initInitPipeline();
     void initSpatialPipeline();
     void initShadePipeline();
+    void initShadeRtPipeline();
 
     Device* m_device = nullptr;
 
@@ -77,6 +87,13 @@ private:
     VkPipelineLayout      m_shadePlLayout  = VK_NULL_HANDLE;
     VkPipeline            m_shadePipeline  = VK_NULL_HANDLE;
     VkDescriptorSet       m_shadeSet       = VK_NULL_HANDLE;
+
+    // M10 RT shade pipeline（硬件 ray query 可见性）
+    VkDescriptorSetLayout m_shadeRtSetLayout = VK_NULL_HANDLE;
+    VkPipelineLayout      m_shadeRtPlLayout  = VK_NULL_HANDLE;
+    VkPipeline            m_shadeRtPipeline  = VK_NULL_HANDLE;
+    VkDescriptorSet       m_shadeRtSet       = VK_NULL_HANDLE;
+    bool                  m_rtShadeReady     = false;
 };
 
 }

@@ -1,7 +1,7 @@
 # SomeGI — Vulkan 全局光照实验平台 设计文档
 
 日期: 2026-05-15
-最后修订: 2026-05-19（M9 / M10 因开发 GPU 无硬件 RT 支持，暂时 deferred）
+最后修订: 2026-05-20（M9 / M10 已实现；GPU 升级至 RTX 4060，支持 HW RT）
 状态: Draft, 待评审
 
 ## 1. 目标
@@ -184,8 +184,8 @@ FrameStart
 | **M6** | **LPV**（Light Propagation Volumes，体素 + SH 传播） | 红/绿色帘附近白柱有色溢；穿过几何漏光在可接受范围 |
 | M7 | VXGI | 单 cascade voxel 可视化 + 间接光（旧 M5） |
 | M8 | PRT | SH9 烘焙 + 旋转环境光实时变化（旧 M6） |
-| M9 | Ray Tracing GI | 1 spp + 时序累积，与 IBL 比对（旧 M7）—— **DEFERRED**：要求硬件 RT（VK_KHR_acceleration_structure），当前开发 GPU Intel UHD 770 无支持 |
-| M10 | ReSTIR DI（再 GI） | 含多光源场景的 noise 显著降低（旧 M8）—— **DEFERRED**：依赖 M9 的硬件 RT 基础（reservoir resampling 候选用 ray query 提供），同等待硬件支持 |
+| M9 | Ray Tracing GI | 1 spp + 时序累积，与 IBL 比对（旧 M7） |
+| M10 | ReSTIR DI（再 GI） | 含多光源场景的 noise 显著降低（旧 M8）；HW RT 可见性 |
 
 每个里程碑都需要 cube + Sponza 两个场景跑通才能进入下一阶段。
 

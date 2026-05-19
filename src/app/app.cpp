@@ -257,7 +257,7 @@ App::App() {
     // C.4 ReSTIR DI：reservoir A/B（screen-res RGBA32_UINT）+ light SSBO。
     std::printf("[init] restir resources/pass...\n");
     m_restir.create(*m_device, m_swap->extent(), kRestirMaxLights);
-    m_restirPass.init(*m_device);
+    m_restirPass.init(*m_device, m_rtSupported);
 
     // M9 RT GI：仅在 HW 支持时初始化。
     if (m_rtSupported) {
@@ -411,6 +411,11 @@ void App::applySceneSelection() {
         m_rtGiBound = (m_rtAS.instanceCount() > 0);
         if (m_rtGiBound) {
             m_rtGiPass.bindFrame(*m_device, m_rt, m_gbuffer.frameUboHandle(), m_rtAS, m_sceneGpu);
+        }
+        // M10：TLAS 就绪，绑定到 ReSTIR RT shade pipeline
+        if (m_rtAS.instanceCount() > 0) {
+            m_restirPass.bindResourcesRt(*m_device, m_restir, m_rt,
+                m_gbuffer.frameUboHandle(), m_rtAS.tlas());
         }
     }
 
@@ -696,6 +701,9 @@ void App::onSwapchainResized() {
     // M9：swapchain resize 后 rtGI 换新 view → 重绑 RT pass。
     if (m_rtSupported && m_rtGiBound) {
         m_rtGiPass.bindFrame(*m_device, m_rt, m_gbuffer.frameUboHandle(), m_rtAS, m_sceneGpu);
+        // M10：resize 后重绑 ReSTIR RT shade 的 TLAS
+        m_restirPass.bindResourcesRt(*m_device, m_restir, m_rt,
+            m_gbuffer.frameUboHandle(), m_rtAS.tlas());
     }
     m_tonemap.bindTargets(*m_device, m_rt);
     bootstrapHdrPrev();   // fresh hdrPrev image — clear it before SSR can read
@@ -1020,7 +1028,9 @@ void App::buildUI() {
         ImGui::DragFloat("SDFGI hitEps (cells)", &m_sdfgiPass.hitEpsCells, 0.05f, 0.1f, 2.0f);
         ImGui::DragFloat("SDFGI seedThr", &m_sdfgiPass.seedThreshold, 0.005f, 0.0f, 0.5f);
         ImGui::Separator();
-        ImGui::Text("ReSTIR DI (C.4 软件版 - reservoir resampling on point lights)");
+        bool restirUsingRt = m_rtSupported && m_rtGiBound && m_restirPass.enabled;
+        ImGui::Text("ReSTIR DI (%s - reservoir resampling on point lights)",
+                    restirUsingRt ? "M10 HW RT visibility" : "C.4 voxel visibility");
         ImGui::Text("ReSTIR %s（GI 下拉切到 'ReSTIR DI'）",
                     m_restirPass.enabled ? "active" : "off");
         if (ImGui::SliderInt("ReSTIR demo lights", &m_demoLightCount, 0, 8)) {
@@ -1764,6 +1774,7 @@ void App::run() {
             m_restirOutInited = true;
 
             uint32_t numLights = (uint32_t)m_demoLights.size();
+            bool useRtVis = m_rtSupported && m_rtGiBound;
             m_restirPass.record(cmd, m_restir, m_rt,
                 numLights,
                 (uint32_t)m_restirPass.numCandidates,
@@ -1771,7 +1782,8 @@ void App::run() {
                 m_restirPass.spatialRadius,
                 (uint32_t)m_restirPass.shadowSteps,
                 m_restirPass.intensityScale,
-                m_frameIndex);
+                m_frameIndex,
+                useRtVis);
 
             // rt.restir → SHADER_READ_ONLY 给 lighting 读
             transitionImage(cmd, m_rt.restir.image(), VK_IMAGE_ASPECT_COLOR_BIT,
