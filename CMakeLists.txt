@@ -42,6 +42,53 @@ add_header_only_library(stb_headers ${CMAKE_SOURCE_DIR}/external/stb)
 
 add_subdirectory(external/imgui_local)
 
+# ---- Assets (download missing glTF test models from Khronos glTF-Sample-Models) ----
+set(GLTF_SAMPLE_MODELS "")
+
+set(CUBE_GLTF_DIR "${CMAKE_SOURCE_DIR}/assets/gltf/cube")
+if(NOT EXISTS "${CUBE_GLTF_DIR}/cube.gltf")
+    list(APPEND GLTF_SAMPLE_MODELS "2.0/Cube")
+endif()
+
+set(SPONZA_GLTF_DIR "${CMAKE_SOURCE_DIR}/assets/gltf/Sponza")
+if(NOT EXISTS "${SPONZA_GLTF_DIR}/Sponza.gltf")
+    list(APPEND GLTF_SAMPLE_MODELS "2.0/Sponza")
+endif()
+
+if(GLTF_SAMPLE_MODELS)
+    message(STATUS "Downloading missing glTF models: ${GLTF_SAMPLE_MODELS} ...")
+    set(GLTF_TMP "${CMAKE_BINARY_DIR}/_gltf_sample_tmp")
+    file(MAKE_DIRECTORY "${GLTF_TMP}")
+    execute_process(
+        COMMAND git clone --depth 1 --filter=blob:none --sparse
+                https://github.com/KhronosGroup/glTF-Sample-Models.git .
+        WORKING_DIRECTORY "${GLTF_TMP}"
+        RESULT_VARIABLE gltf_clone_res
+        OUTPUT_VARIABLE gltf_out
+        ERROR_VARIABLE  gltf_err
+    )
+    if(gltf_clone_res EQUAL 0)
+        execute_process(
+            COMMAND git sparse-checkout set ${GLTF_SAMPLE_MODELS}
+            WORKING_DIRECTORY "${GLTF_TMP}"
+            RESULT_VARIABLE gltf_sparse_res
+        )
+        if(gltf_sparse_res EQUAL 0)
+            if("2.0/Cube" IN_LIST GLTF_SAMPLE_MODELS)
+                file(COPY "${GLTF_TMP}/2.0/Cube/glTF/" DESTINATION "${CUBE_GLTF_DIR}")
+                message(STATUS "Cube model restored to ${CUBE_GLTF_DIR}")
+            endif()
+            if("2.0/Sponza" IN_LIST GLTF_SAMPLE_MODELS)
+                file(COPY "${GLTF_TMP}/2.0/Sponza/glTF/" DESTINATION "${SPONZA_GLTF_DIR}")
+                message(STATUS "Sponza model restored to ${SPONZA_GLTF_DIR}")
+            endif()
+        endif()
+    else()
+        message(WARNING "glTF sample models clone failed: ${gltf_err}")
+    endif()
+    file(REMOVE_RECURSE "${GLTF_TMP}")
+endif()
+
 # ---- Shaders ----
 include(cmake/CompileSlang.cmake)
 file(GLOB_RECURSE SHADER_SOURCES CONFIGURE_DEPENDS

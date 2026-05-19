@@ -34,13 +34,13 @@ void ImGuiPass::init(Device& d, GLFWwindow* window, VkFormat swapchainFormat, ui
     info.DescriptorPool = m_pool;
     info.MinImageCount = imageCount;
     info.ImageCount = imageCount;
-    info.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
     info.UseDynamicRendering = true;
+    info.PipelineInfoMain.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
 
     VkPipelineRenderingCreateInfo rci{VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO};
     rci.colorAttachmentCount = 1;
     rci.pColorAttachmentFormats = &swapchainFormat;
-    info.PipelineRenderingCreateInfo = rci;
+    info.PipelineInfoMain.PipelineRenderingCreateInfo = rci;
 
     if (!ImGui_ImplVulkan_Init(&info)) {
         throw std::runtime_error("ImGui_ImplVulkan_Init failed");
