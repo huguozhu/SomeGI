@@ -1,0 +1,21 @@
+build/
+build-*/
+out/
+.vs/
+.vscode/
+.idea/
+*.user
+CMakeUserPresets.json
+*.spv
+*.exe
+*.pdb
+*.obj
+*.lib
+*.exp
+*.ilk
+
+# Runtime state files (per-user / per-session)
+camera.ini
+camera_*.ini
+imgui.ini
+scene_state.ini
