@@ -83,13 +83,17 @@ static Image makeSolid1x1(Device& d, VkCommandPool pool, uint8_t r, uint8_t g, u
 }
 
 void uploadScene(Device& d, VkCommandPool pool, const SceneCpu& cpu, SceneGpu& out) {
+    VkBufferUsageFlags asInput = 0;
+    if (d.features().accelStruct)
+        asInput = VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR;
+
     if (!cpu.vertices.empty())
         uploadBufferImpl(d, pool, cpu.vertices.data(), cpu.vertices.size()*sizeof(Vertex),
-                         VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                         VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | asInput,
                          out.vertexBuffer);
     if (!cpu.indices.empty())
         uploadBufferImpl(d, pool, cpu.indices.data(), cpu.indices.size()*sizeof(uint32_t),
-                         VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                         VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | asInput,
                          out.indexBuffer);
 
     std::vector<MaterialGpu> mats;

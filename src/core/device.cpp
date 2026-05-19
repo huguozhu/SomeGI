@@ -42,7 +42,48 @@ Device::Device(Window& window, bool enableValidation) {
     if (!pdRet) throw std::runtime_error("vkb::PhysicalDevice: " + pdRet.error().message());
     m_physicalDevice = pdRet.value();
 
+    // Detect RT extensions from the physical device's available extensions.
+    bool hasAccelStruct = false, hasRayQuery = false, hasDeferredHost = false;
+    {
+        auto availableExts = m_physicalDevice.get_available_extensions();
+        for (auto& e : availableExts) {
+            if (e == VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME)  hasAccelStruct = true;
+            if (e == VK_KHR_RAY_QUERY_EXTENSION_NAME)               hasRayQuery    = true;
+            if (e == VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME) hasDeferredHost = true;
+            if (e == VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME)    m_features.rayTracing = true;
+            if (e == VK_EXT_MESH_SHADER_EXTENSION_NAME)             m_features.meshShader = true;
+        }
+    }
+
+    // Enable RT extensions on the physical device BEFORE constructing DeviceBuilder,
+    // because DeviceBuilder copies the physical device at construction time.
+    if (hasAccelStruct && hasRayQuery && hasDeferredHost) {
+        m_physicalDevice.enable_extension_if_present(VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME);
+        m_physicalDevice.enable_extension_if_present(VK_KHR_RAY_QUERY_EXTENSION_NAME);
+        m_physicalDevice.enable_extension_if_present(VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME);
+        m_features.accelStruct = true;
+        m_features.rayQuery = true;
+    }
+
+    VkPhysicalDeviceAccelerationStructureFeaturesKHR asFeat{
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR};
+    VkPhysicalDeviceRayQueryFeaturesKHR rqFeat{
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_QUERY_FEATURES_KHR};
+
     vkb::DeviceBuilder db{m_physicalDevice};
+
+    if (m_features.accelStruct && m_features.rayQuery) {
+        asFeat.accelerationStructure = VK_TRUE;
+        rqFeat.rayQuery = VK_TRUE;
+        // Chain: rqFeat → asFeat → VkDeviceCreateInfo.pNext
+        rqFeat.pNext = &asFeat;
+        db.add_pNext(&rqFeat);
+        std::printf("[device] HW ray tracing enabled (AS + RQ + DHO)\n");
+    } else {
+        std::printf("[device] HW ray tracing NOT available (AS=%d RQ=%d DH=%d)\n",
+                    hasAccelStruct, hasRayQuery, hasDeferredHost);
+    }
+
     auto devRet = db.build();
     if (!devRet) throw std::runtime_error("vkb::Device: " + devRet.error().message());
     m_device = devRet.value();
@@ -50,11 +91,8 @@ Device::Device(Window& window, bool enableValidation) {
     m_graphicsQueue = m_device.get_queue(vkb::QueueType::graphics).value();
     m_graphicsQueueFamily = m_device.get_queue_index(vkb::QueueType::graphics).value();
 
-    auto exts = m_physicalDevice.get_extensions();
-    for (auto& e : exts) {
-        if (e == VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME) m_features.rayTracing = true;
-        if (e == VK_EXT_MESH_SHADER_EXTENSION_NAME) m_features.meshShader = true;
-    }
+    // Load extension function pointers from dispatch table.
+    m_dispatch = m_device.make_table();
 }
 
 Device::~Device() {

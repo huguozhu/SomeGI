@@ -34,6 +34,8 @@
 #include "renderer/skybox_pass.h"
 #include "renderer/tonemap_pass.h"
 #include "renderer/imgui_pass.h"
+#include "renderer/scene_rt_as.h"
+#include "renderer/rt_gi_pass.h"
 #include <map>
 #include <memory>
 #include <filesystem>
@@ -140,6 +142,8 @@ private:
     SsgiPass m_ssgi;           // M4.3: screen-space 1-bounce diffuse, replaces IBL diffuse
     GtgiPass m_gtgi;           // C.1: GTGI（horizon-based GI，Sucker Punch 2024）
     SkyboxPass m_skybox;
+    SceneRtAS m_rtAS;      // M9 HW RT acceleration structure (BLAS + TLAS)
+    RtGiPass  m_rtGiPass;  // M9 HW RT GI compute pass
     TonemapPass m_tonemap;
     ImGuiPass m_imgui;
 
@@ -195,6 +199,11 @@ private:
     glm::vec3 m_ddgiOrigin{0};
     glm::vec3 m_ddgiSpacing{1};
     uint32_t  m_frameIndex = 0;
+
+    // M9 RT GI：硬件支持标志 + 初始化完成标志
+    bool m_rtSupported = false;
+    bool m_rtGiInited  = false;    // m_rtGiPass.init() 成功
+    bool m_rtGiBound   = false;    // bindFrame 已调用
 
     // B.4 SSGI 时序累积：保存上一帧 viewProj 用于 reproject。
     glm::mat4 m_prevViewProj{1.0f};

@@ -55,6 +55,10 @@ add_library(somegi_renderer STATIC
     ssgi_pass.cpp
     gtgi_pass.h
     gtgi_pass.cpp
+    scene_rt_as.h
+    scene_rt_as.cpp
+    rt_gi_pass.h
+    rt_gi_pass.cpp
     skybox_pass.h
     skybox_pass.cpp
     tonemap_pass.h

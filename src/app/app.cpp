@@ -29,7 +29,7 @@ constexpr SceneEntry kScenes[] = {
 // 用 implemented=false 占位的下拉项当 roadmap 用：选中后 applyGiSelection
 // 把 effective 落到 IBL 兜底，但 dropdown 标签仍显示原 name + " (未实现)"。
 struct GiEntry { const char* name; bool implemented; };
-constexpr GiEntry kGis[] = {
+GiEntry kGis[] = {
     {"None (direct only)", true},
     {"IBL",                true},
     {"SSGI",               true},   // M4.3
@@ -157,6 +157,15 @@ App::App() {
     m_device = std::make_unique<Device>(*m_window, /*validation=*/true);
     m_swap   = std::make_unique<Swapchain>(*m_device, *m_window);
 
+    // M9：检测 HW RT 支持并更新 dropdown 实现状态。
+    m_rtSupported = m_device->features().rayQuery && m_device->features().accelStruct;
+    if (m_rtSupported) {
+        kGis[10].implemented = true;
+        std::printf("[init] HW RT supported — RayTracing GI enabled\n");
+    } else {
+        std::printf("[init] HW RT not supported — RayTracing GI unavailable\n");
+    }
+
     VkCommandPoolCreateInfo pci{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
     pci.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
     pci.queueFamilyIndex = m_device->graphicsQueueFamily();
@@ -249,6 +258,13 @@ App::App() {
     std::printf("[init] restir resources/pass...\n");
     m_restir.create(*m_device, m_swap->extent(), kRestirMaxLights);
     m_restirPass.init(*m_device);
+
+    // M9 RT GI：仅在 HW 支持时初始化。
+    if (m_rtSupported) {
+        std::printf("[init] rt gi pass...\n");
+        m_rtGiPass.init(*m_device);
+        m_rtGiInited = true;
+    }
     m_restirPass.bindResources(*m_device, m_restir, m_vxgi, m_rt, m_gbuffer.frameUboHandle());
 
     // M5.1：RsmSamplePass.bindFrame 需要 GBuffer 的 frameUbo + RsmGeom 的
@@ -325,7 +341,7 @@ App::App() {
     }
 
     // Initial scene load (camera framed inside applySceneSelection).
-    applySceneSelection();
+    applySceneSelection();   // 内部包含 M9 AS build + bindFrame（RT 支持时）
 
     std::printf("[init] GI technique attach...\n");
     applyGiSelection();   // honor m_currentGiIndex (default 1 = IBL)
@@ -388,6 +404,15 @@ void App::applySceneSelection() {
 
     auto path = std::filesystem::path(SOMEGI_ASSET_DIR) / kScenes[m_currentSceneIndex].relPath;
     loadAndUploadScene(path);
+
+    // M9：场景已加载，构建加速结构 + bindFrame（仅 HW 支持时）。
+    if (m_rtSupported) {
+        m_rtAS.build(*m_device, m_pool, m_scene, m_sceneGpu);
+        m_rtGiBound = (m_rtAS.instanceCount() > 0);
+        if (m_rtGiBound) {
+            m_rtGiPass.bindFrame(*m_device, m_rt, m_gbuffer.frameUboHandle(), m_rtAS, m_sceneGpu);
+        }
+    }
 
     m_gbuffer.bindScene(*m_device, m_sceneGpu, (uint32_t)m_sceneGpu.images.size());
     m_rsmGeom.bindScene(*m_device, m_sceneGpu, (uint32_t)m_sceneGpu.images.size());
@@ -558,6 +583,8 @@ App::~App() {
     if (m_device) m_device->waitIdle();
     m_imgui.destroy();
     m_tonemap.destroy();
+    m_rtGiPass.destroy();
+    m_rtAS.destroy();
     m_skybox.destroy();
     m_ssgi.destroy();
     m_gtgi.destroy();
@@ -628,16 +655,18 @@ void App::applyGiSelection() {
     m_ddgiEnabled       = (effective == 7);
     m_gtgi.enabled      = (effective == 8);
     m_sdfgiPass.enabled = (effective == 9);
+    // M9 RT GI (index 10) — 不用额外 enabled flag，render loop 检查 m_rtGiBound && m_giIndexApplied == 10
     m_restirPass.enabled = (effective == 11);   // C.4
 
     m_giIndexApplied = effective;
-    std::printf("[GI] applied technique index=%d (UI=%d SSGI=%d RSM=%d LPV=%d VXGI=%d PRT=%d DDGI=%d GTGI=%d SDFGI=%d ReSTIR=%d)\n",
+    std::printf("[GI] applied technique index=%d (UI=%d SSGI=%d RSM=%d LPV=%d VXGI=%d PRT=%d DDGI=%d GTGI=%d SDFGI=%d RT=%d ReSTIR=%d)\n",
                 m_giIndexApplied, m_currentGiIndex,
                 m_ssgi.enabled ? 1 : 0, m_rsmSample.enabled ? 1 : 0,
                 m_lpvEnabled ? 1 : 0, m_vxgiEnabled ? 1 : 0,
                 m_prtEnabled ? 1 : 0, m_ddgiEnabled ? 1 : 0,
                 m_gtgi.enabled ? 1 : 0,
                 m_sdfgiPass.enabled ? 1 : 0,
+                effective == 10 ? 1 : 0,
                 m_restirPass.enabled ? 1 : 0);
 }
 
@@ -664,6 +693,10 @@ void App::onSwapchainResized() {
         m_gbuffer.frameUboHandle(),
         m_rsmGeom.frameUboHandle(),
         m_rsmGeom.position(), m_rsmGeom.normal(), m_rsmGeom.flux());
+    // M9：swapchain resize 后 rtGI 换新 view → 重绑 RT pass。
+    if (m_rtSupported && m_rtGiBound) {
+        m_rtGiPass.bindFrame(*m_device, m_rt, m_gbuffer.frameUboHandle(), m_rtAS, m_sceneGpu);
+    }
     m_tonemap.bindTargets(*m_device, m_rt);
     bootstrapHdrPrev();   // fresh hdrPrev image — clear it before SSR can read
     bootstrapSsgiTemporal();
@@ -967,6 +1000,17 @@ void App::buildUI() {
         ImGui::DragFloat("GTGI radius (px)", &m_gtgi.radiusPixels, 1.0f, 4.0f, 256.0f);
         ImGui::DragFloat("GTGI falloff", &m_gtgi.falloff, 0.1f, 0.5f, 50.0f);
         ImGui::Separator();
+        // M9 RT GI：在 HW 支持时显示状态信息
+        if (m_rtSupported) {
+            ImGui::Text("RT GI (M9 硬件光线追踪)");
+            ImGui::Text("RT GI %s（GI 下拉切到 'RayTracing'）",
+                        m_giIndexApplied == 10 ? "active" : "off");
+            if (m_rtAS.instanceCount() > 0) {
+                ImGui::Text("TLAS instances: %u", m_rtAS.instanceCount());
+            }
+            ImGui::Separator();
+        }
+
         ImGui::Text("SDFGI (C.3 Godot4 风格 - JFA UDF + sphere-trace)");
         ImGui::Text("SDFGI %s（GI 下拉切到 'SDFGI'）",
                     m_sdfgiPass.enabled ? "active" : "off");
@@ -1642,7 +1686,43 @@ void App::run() {
                 VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
         }
 
-        // === Phase 1.836: ReSTIR DI (compute, after VXGI 链) ================
+        // === Phase 1.836: M9 RT GI (compute, HW 光线追踪) ==================
+        if (m_rtGiBound && m_giIndexApplied == 10) {
+            transitionImage(cmd, m_rt.rtGI.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
+                VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
+                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
+            m_rtGiPass.record(cmd, m_rt);
+            transitionImage(cmd, m_rt.rtGI.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                VK_IMAGE_LAYOUT_GENERAL,
+                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+        } else if (m_rtGiInited) {
+            // RT GI 关闭时仍须保证 rtGI 在 SHADER_READ_ONLY（lighting 读）。
+            // 始终从 UNDEFINED 起：旧内容不必保留——下一步是写全图（clear）
+            // 或已经是 valid 数据但上一帧 lighting 读完我们重新 clear。UNDEFINED
+            // 总是安全的。
+            transitionImage(cmd, m_rt.rtGI.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
+                VK_PIPELINE_STAGE_2_CLEAR_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
+            VkClearColorValue zero{};
+            VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+            vkCmdClearColorImage(cmd, m_rt.rtGI.image(),
+                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &zero, 1, &range);
+            transitionImage(cmd, m_rt.rtGI.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                VK_PIPELINE_STAGE_2_CLEAR_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+        }
+
+        // === Phase 1.837: ReSTIR DI (compute, after VXGI 链) ================
         // 进入条件：voxelGrid 在 SHADER_READ_ONLY（shade 阶段需 alpha-only
         // visibility ray march）。lights SSBO 已 mapped；CPU 上传 demo 光源。
         if (m_restirPass.enabled) {

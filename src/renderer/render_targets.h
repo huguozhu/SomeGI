@@ -39,6 +39,10 @@ struct RenderTargets {
     // 后的 shaded radiance）。lighting 端 += 之；关闭时 clear 到 0。
     Image restir;         // RGBA16F: rgb=ReSTIR DI direct radiance, a=valid flag
 
+    // M9 RT GI：硬件光线追踪全局光照（Ray Query 风格）。
+    // RGBA16F: rgb=入射 radiance（命中点处 albedo·sunBRDF），a=hit?1:0。
+    Image rtGI;           // STORAGE | SAMPLED | TRANSFER_DST
+
     void create(Device& d, VkExtent2D ext);
     void destroy();
 

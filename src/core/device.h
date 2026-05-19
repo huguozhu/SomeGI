@@ -9,6 +9,8 @@ class Window;
 struct DeviceFeatures {
     bool rayTracing = false;
     bool meshShader = false;
+    bool accelStruct = false;
+    bool rayQuery = false;
 };
 
 class Device {
@@ -33,11 +35,15 @@ public:
     // device limits（Intel 一般 83.33ns，约等于 12 MHz）。
     float timestampPeriod() const { return m_physicalDevice.properties.limits.timestampPeriod; }
 
+    // vk-bootstrap dispatch table（加载了所有 extension 函数指针）。
+    const vkb::DispatchTable& dispatch() const { return m_dispatch; }
+
 private:
     vkb::Instance m_instance{};
     VkSurfaceKHR m_surface = VK_NULL_HANDLE;
     vkb::PhysicalDevice m_physicalDevice{};
     vkb::Device m_device{};
+    vkb::DispatchTable m_dispatch{};
     VkQueue m_graphicsQueue = VK_NULL_HANDLE;
     uint32_t m_graphicsQueueFamily = 0;
     DeviceFeatures m_features{};

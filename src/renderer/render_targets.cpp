@@ -113,6 +113,16 @@ void RenderTargets::create(Device& d, VkExtent2D ext) {
                | VK_IMAGE_USAGE_SAMPLED_BIT
                | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
     restir = Image(d, rs2);
+
+    // M9 RT GI：STORAGE（RT 写）+ TRANSFER_DST（关闭时 clear）+ SAMPLED
+    // （lighting 读）。
+    ImageDesc rt{};
+    rt.format = VK_FORMAT_R16G16B16A16_SFLOAT;
+    rt.extent = {ext.width, ext.height, 1};
+    rt.usage  = VK_IMAGE_USAGE_STORAGE_BIT
+              | VK_IMAGE_USAGE_SAMPLED_BIT
+              | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    rtGI = Image(d, rt);
 }
 
 void RenderTargets::destroy() {
@@ -129,6 +139,7 @@ void RenderTargets::destroy() {
     ssgiPrev.reset();
     rsmGI.reset();
     restir.reset();
+    rtGI.reset();
 }
 
 }

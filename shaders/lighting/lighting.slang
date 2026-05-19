@@ -52,6 +52,7 @@ import ibl_eval;        // set=1 IBL bindings + evalIBLDiffuse / Specular / appl
 [[vk::binding(22, 0)]] Texture3D<float4> gPrtTransferD;          // B.10 PRT SH16：coefs 9..12
 [[vk::binding(23, 0)]] Texture3D<float4> gPrtTransferE;          // B.10 PRT SH16：coefs 13..15 (rgb)
 [[vk::binding(24, 0)]] Texture2D<float4> gRestir;                // C.4 ReSTIR DI：rgb=直接光累加，a=valid
+[[vk::binding(25, 0)]] Texture2D<float4> gRtGI;                  // M9 RT GI：rgb=入射 radiance，a=hit?1:0
 
 struct LightingPC {
     uint2  outSize;
@@ -442,6 +443,16 @@ void cs_main(uint3 dt : SV_DispatchThreadID) {
                                             evalSh(shB, N));
                 float3 lpvDiff = lpvRadiance * albedo * (1.0 - metallic);
                 diffuse = lerp(diffuse, lpvDiff, coverage);
+            }
+        }
+
+        // M9 RT GI：当 ray 命中几何时，替换 IBL diffuse 为 RT 追踪的一次反弹
+        // 直接光。rtGI.rgb 已含 BRDF（baseColor/π * NdotL * sun），无需再乘
+        // albedo。rtGI.a=1 时完全替换 diffuse；=0 时保持原 IBL diffuse。
+        {
+            float4 rtGi = gRtGI.Load(int3(pix, 0));
+            if (rtGi.a > 0.0) {
+                diffuse = lerp(diffuse, rtGi.rgb, rtGi.a);
             }
         }
 
