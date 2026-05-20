@@ -46,6 +46,7 @@ struct FrameUBO {
     glm::vec4 ddgiOrigin;
     glm::vec4 ddgiSpacing;
     glm::ivec4 ddgiOctaSizes;   // octaIrr, octaDist
+    glm::ivec4 lumenCounts;      // Lumen-lite: x=lumenEnabled (0/1)
 };
 
 class ForwardPass {

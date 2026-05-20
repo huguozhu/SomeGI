@@ -42,6 +42,7 @@ GiEntry kGis[] = {
     {"SDFGI",              true},   // C.3 Godot 4 风格 SDFGI-lite（JFA + sphere-trace）
     {"RayTracing",         false},  // M9 deferred (no HW RT on Intel UHD 770)
     {"ReSTIR DI",          true},   // C.4 软件版（reservoir resampling on point lights）
+    {"Lumen-lite",         false},  // L 阶段：UE5 Lumen 简化复刻（Phase L1）
 };
 constexpr int kGiCount = (int)(sizeof(kGis)/sizeof(kGis[0]));
 
@@ -161,9 +162,10 @@ App::App() {
     m_rtSupported = m_device->features().rayQuery && m_device->features().accelStruct;
     if (m_rtSupported) {
         kGis[10].implemented = true;
-        std::printf("[init] HW RT supported — RayTracing GI enabled\n");
+        kGis[12].implemented = true;   // Lumen-lite 同样依赖 HW RT
+        std::printf("[init] HW RT supported — RayTracing GI + Lumen-lite enabled\n");
     } else {
-        std::printf("[init] HW RT not supported — RayTracing GI unavailable\n");
+        std::printf("[init] HW RT not supported — RayTracing GI + Lumen-lite unavailable\n");
     }
 
     VkCommandPoolCreateInfo pci{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
@@ -264,6 +266,12 @@ App::App() {
         std::printf("[init] rt gi pass...\n");
         m_rtGiPass.init(*m_device);
         m_rtGiInited = true;
+    }
+
+    // L.2 Lumen-lite：屏幕 probe 资源在 HW RT 可用时创建。
+    if (m_rtSupported) {
+        std::printf("[init] lumen resources...\n");
+        m_lumen.create(*m_device, m_swap->extent());
     }
     m_restirPass.bindResources(*m_device, m_restir, m_vxgi, m_rt, m_gbuffer.frameUboHandle());
 
@@ -606,6 +614,9 @@ App::~App() {
     m_vxgiRelight.destroy();
     m_sdfgiPass.destroy();
     m_sdfgi.destroy();
+    m_lumenProbePass.destroy();
+    m_lumenGatherPass.destroy();
+    m_lumen.destroy();
     m_restirPass.destroy();
     m_restir.destroy();
     m_vxgiInject.destroy();
@@ -662,9 +673,10 @@ void App::applyGiSelection() {
     m_sdfgiPass.enabled = (effective == 9);
     // M9 RT GI (index 10) — 不用额外 enabled flag，render loop 检查 m_rtGiBound && m_giIndexApplied == 10
     m_restirPass.enabled = (effective == 11);   // C.4
+    m_lumenEnabled       = (effective == 12);   // L 阶段
 
     m_giIndexApplied = effective;
-    std::printf("[GI] applied technique index=%d (UI=%d SSGI=%d RSM=%d LPV=%d VXGI=%d PRT=%d DDGI=%d GTGI=%d SDFGI=%d RT=%d ReSTIR=%d)\n",
+    std::printf("[GI] applied technique index=%d (UI=%d SSGI=%d RSM=%d LPV=%d VXGI=%d PRT=%d DDGI=%d GTGI=%d SDFGI=%d RT=%d ReSTIR=%d Lumen=%d)\n",
                 m_giIndexApplied, m_currentGiIndex,
                 m_ssgi.enabled ? 1 : 0, m_rsmSample.enabled ? 1 : 0,
                 m_lpvEnabled ? 1 : 0, m_vxgiEnabled ? 1 : 0,
@@ -672,7 +684,8 @@ void App::applyGiSelection() {
                 m_gtgi.enabled ? 1 : 0,
                 m_sdfgiPass.enabled ? 1 : 0,
                 effective == 10 ? 1 : 0,
-                m_restirPass.enabled ? 1 : 0);
+                m_restirPass.enabled ? 1 : 0,
+                m_lumenEnabled ? 1 : 0);
 }
 
 void App::onSwapchainResized() {
@@ -704,6 +717,21 @@ void App::onSwapchainResized() {
         // M10：resize 后重绑 ReSTIR RT shade 的 TLAS
         m_restirPass.bindResourcesRt(*m_device, m_restir, m_rt,
             m_gbuffer.frameUboHandle(), m_rtAS.tlas());
+    }
+    // L.2：swapchain resize 后 probe atlas 重建。
+    if (m_rtSupported) {
+        m_lumen.destroy();
+        m_lumen.create(*m_device, m_swap->extent());
+        m_lumenAtlasInited = false;
+        m_lumenOutInited  = false;
+        if (m_lumenProbeInited) {
+            m_lumenProbePass.bindResources(*m_device, m_lumen, m_rtAS, m_sceneGpu,
+                                            m_vxgi, m_rt, m_gbuffer.frameUboHandle());
+        }
+        if (m_lumenGatherInited) {
+            m_lumenGatherPass.bindResources(*m_device, m_lumen, m_rt,
+                                             m_gbuffer.frameUboHandle());
+        }
     }
     m_tonemap.bindTargets(*m_device, m_rt);
     bootstrapHdrPrev();   // fresh hdrPrev image — clear it before SSR can read
@@ -1232,6 +1260,7 @@ void App::run() {
         ubo.ddgiSpacing = glm::vec4(m_ddgiSpacing, 0);
         ubo.ddgiOctaSizes = glm::ivec4((int)DdgiResources::kOctaIrr,
                                         (int)DdgiResources::kOctaDist, 0, 0);
+        ubo.lumenCounts   = glm::ivec4(m_lumenEnabled ? 1 : 0, 0, 0, 0);
         m_gbuffer.updateFrame(ubo);
         m_skybox.updateFrame(ubo.invViewProj, m_camera.position);
         // M5.0：每帧把当前 sun + AABB 喂给 RsmGeometryPass。sunDir 的约定
@@ -1464,6 +1493,7 @@ void App::run() {
         // SDFGI 也需要 voxel grid（trace 直接采 voxel radiance + 用 SDF
         // 做 sphere-step）。ReSTIR DI shade 阶段也用 voxelGrid alpha 做 visibility。
         bool needVoxelGrid = m_vxgiEnabled || m_ddgiEnabled || m_sdfgiPass.enabled
+                           || m_lumenEnabled
                           || m_restirPass.enabled;
         if (needVoxelGrid) {
             // 1. clear 整张 mip chain 到 0。barrier 必须覆盖所有 mip（验证
@@ -1892,6 +1922,154 @@ void App::run() {
             m_ddgiAtlasInited = true;
         }
         ++m_frameIndex;
+
+        // === Phase 1.845: Lumen-lite screen probe + gather (compute) ======
+        if (m_lumenEnabled) {
+            // -- Probe pass bootstrap --
+            if (!m_lumenProbeInited) {
+                m_lumenProbePass.init(*m_device);
+                m_lumenProbePass.bindResources(*m_device, m_lumen, m_rtAS, m_sceneGpu,
+                                                m_vxgi, m_rt, m_gbuffer.frameUboHandle());
+                m_lumenProbeInited = true;
+            }
+
+            // Transition probe atlas to GENERAL on first frame
+            if (!m_lumenAtlasInited) {
+                auto bootstrapToGeneral = [&](VkImage img) {
+                    VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+                    b.srcStageMask = VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
+                    b.srcAccessMask = 0;
+                    b.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                    b.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+                    b.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+                    b.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+                    b.image = img;
+                    b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+                    VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+                    di.imageMemoryBarrierCount = 1; di.pImageMemoryBarriers = &b;
+                    vkCmdPipelineBarrier2(cmd, &di);
+                };
+                bootstrapToGeneral(m_lumen.probeAtlas().image());
+                bootstrapToGeneral(m_lumen.filteredAtlas().image());
+                bootstrapToGeneral(m_lumen.prevAtlas().image());
+                m_lumenAtlasInited = true;
+            }
+
+            // 1. Probe pass: TLAS RayQuery → voxelGrid → SH9 probe atlas
+            m_lumenProbePass.record(cmd, m_lumen, m_frameIndex);
+
+            // Barrier: probeAtlas GENERAL → SHADER_READ_ONLY for gather pass
+            {
+                VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+                b.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                b.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+                b.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                b.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+                b.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+                b.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                b.image = m_lumen.probeAtlas().image();
+                b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+                VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+                di.imageMemoryBarrierCount = 1; di.pImageMemoryBarriers = &b;
+                vkCmdPipelineBarrier2(cmd, &di);
+            }
+
+            // -- Gather pass bootstrap --
+            if (!m_lumenGatherInited) {
+                m_lumenGatherPass.init(*m_device);
+                m_lumenGatherPass.bindResources(*m_device, m_lumen, m_rt,
+                                                 m_gbuffer.frameUboHandle());
+                m_lumenGatherInited = true;
+            }
+
+            // 2. Gather pass: probe atlas → SH9 irradiance → lumenGI
+            // Transition lumenGI to GENERAL
+            {
+                VkImageLayout oldL = m_lumenOutInited
+                    ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+                    : VK_IMAGE_LAYOUT_UNDEFINED;
+                VkAccessFlags2 srcA = m_lumenOutInited
+                    ? VK_ACCESS_2_SHADER_SAMPLED_READ_BIT : 0;
+                VkPipelineStageFlags2 srcS = m_lumenOutInited
+                    ? VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT
+                    : VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
+                VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+                b.srcStageMask = srcS; b.srcAccessMask = srcA;
+                b.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                b.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+                b.oldLayout = oldL;
+                b.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+                b.image = m_rt.lumenGI.image();
+                b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+                VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+                di.imageMemoryBarrierCount = 1; di.pImageMemoryBarriers = &b;
+                vkCmdPipelineBarrier2(cmd, &di);
+            }
+            m_lumenGatherPass.record(cmd, m_lumen, m_rt);
+
+            // Transition lumenGI GENERAL → SHADER_READ_ONLY for lighting
+            {
+                VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+                b.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                b.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+                b.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                b.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+                b.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+                b.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                b.image = m_rt.lumenGI.image();
+                b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+                VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+                di.imageMemoryBarrierCount = 1; di.pImageMemoryBarriers = &b;
+                vkCmdPipelineBarrier2(cmd, &di);
+            }
+            m_lumenOutInited = true;
+        } else if (m_lumenAtlasInited) {
+            // Lumen off：atlas back to SHADER_READ_ONLY
+            auto toSRO = [&](VkImage img) {
+                VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+                b.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                b.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+                b.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                b.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+                b.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+                b.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                b.image = img;
+                b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+                VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+                di.imageMemoryBarrierCount = 1; di.pImageMemoryBarriers = &b;
+                vkCmdPipelineBarrier2(cmd, &di);
+            };
+            toSRO(m_lumen.probeAtlas().image());
+            toSRO(m_lumen.filteredAtlas().image());
+            toSRO(m_lumen.prevAtlas().image());
+        }
+        // When Lumen off, ensure lumenGI is in SHADER_READ_ONLY for lighting.
+        // First frame: UNDEFINED → TRANSFER_DST, later: SHADER_READ_ONLY → TRANSFER_DST.
+        if (!m_lumenEnabled) {
+            VkImageLayout oldL = m_lumenOutInited
+                ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+                : VK_IMAGE_LAYOUT_UNDEFINED;
+            VkPipelineStageFlags2 srcS = m_lumenOutInited
+                ? VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT
+                : VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
+            VkAccessFlags2 srcA = m_lumenOutInited
+                ? VK_ACCESS_2_SHADER_SAMPLED_READ_BIT : 0;
+            transitionImage(cmd, m_rt.lumenGI.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                oldL, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                srcS, srcA,
+                VK_PIPELINE_STAGE_2_CLEAR_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
+            VkClearColorValue zero{};
+            VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+            vkCmdClearColorImage(cmd, m_rt.lumenGI.image(),
+                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &zero, 1, &range);
+            transitionImage(cmd, m_rt.lumenGI.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                VK_PIPELINE_STAGE_2_CLEAR_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+            m_lumenOutInited = true;
+        }
 
         // === Phase 1.85: LPV inject + propagate (compute) ===
         // M6.0+M6.1：先把 RSM VPL 注入到 grid[0]（inject 内部已 clear），

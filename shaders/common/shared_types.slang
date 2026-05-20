@@ -44,6 +44,7 @@ struct FrameUniforms {
     float4 ddgiOrigin;         // xyz=grid 原点，w=pad
     float4 ddgiSpacing;        // xyz=probe 间距，w=pad
     int4   ddgiOctaSizes;      // x=octaIrr, y=octaDist, z/w=pad
+    int4   lumenCounts;        // L.2+ Lumen-lite: x=lumenEnabled (0/1)
 };
 
 struct MaterialGpu {

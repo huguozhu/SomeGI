@@ -123,6 +123,15 @@ void RenderTargets::create(Device& d, VkExtent2D ext) {
               | VK_IMAGE_USAGE_SAMPLED_BIT
               | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
     rtGI = Image(d, rt);
+
+    // L.5 Lumen-lite gather 输出：STORAGE + SAMPLED + TRANSFER_DST。
+    ImageDesc lg{};
+    lg.format = VK_FORMAT_R16G16B16A16_SFLOAT;
+    lg.extent = {ext.width, ext.height, 1};
+    lg.usage  = VK_IMAGE_USAGE_STORAGE_BIT
+              | VK_IMAGE_USAGE_SAMPLED_BIT
+              | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    lumenGI = Image(d, lg);
 }
 
 void RenderTargets::destroy() {
@@ -140,6 +149,7 @@ void RenderTargets::destroy() {
     rsmGI.reset();
     restir.reset();
     rtGI.reset();
+    lumenGI.reset();
 }
 
 }

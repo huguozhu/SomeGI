@@ -43,6 +43,10 @@ struct RenderTargets {
     // RGBA16F: rgb=入射 radiance（命中点处 albedo·sunBRDF），a=hit?1:0。
     Image rtGI;           // STORAGE | SAMPLED | TRANSFER_DST
 
+    // L.5 Lumen-lite：screen probe gather 最终间接 diffuse。
+    // RGBA16F: rgb=间接 diffuse radiance, a=1.0。
+    Image lumenGI;        // STORAGE | SAMPLED | TRANSFER_DST
+
     void create(Device& d, VkExtent2D ext);
     void destroy();
 

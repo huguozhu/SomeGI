@@ -117,6 +117,7 @@ void SceneRtAS::build(Device& d, VkCommandPool pool,
 
         e.range = {};
         e.range.primitiveCount  = prim.indexCount / 3;
+
         e.range.primitiveOffset = prim.firstIndex * sizeof(uint32_t);
         e.range.firstVertex     = (uint32_t)std::max(0, prim.vertexOffset);
         e.range.transformOffset = 0;

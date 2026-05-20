@@ -50,7 +50,7 @@ void LightingPass::init(Device& d) {
     // 22/23: gPrtTransferD/E (sampled 3D image, RGBA16F) — B.10 SH16
     // 24: gRestir         (sampled 2D image, RGBA16F) — C.4 ReSTIR DI
     // 25: gRtGI           (sampled 2D image, RGBA16F) — M9 RT GI
-    std::array<VkDescriptorSetLayoutBinding, 26> b{};
+    std::array<VkDescriptorSetLayoutBinding, 27> b{};
     b[0]  = {0,  VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
     b[1]  = {1,  VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,  1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
     b[2]  = {2,  VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,  1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
@@ -77,6 +77,7 @@ void LightingPass::init(Device& d) {
     b[23] = {23, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,  1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
     b[24] = {24, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,  1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
     b[25] = {25, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,  1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
+    b[26] = {26, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,  1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
 
     VkDescriptorSetLayoutCreateInfo li{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
     li.bindingCount = (uint32_t)b.size(); li.pBindings = b.data();
@@ -84,10 +85,10 @@ void LightingPass::init(Device& d) {
 
     std::array<VkDescriptorPoolSize, 5> ps{{
         {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1},
-        {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 22},   // +2 PRT SH9 + 2 SH16 + 1 ReSTIR + 1 RT GI
+        {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 23},   // +1 lumenGI
         {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,  1},
         {VK_DESCRIPTOR_TYPE_SAMPLER,        1},
-        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1},   // B.5 probe states
+        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1},
     }};
     VkDescriptorPoolCreateInfo pci{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
     pci.maxSets = 1; pci.poolSizeCount = (uint32_t)ps.size(); pci.pPoolSizes = ps.data();
@@ -199,12 +200,13 @@ void LightingPass::bindFrame(Device& d, const RenderTargets& rt, VkBuffer frameU
     VkDescriptorImageInfo vxa = sampledRO(vxgi.anisoFullView());
     VkDescriptorImageInfo rst = sampledRO(rt.restir.view());   // C.4 ReSTIR DI
     VkDescriptorImageInfo rtG = sampledRO(rt.rtGI.view());    // M9 RT GI
+    VkDescriptorImageInfo lum = sampledRO(rt.lumenGI.view()); // L.5 Lumen-lite gather
 
     VkDescriptorImageInfo hd{};
     hd.imageView = rt.hdrColor.view();
     hd.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
 
-    std::array<VkWriteDescriptorSet, 26> w{};
+    std::array<VkWriteDescriptorSet, 27> w{};
     // ... (w[0] through w[24] are set as before)
     w[0] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
     w[0].dstSet = m_set; w[0].dstBinding = 0; w[0].descriptorCount = 1;
@@ -241,6 +243,7 @@ void LightingPass::bindFrame(Device& d, const RenderTargets& rt, VkBuffer frameU
     setImg(w[23], 23, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, &pxE);
     setImg(w[24], 24, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, &rst);
     setImg(w[25], 25, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, &rtG);   // M9 RT GI
+    setImg(w[26], 26, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, &lum);  // L.5 Lumen-lite
 
     vkUpdateDescriptorSets(d.device(), (uint32_t)w.size(), w.data(), 0, nullptr);
 }

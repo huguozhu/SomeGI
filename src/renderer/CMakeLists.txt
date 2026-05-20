@@ -65,6 +65,12 @@ add_library(somegi_renderer STATIC
     tonemap_pass.cpp
     imgui_pass.h
     imgui_pass.cpp
+    lumen_resources.h
+    lumen_resources.cpp
+    lumen_probe_pass.h
+    lumen_probe_pass.cpp
+    lumen_gather_pass.h
+    lumen_gather_pass.cpp
 )
 
 target_link_libraries(somegi_renderer

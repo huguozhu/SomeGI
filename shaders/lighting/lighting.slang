@@ -53,6 +53,7 @@ import ibl_eval;        // set=1 IBL bindings + evalIBLDiffuse / Specular / appl
 [[vk::binding(23, 0)]] Texture3D<float4> gPrtTransferE;          // B.10 PRT SH16：coefs 13..15 (rgb)
 [[vk::binding(24, 0)]] Texture2D<float4> gRestir;                // C.4 ReSTIR DI：rgb=直接光累加，a=valid
 [[vk::binding(25, 0)]] Texture2D<float4> gRtGI;                  // M9 RT GI：rgb=入射 radiance，a=hit?1:0
+[[vk::binding(26, 0)]] Texture2D<float4> gLumenGI;              // L.5 Lumen-lite gather 输出
 
 struct LightingPC {
     uint2  outSize;
@@ -153,6 +154,25 @@ void cs_main(uint3 dt : SV_DispatchThreadID) {
     //                            镜面也至少有一点方向感（Y 方向 sky/ground 渐变）。
     float3 indirect;
     if (gFrame.counts.z != 0) {
+        // L.5 Lumen-lite：gather pass 已输出完整 diffuse indirect（含 BRDF），
+        // 跳过 SSGI/VXGI/DDGI/RSM 等混合链。
+        if (gFrame.lumenCounts.x != 0) {
+            float4 lumenF = gLumenGI.Load(int3(pix, 0));
+            float3 diffuse = lumenF.rgb;
+            float3 iblSpec = evalIBLSpecular(N, V, albedo, metallic, roughness,
+                                              (float)gFrame.counts.y);
+            float3 specular = iblSpec;
+            // SSR 仍在 Lumen 之上运行（屏幕空间反射作为 specular 补充）
+            if (ssrF.a > 0.0) {
+                float3 ssrSpec = applyIBLSpecularBRDF(ssrF.rgb, N, V, albedo, metallic, roughness);
+                specular = lerp(specular, ssrSpec, ssrF.a);
+            }
+            indirect = diffuse + specular;
+            indirect *= ao;
+            gOutHdr[pix] = float4(sun + indirect + emissive, 1);
+            return;
+        }
+
         // Diffuse 项 = lerp(IBL 漫反射, SSGI 漫反射, hit 比例)。SSGI 命中越多
         // 越偏向 SSGI 真值；命中少（rays 跑出屏幕） → 回落 IBL diffuse。
         // ssgiF 是 5×5 bilateral 过滤后的 SSGI 输出。

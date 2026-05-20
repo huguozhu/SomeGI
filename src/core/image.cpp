@@ -32,9 +32,14 @@ Image::Image(Device& d, const ImageDesc& desc) : m_device(&d), m_desc(desc) {
 
     VkImageViewCreateInfo vi{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
     vi.image = m_image;
-    vi.viewType = (desc.arrayLayers == 6 && (desc.flags & VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT))
-                  ? VK_IMAGE_VIEW_TYPE_CUBE
-                  : (desc.type == VK_IMAGE_TYPE_2D ? VK_IMAGE_VIEW_TYPE_2D : VK_IMAGE_VIEW_TYPE_3D);
+    if (desc.arrayLayers == 6 && (desc.flags & VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT))
+        vi.viewType = VK_IMAGE_VIEW_TYPE_CUBE;
+    else if (desc.type == VK_IMAGE_TYPE_2D && desc.arrayLayers > 1)
+        vi.viewType = VK_IMAGE_VIEW_TYPE_2D_ARRAY;
+    else if (desc.type == VK_IMAGE_TYPE_2D)
+        vi.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    else
+        vi.viewType = VK_IMAGE_VIEW_TYPE_3D;
     vi.format = desc.format;
     vi.subresourceRange = {desc.aspect, 0, desc.mipLevels, 0, desc.arrayLayers};
     VK_CHECK(vkCreateImageView(d.device(), &vi, nullptr, &m_view));

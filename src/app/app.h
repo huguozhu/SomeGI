@@ -36,6 +36,9 @@
 #include "renderer/imgui_pass.h"
 #include "renderer/scene_rt_as.h"
 #include "renderer/rt_gi_pass.h"
+#include "renderer/lumen_resources.h"
+#include "renderer/lumen_probe_pass.h"
+#include "renderer/lumen_gather_pass.h"
 #include <map>
 #include <memory>
 #include <filesystem>
@@ -204,6 +207,16 @@ private:
     bool m_rtSupported = false;
     bool m_rtGiInited  = false;    // m_rtGiPass.init() 成功
     bool m_rtGiBound   = false;    // bindFrame 已调用
+
+    // L.2 Lumen-lite：屏幕 probe atlas + ray buffer + probe pass
+    LumenResources  m_lumen;
+    LumenProbePass  m_lumenProbePass;
+    LumenGatherPass m_lumenGatherPass;
+    bool            m_lumenEnabled       = false;
+    bool            m_lumenAtlasInited   = false;  // probeAtlas 首次 transition
+    bool            m_lumenProbeInited   = false;  // probe pass init 完成
+    bool            m_lumenGatherInited  = false;  // gather pass init 完成
+    bool            m_lumenOutInited     = false;  // lumenGI 首次 transition
 
     // B.4 SSGI 时序累积：保存上一帧 viewProj 用于 reproject。
     glm::mat4 m_prevViewProj{1.0f};
