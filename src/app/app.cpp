@@ -156,6 +156,18 @@ App::App() {
     WindowDesc wd; wd.title = "SomeGI [M1 forward]";
     m_window = std::make_unique<Window>(wd);
     m_device = std::make_unique<Device>(*m_window, /*validation=*/true);
+
+    // Clamp default MSAA to device-supported sample counts
+    {
+        VkSampleCountFlags supp = m_device->supportedSampleCounts();
+        if (!(m_msaaSamples & supp)) {
+            if (supp & VK_SAMPLE_COUNT_8_BIT)      m_msaaSamples = VK_SAMPLE_COUNT_8_BIT;
+            else if (supp & VK_SAMPLE_COUNT_4_BIT) m_msaaSamples = VK_SAMPLE_COUNT_4_BIT;
+            else if (supp & VK_SAMPLE_COUNT_2_BIT) m_msaaSamples = VK_SAMPLE_COUNT_2_BIT;
+            else                                    m_msaaSamples = VK_SAMPLE_COUNT_1_BIT;
+        }
+    }
+
     m_swap   = std::make_unique<Swapchain>(*m_device, *m_window);
 
     // M9：检测 HW RT 支持并更新 dropdown 实现状态。
@@ -190,14 +202,15 @@ App::App() {
     }
 
     std::printf("[init] render targets...\n");
-    m_rt.create(*m_device, m_swap->extent());
+    m_rt.create(*m_device, m_swap->extent(), m_msaaSamples);
     std::printf("[init] gbuffer pass...\n");
     m_gbuffer.init(*m_device,
                    VK_FORMAT_R8G8B8A8_UNORM,
                    VK_FORMAT_R16G16B16A16_SFLOAT,
                    VK_FORMAT_R8G8B8A8_UNORM,
                    VK_FORMAT_D32_SFLOAT,
-                   kMaxTextures);
+                   kMaxTextures,
+                   m_msaaSamples);
     // M5.0：RSM 几何 pass（sun-view 4-RT）。本里程碑只跑 record，下游
     // 暂不消费（RsmSamplePass 在 M5.1 接入）。
     std::printf("[init] rsm geometry pass...\n");
@@ -307,8 +320,10 @@ App::App() {
     m_vxgiRelight.bindResources(*m_device, m_vxgi, m_vxgi.relightScratch().view());
     m_vxgiRelight.bindResourcesPingPong(*m_device, m_vxgi, false);
     m_vxgiRelight.bindResourcesPingPong(*m_device, m_vxgi, true);
-    m_vxgiResolve6Axis.init(*m_device);
-    m_vxgiResolve6Axis.bindResources(*m_device, m_vxgi);
+    if (m_vxgiSixAxisInited) {
+        m_vxgiResolve6Axis.init(*m_device);
+        m_vxgiResolve6Axis.bindResources(*m_device, m_vxgi);
+    }
 
     std::printf("[init] prt bake pass...\n");
     m_prtBake.init(*m_device);
@@ -702,7 +717,7 @@ void App::applyGiSelection() {
 void App::onSwapchainResized() {
     m_device->waitIdle();
     m_rt.destroy();
-    m_rt.create(*m_device, m_swap->extent());
+    m_rt.create(*m_device, m_swap->extent(), m_msaaSamples);
     m_lighting.bindFrame(*m_device, m_rt, m_gbuffer.frameUboHandle(),
                          m_lpv.current(), m_vxgi, m_prt, m_ddgi,
                          m_ddgi.probeStates().handle());
@@ -985,6 +1000,48 @@ void App::buildUI() {
         ImGui::DragFloat3("sun dir", &m_sunDir.x, 0.05f, -1.0f, 1.0f);
         ImGui::DragFloat("sun intensity", &m_sunIntensity, 0.05f, 0.0f, 20.0f);
         ImGui::ColorEdit3("ambient", &m_ambient.x);
+        ImGui::Separator();
+        ImGui::Text("MSAA");
+        {
+            VkSampleCountFlags supported = m_device->supportedSampleCounts();
+            struct MsaaOption { const char* label; VkSampleCountFlagBits value; };
+            MsaaOption all[] = {
+                {"Off", VK_SAMPLE_COUNT_1_BIT},
+                {"2x",  VK_SAMPLE_COUNT_2_BIT},
+                {"4x",  VK_SAMPLE_COUNT_4_BIT},
+                {"8x",  VK_SAMPLE_COUNT_8_BIT},
+                {"16x", VK_SAMPLE_COUNT_16_BIT},
+            };
+            std::vector<MsaaOption> opts;
+            int curIdx = -1;
+            for (int i = 0; i < 5; ++i) {
+                if ((all[i].value & supported) || all[i].value == VK_SAMPLE_COUNT_1_BIT) {
+                    if (m_msaaSamples == all[i].value) curIdx = (int)opts.size();
+                    opts.push_back(all[i]);
+                }
+            }
+            // 如果当前 m_msaaSamples 不在支持列表中（例如从别的 GPU 迁移配置），
+            // fallback 到最高支持的 sample count。
+            if (curIdx < 0 && !opts.empty()) {
+                m_msaaSamples = opts.back().value;
+                curIdx = (int)opts.size() - 1;
+            }
+            if (ImGui::BeginCombo("MSAA samples", opts[curIdx].label)) {
+                for (int i = 0; i < (int)opts.size(); ++i) {
+                    bool sel = (curIdx == i);
+                    if (ImGui::Selectable(opts[i].label, sel)) {
+                        if (m_msaaSamples != opts[i].value) {
+                            m_device->waitIdle();
+                            m_msaaSamples = opts[i].value;
+                            m_rt.recreateMsaa(*m_device, m_msaaSamples);
+                            m_gbuffer.setMsaaSamples(m_msaaSamples);
+                        }
+                    }
+                    if (sel) ImGui::SetItemDefaultFocus();
+                }
+                ImGui::EndCombo();
+            }
+        }
         ImGui::Separator();
         ImGui::Text("GI Technique");
         {
@@ -1336,8 +1393,9 @@ void App::run() {
         // （结尾 4 张都到 SHADER_READ_ONLY，给后续 RsmSamplePass 直接用）。
         m_rsmGeom.record(cmd, m_scene, m_sceneGpu);
 
-        // === Phase 1: GBuffer prepass (graphics, MRT) ===
-        // 3 GBuffer color images + depth go from UNDEFINED to attachment layout.
+        // === Phase 1: GBuffer prepass (graphics, MRT) with MSAA ===
+        // MSAA images + SS resolve targets all go to attachment layout.
+        // resolveImageLayout = COLOR_ATTACHMENT / DEPTH_ATTACHMENT。
         auto toColorAttach = [&](VkImage img) {
             transitionImage(cmd, img, VK_IMAGE_ASPECT_COLOR_BIT,
                 VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
@@ -1345,6 +1403,17 @@ void App::run() {
                 VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
                 VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
         };
+        // MSAA render targets
+        toColorAttach(m_rt.gAlbedoMetalMs.image());
+        toColorAttach(m_rt.gNormalRoughMs.image());
+        toColorAttach(m_rt.gEmissiveAOMs.image());
+        transitionImage(cmd, m_rt.depthMs.image(), VK_IMAGE_ASPECT_DEPTH_BIT,
+            VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
+            VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
+            VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT,
+            VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT);
+
+        // SS resolve targets — resolveImageLayout = COLOR_ATTACHMENT / DEPTH_ATTACHMENT
         toColorAttach(m_rt.gAlbedoMetal.image());
         toColorAttach(m_rt.gNormalRough.image());
         toColorAttach(m_rt.gEmissiveAO.image());
@@ -1356,9 +1425,8 @@ void App::run() {
 
         m_gbuffer.record(cmd, m_rt, m_scene, m_sceneGpu);
 
-        // === Transition GBuffer / depth to SHADER_READ_ONLY for downstream
-        // compute consumers (SSAO + Lighting). They share these inputs, so
-        // do the layout flip once.
+        // Resolve 后 SS GBuffer 在 attachment layout，翻到 SHADER_READ_ONLY
+        // 供下游 compute（SSAO / SSR / SSGI / Lighting）采样。
         auto colorAttachToSampled = [&](VkImage img) {
             transitionImage(cmd, img, VK_IMAGE_ASPECT_COLOR_BIT,
                 VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
@@ -1378,6 +1446,9 @@ void App::run() {
             VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
             VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
             VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+
+        // MSAA images stay in attachment layout (no transition needed);
+        // next frame's VK_IMAGE_LAYOUT_UNDEFINED oldLayout discards them.
 
         // === Phase 1.5: AO (compute, SSAO/GTAO 二选一或 None) ===
         // 两种 AO 共享 rt.ssao R8 输出（lighting 端不区分来源）。当 None

@@ -15,7 +15,8 @@ class GBufferPass {
 public:
     void init(Device& d,
               VkFormat rt0Fmt, VkFormat rt1Fmt, VkFormat rt2Fmt,
-              VkFormat depthFmt, uint32_t maxTextures);
+              VkFormat depthFmt, uint32_t maxTextures,
+              VkSampleCountFlagBits msaaSamples = VK_SAMPLE_COUNT_1_BIT);
     void destroy();
 
     void bindScene(Device& d, const SceneGpu& gpu, uint32_t textureCount);
@@ -27,6 +28,8 @@ public:
     void record(VkCommandBuffer cmd, const RenderTargets& rt,
                 const SceneCpu& cpu, const SceneGpu& gpu);
 
+    void setMsaaSamples(VkSampleCountFlagBits samples);
+
 private:
     void buildPipeline();
     void destroyPipeline();
@@ -36,6 +39,7 @@ private:
     VkFormat m_rt1Fmt = VK_FORMAT_UNDEFINED;
     VkFormat m_rt2Fmt = VK_FORMAT_UNDEFINED;
     VkFormat m_depthFmt = VK_FORMAT_UNDEFINED;
+    VkSampleCountFlagBits m_msaaSamples = VK_SAMPLE_COUNT_1_BIT;
 
     VkDescriptorSetLayout m_setLayout = VK_NULL_HANDLE;
     VkPipelineLayout m_pipelineLayout = VK_NULL_HANDLE;

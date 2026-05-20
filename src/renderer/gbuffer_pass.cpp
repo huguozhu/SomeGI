@@ -7,11 +7,13 @@ namespace somegi {
 
 void GBufferPass::init(Device& d,
                        VkFormat rt0Fmt, VkFormat rt1Fmt, VkFormat rt2Fmt,
-                       VkFormat depthFmt, uint32_t maxTextures) {
+                       VkFormat depthFmt, uint32_t maxTextures,
+                       VkSampleCountFlagBits msaaSamples) {
     m_device = &d;
     m_rt0Fmt = rt0Fmt; m_rt1Fmt = rt1Fmt; m_rt2Fmt = rt2Fmt;
     m_depthFmt = depthFmt;
     m_maxTextures = maxTextures;
+    m_msaaSamples = msaaSamples;
 
     // === Set=0 layout (mirrors ForwardPass) ===
     std::array<VkDescriptorSetLayoutBinding, 4> b{};
@@ -96,7 +98,7 @@ void GBufferPass::buildPipeline() {
     rs.lineWidth = 1.0f;
 
     VkPipelineMultisampleStateCreateInfo ms{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
-    ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+    ms.rasterizationSamples = m_msaaSamples;
 
     VkPipelineDepthStencilStateCreateInfo ds{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
     ds.depthTestEnable = VK_TRUE; ds.depthWriteEnable = VK_TRUE;
@@ -127,6 +129,13 @@ void GBufferPass::buildPipeline() {
     gpci.pColorBlendState = &cb; gpci.pDynamicState = &dyni;
     gpci.layout = m_pipelineLayout;
     VK_CHECK(vkCreateGraphicsPipelines(d.device(), VK_NULL_HANDLE, 1, &gpci, nullptr, &m_pipeline));
+}
+
+void GBufferPass::setMsaaSamples(VkSampleCountFlagBits samples) {
+    if (m_msaaSamples == samples) return;
+    m_msaaSamples = samples;
+    destroyPipeline();
+    buildPipeline();
 }
 
 void GBufferPass::destroyPipeline() {
@@ -188,25 +197,43 @@ void GBufferPass::updateFrame(const FrameUBO& ubo) {
 
 void GBufferPass::record(VkCommandBuffer cmd, const RenderTargets& rt,
                          const SceneCpu& cpu, const SceneGpu& gpu) {
+    bool useMsaa = m_msaaSamples != VK_SAMPLE_COUNT_1_BIT;
+
     std::array<VkRenderingAttachmentInfo, 3> color{};
-    auto setColor = [](VkRenderingAttachmentInfo& a, VkImageView view) {
-        a = {VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
-        a.imageView   = view;
-        a.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-        a.loadOp      = VK_ATTACHMENT_LOAD_OP_CLEAR;
-        a.storeOp     = VK_ATTACHMENT_STORE_OP_STORE;
-        a.clearValue.color = {{0, 0, 0, 0}};
-    };
-    setColor(color[0], rt.gAlbedoMetal.view());
-    setColor(color[1], rt.gNormalRough.view());
-    setColor(color[2], rt.gEmissiveAO.view());
+    for (int i = 0; i < 3; ++i) {
+        color[i] = {VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
+        color[i].imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        color[i].loadOp      = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        color[i].storeOp     = VK_ATTACHMENT_STORE_OP_STORE;
+        color[i].clearValue.color = {{0, 0, 0, 0}};
+    }
+    color[0].imageView = useMsaa ? rt.gAlbedoMetalMs.view() : rt.gAlbedoMetal.view();
+    color[1].imageView = useMsaa ? rt.gNormalRoughMs.view() : rt.gNormalRough.view();
+    color[2].imageView = useMsaa ? rt.gEmissiveAOMs.view() : rt.gEmissiveAO.view();
+
+    if (useMsaa) {
+        color[0].resolveImageView   = rt.gAlbedoMetal.view();
+        color[0].resolveMode        = VK_RESOLVE_MODE_AVERAGE_BIT;
+        color[0].resolveImageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        color[1].resolveImageView   = rt.gNormalRough.view();
+        color[1].resolveMode        = VK_RESOLVE_MODE_AVERAGE_BIT;
+        color[1].resolveImageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        color[2].resolveImageView   = rt.gEmissiveAO.view();
+        color[2].resolveMode        = VK_RESOLVE_MODE_AVERAGE_BIT;
+        color[2].resolveImageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    }
 
     VkRenderingAttachmentInfo depth{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
-    depth.imageView   = rt.depth.view();
+    depth.imageView   = useMsaa ? rt.depthMs.view() : rt.depth.view();
     depth.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
     depth.loadOp      = VK_ATTACHMENT_LOAD_OP_CLEAR;
     depth.storeOp     = VK_ATTACHMENT_STORE_OP_STORE;
     depth.clearValue.depthStencil = {1.0f, 0};
+    if (useMsaa) {
+        depth.resolveImageView   = rt.depth.view();
+        depth.resolveMode        = VK_RESOLVE_MODE_MIN_BIT;
+        depth.resolveImageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+    }
 
     VkRenderingInfo ri{VK_STRUCTURE_TYPE_RENDERING_INFO};
     ri.renderArea = {{0, 0}, rt.extent};

@@ -13,7 +13,7 @@ Image::Image(Device& d, const ImageDesc& desc) : m_device(&d), m_desc(desc) {
     ci.extent = desc.extent;
     ci.mipLevels = desc.mipLevels;
     ci.arrayLayers = desc.arrayLayers;
-    ci.samples = VK_SAMPLE_COUNT_1_BIT;
+    ci.samples = desc.samples;
     ci.tiling = VK_IMAGE_TILING_OPTIMAL;
     ci.usage = desc.usage;
     ci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;

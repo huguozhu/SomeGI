@@ -13,6 +13,7 @@ struct ImageDesc {
     VkImageUsageFlags usage = 0;
     VkImageAspectFlags aspect = VK_IMAGE_ASPECT_COLOR_BIT;
     VkImageCreateFlags flags = 0;
+    VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT;
 };
 
 class Image {

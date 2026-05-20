@@ -35,6 +35,12 @@ public:
     // device limits（Intel 一般 83.33ns，约等于 12 MHz）。
     float timestampPeriod() const { return m_physicalDevice.properties.limits.timestampPeriod; }
 
+    // 查询 GPU 支持的 MSAA sample counts（color & depth 交集）
+    VkSampleCountFlags supportedSampleCounts() const {
+        auto& limits = m_physicalDevice.properties.limits;
+        return limits.framebufferColorSampleCounts & limits.framebufferDepthSampleCounts;
+    }
+
     // vk-bootstrap dispatch table（加载了所有 extension 函数指针）。
     const vkb::DispatchTable& dispatch() const { return m_dispatch; }
 

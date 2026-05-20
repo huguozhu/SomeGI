@@ -3,14 +3,12 @@
 
 namespace somegi {
 
-void RenderTargets::create(Device& d, VkExtent2D ext) {
+void RenderTargets::create(Device& d, VkExtent2D ext, VkSampleCountFlagBits msaaSamples) {
     extent = ext;
 
     ImageDesc hdr{};
     hdr.format = VK_FORMAT_R16G16B16A16_SFLOAT;
     hdr.extent = {ext.width, ext.height, 1};
-    // STORAGE_BIT: M4 LightingPass writes hdrColor via RWTexture2D.
-    // TRANSFER_SRC_BIT: M4.2 copies hdrColor → hdrPrev each frame.
     hdr.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT
               | VK_IMAGE_USAGE_SAMPLED_BIT
               | VK_IMAGE_USAGE_STORAGE_BIT
@@ -21,7 +19,6 @@ void RenderTargets::create(Device& d, VkExtent2D ext) {
     dep.format = VK_FORMAT_D32_SFLOAT;
     dep.extent = {ext.width, ext.height, 1};
     dep.aspect = VK_IMAGE_ASPECT_DEPTH_BIT;
-    // SAMPLED_BIT: M4 LightingPass / SSAO / SSR sample depth in compute.
     dep.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT
               | VK_IMAGE_USAGE_SAMPLED_BIT;
     depth = Image(d, dep);
@@ -44,6 +41,28 @@ void RenderTargets::create(Device& d, VkExtent2D ext) {
     mkGBufferRT(VK_FORMAT_R8G8B8A8_UNORM,      gAlbedoMetal);
     mkGBufferRT(VK_FORMAT_R16G16B16A16_SFLOAT, gNormalRough);
     mkGBufferRT(VK_FORMAT_R8G8B8A8_UNORM,      gEmissiveAO);
+
+    auto mkMSAA = [&](VkFormat fmt, VkImageUsageFlags usage, VkImageAspectFlags aspect, Image& img) {
+        ImageDesc id{};
+        id.format = fmt;
+        id.extent = {ext.width, ext.height, 1};
+        id.samples = msaaSamples;
+        id.usage = usage;
+        id.aspect = aspect;
+        img = Image(d, id);
+    };
+    mkMSAA(VK_FORMAT_R8G8B8A8_UNORM,
+           VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+           VK_IMAGE_ASPECT_COLOR_BIT, gAlbedoMetalMs);
+    mkMSAA(VK_FORMAT_R16G16B16A16_SFLOAT,
+           VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+           VK_IMAGE_ASPECT_COLOR_BIT, gNormalRoughMs);
+    mkMSAA(VK_FORMAT_R8G8B8A8_UNORM,
+           VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+           VK_IMAGE_ASPECT_COLOR_BIT, gEmissiveAOMs);
+    mkMSAA(VK_FORMAT_D32_SFLOAT,
+           VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
+           VK_IMAGE_ASPECT_DEPTH_BIT, depthMs);
 
     // SSAO: STORAGE (compute write) + SAMPLED (lighting reads).
     ImageDesc s{};
@@ -134,6 +153,35 @@ void RenderTargets::create(Device& d, VkExtent2D ext) {
     lumenGI = Image(d, lg);
 }
 
+void RenderTargets::recreateMsaa(Device& d, VkSampleCountFlagBits samples) {
+    gAlbedoMetalMs.reset();
+    gNormalRoughMs.reset();
+    gEmissiveAOMs.reset();
+    depthMs.reset();
+
+    auto mkMSAA = [&](VkFormat fmt, VkImageUsageFlags usage, VkImageAspectFlags aspect, Image& img) {
+        ImageDesc id{};
+        id.format = fmt;
+        id.extent = {extent.width, extent.height, 1};
+        id.samples = samples;
+        id.usage = usage;
+        id.aspect = aspect;
+        img = Image(d, id);
+    };
+    mkMSAA(VK_FORMAT_R8G8B8A8_UNORM,
+           VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+           VK_IMAGE_ASPECT_COLOR_BIT, gAlbedoMetalMs);
+    mkMSAA(VK_FORMAT_R16G16B16A16_SFLOAT,
+           VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+           VK_IMAGE_ASPECT_COLOR_BIT, gNormalRoughMs);
+    mkMSAA(VK_FORMAT_R8G8B8A8_UNORM,
+           VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+           VK_IMAGE_ASPECT_COLOR_BIT, gEmissiveAOMs);
+    mkMSAA(VK_FORMAT_D32_SFLOAT,
+           VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
+           VK_IMAGE_ASPECT_DEPTH_BIT, depthMs);
+}
+
 void RenderTargets::destroy() {
     hdrColor.reset();
     depth.reset();
@@ -141,6 +189,10 @@ void RenderTargets::destroy() {
     gAlbedoMetal.reset();
     gNormalRough.reset();
     gEmissiveAO.reset();
+    gAlbedoMetalMs.reset();
+    gNormalRoughMs.reset();
+    gEmissiveAOMs.reset();
+    depthMs.reset();
     ssao.reset();
     ssr.reset();
     hdrPrev.reset();

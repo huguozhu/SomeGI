@@ -18,6 +18,12 @@ struct RenderTargets {
     Image gNormalRough;   // RGBA16_SFLOAT: xyz=世界法线归一化, w=roughness
     Image gEmissiveAO;    // RGBA8_UNORM:  rgb=emissive, a=AO（材质 occlusion）
 
+    // MSAA 多重采样版本：GBufferPass 渲染目标，resolve 到 SS 版本
+    Image gAlbedoMetalMs; // MSAA RGBA8_UNORM
+    Image gNormalRoughMs; // MSAA RGBA16_SFLOAT
+    Image gEmissiveAOMs;  // MSAA RGBA8_UNORM
+    Image depthMs;        // MSAA D32_SFLOAT
+
     // M4.1 SSAO：全分辨率，half-res 优化留给后续
     Image ssao;           // R8_UNORM: 1.0=完全无遮蔽, 0.0=完全遮蔽
 
@@ -47,8 +53,9 @@ struct RenderTargets {
     // RGBA16F: rgb=间接 diffuse radiance, a=1.0。
     Image lumenGI;        // STORAGE | SAMPLED | TRANSFER_DST
 
-    void create(Device& d, VkExtent2D ext);
+    void create(Device& d, VkExtent2D ext, VkSampleCountFlagBits msaaSamples = VK_SAMPLE_COUNT_4_BIT);
     void destroy();
+    void recreateMsaa(Device& d, VkSampleCountFlagBits samples);
 
     VkExtent2D extent{};
 };
