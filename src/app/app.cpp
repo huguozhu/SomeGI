@@ -409,7 +409,7 @@ void App::loadAndUploadScene(const std::filesystem::path& gltfPath) {
         m_scene.aabbMax.x, m_scene.aabbMax.y, m_scene.aabbMax.z);
 
     std::printf("[scene] uploading to GPU...\n");
-    uploadScene(*m_device, m_pool, m_scene, m_sceneGpu);
+    uploadScene(*m_device, m_pool, m_scene, m_sceneGpu, m_useMipmaps);
     std::printf("[scene] GPU upload done.\n");
 }
 
@@ -1040,6 +1040,19 @@ void App::buildUI() {
                     if (sel) ImGui::SetItemDefaultFocus();
                 }
                 ImGui::EndCombo();
+            }
+            bool prevMip = m_useMipmaps;
+            ImGui::Checkbox("Mipmap", &m_useMipmaps);
+            if (m_useMipmaps != prevMip) {
+                m_device->waitIdle();
+                destroySceneSamplers(*m_device, m_sceneGpu);
+                m_sceneGpu.vertexBuffer.reset();
+                m_sceneGpu.indexBuffer.reset();
+                m_sceneGpu.materialBuffer.reset();
+                uploadScene(*m_device, m_pool, m_scene, m_sceneGpu, m_useMipmaps);
+                m_gbuffer.bindScene(*m_device, m_sceneGpu, (uint32_t)m_sceneGpu.images.size());
+                m_rsmGeom.bindScene(*m_device, m_sceneGpu, (uint32_t)m_sceneGpu.images.size());
+                m_vxgiVoxelize.bindScene(*m_device, m_sceneGpu, (uint32_t)m_sceneGpu.images.size(), m_vxgi);
             }
         }
         ImGui::Separator();

@@ -171,6 +171,7 @@ private:
     int m_currentGiIndex = 0;          // default = None
     int m_giIndexApplied = -1;         // last index actually attached
     VkSampleCountFlagBits m_msaaSamples = VK_SAMPLE_COUNT_4_BIT;
+    bool m_useMipmaps = true;
 
     // Per-scene persisted view + lighting (loaded from / written to scene_state.ini)
     std::map<std::string, SceneState> m_sceneStates;

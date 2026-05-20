@@ -19,7 +19,7 @@ struct MaterialGpu {
     uint32_t _pad0;
 };
 
-void uploadScene(Device& d, VkCommandPool pool, const SceneCpu& cpu, SceneGpu& out);
+void uploadScene(Device& d, VkCommandPool pool, const SceneCpu& cpu, SceneGpu& out, bool useMipmaps = true);
 void destroySceneSamplers(Device& d, SceneGpu& gpu);
 
 }
