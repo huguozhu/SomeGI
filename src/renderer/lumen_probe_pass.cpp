@@ -9,7 +9,6 @@
 namespace somegi {
 
 namespace {
-// Must match ProbePC in lumen_probe.slang
 struct ProbePC {
     float    screenSizeX, screenSizeY;
     float    invScreenSizeX, invScreenSizeY;
@@ -19,6 +18,8 @@ struct ProbePC {
     uint32_t raysPerProbe;
     uint32_t totalProbes;
     float    randomSeed;
+    uint32_t useSixAxis;
+    uint32_t _pad1, _pad2, _pad3;   // align to 64 bytes
 };
 static_assert(sizeof(ProbePC) <= 128);
 }
@@ -35,16 +36,9 @@ void LumenProbePass::init(Device& d) {
     si.maxLod = 16.0f;
     VK_CHECK(vkCreateSampler(d.device(), &si, nullptr, &m_linearClamp));
 
-    // Descriptor set layout (8 bindings):
-    // 0: FrameUniforms UBO
-    // 1: gNormalRough     sampled 2D
-    // 2: gDepth           sampled 2D
-    // 3: gTLAS            acceleration structure
-    // 4: gVoxelGrid       sampled 3D
-    // 5: sampler          linear clamp
-    // 6: gRayBuf          RW SSBO
-    // 7: gProbeAtlas      RW storage 2D
-    std::array<VkDescriptorSetLayoutBinding, 8> b{};
+    // 0:FrameUBO 1:NormalRough 2:Depth 3:TLAS 4:VoxelGrid 5:Sampler
+    // 6:RayBuf 7:ProbeAtlas 8:SixAxisX 9:SixAxisY 10:SixAxisZ
+    std::array<VkDescriptorSetLayoutBinding, 11> b{};
     b[0] = {0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,              1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
     b[1] = {1, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,               1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
     b[2] = {2, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,               1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
@@ -53,6 +47,9 @@ void LumenProbePass::init(Device& d) {
     b[5] = {5, VK_DESCRIPTOR_TYPE_SAMPLER,                     1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
     b[6] = {6, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,              1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
     b[7] = {7, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,               1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
+    b[8] = {8, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,               1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
+    b[9] = {9, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,               1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
+    b[10]= {10,VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,               1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
 
     VkDescriptorSetLayoutCreateInfo li{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
     li.bindingCount = (uint32_t)b.size(); li.pBindings = b.data();
@@ -61,7 +58,7 @@ void LumenProbePass::init(Device& d) {
     // Pool
     std::array<VkDescriptorPoolSize, 6> ps{{
         {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,            1},
-        {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,             3},
+        {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,             6},   // +3 sixAxis
         {VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 1},
         {VK_DESCRIPTOR_TYPE_SAMPLER,                   1},
         {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,            1},
@@ -115,7 +112,7 @@ void LumenProbePass::destroy() {
 void LumenProbePass::bindResources(Device& d, const LumenResources& res,
                                     const SceneRtAS& rtAS, const SceneGpu& /*sceneGpu*/,
                                     const VxgiResources& vxgi, const RenderTargets& rt,
-                                    VkBuffer frameUbo) {
+                                    VkBuffer frameUbo, bool hasSixAxis) {
     VkDescriptorBufferInfo ub{frameUbo, 0, VK_WHOLE_SIZE};
 
     VkDescriptorImageInfo nr{};
@@ -140,7 +137,7 @@ void LumenProbePass::bindResources(Device& d, const LumenResources& res,
     pa.imageView = res.probeAtlas().view();
     pa.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
 
-    std::array<VkWriteDescriptorSet, 8> w{};
+    std::array<VkWriteDescriptorSet, 11> w{};
     w[0] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
     w[0].dstSet = m_set; w[0].dstBinding = 0; w[0].descriptorCount = 1;
     w[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER; w[0].pBufferInfo = &ub;
@@ -167,11 +164,31 @@ void LumenProbePass::bindResources(Device& d, const LumenResources& res,
     w[7].dstSet = m_set; w[7].dstBinding = 7; w[7].descriptorCount = 1;
     w[7].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE; w[7].pImageInfo = &pa;
 
+    // L.3b 6-axis bindings (use vxgi isotropic as fallback if not available)
+    VkDescriptorImageInfo ax{};
+    ax.imageView = hasSixAxis ? vxgi.sixAxisX().view() : vxgi.fullView();
+    ax.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    VkDescriptorImageInfo ay{};
+    ay.imageView = hasSixAxis ? vxgi.sixAxisY().view() : vxgi.fullView();
+    ay.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    VkDescriptorImageInfo az{};
+    az.imageView = hasSixAxis ? vxgi.sixAxisZ().view() : vxgi.fullView();
+    az.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    w[8] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+    w[8].dstSet = m_set; w[8].dstBinding = 8; w[8].descriptorCount = 1;
+    w[8].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE; w[8].pImageInfo = &ax;
+    w[9] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+    w[9].dstSet = m_set; w[9].dstBinding = 9; w[9].descriptorCount = 1;
+    w[9].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE; w[9].pImageInfo = &ay;
+    w[10] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+    w[10].dstSet = m_set; w[10].dstBinding = 10; w[10].descriptorCount = 1;
+    w[10].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE; w[10].pImageInfo = &az;
+
     vkUpdateDescriptorSets(d.device(), (uint32_t)w.size(), w.data(), 0, nullptr);
 }
 
 void LumenProbePass::record(VkCommandBuffer cmd, const LumenResources& res,
-                             uint32_t frameIndex) {
+                             uint32_t frameIndex, bool useSixAxis) {
     uint32_t pw = res.probeGridW();
     uint32_t ph = res.probeGridH();
     uint32_t pc = res.probeCount();
@@ -191,7 +208,8 @@ void LumenProbePass::record(VkCommandBuffer cmd, const LumenResources& res,
     upc.probeTileSize  = LumenResources::kProbeTileSize;
     upc.raysPerProbe   = LumenResources::kRaysPerProbe;
     upc.totalProbes    = pc;
-    upc.randomSeed     = (float)(frameIndex % 359) * 0.0174533f;  // frame → radians
+    upc.randomSeed     = (float)(frameIndex % 359) * 0.0174533f;
+    upc.useSixAxis     = useSixAxis ? 1u : 0u;
     vkCmdPushConstants(cmd, m_pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT,
                        0, sizeof(upc), &upc);
 

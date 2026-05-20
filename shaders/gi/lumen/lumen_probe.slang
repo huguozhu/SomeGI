@@ -29,7 +29,8 @@ struct ProbePC {
     uint   probeTileSize;   // 4
     uint   raysPerProbe;    // 4
     uint   totalProbes;     // 4
-    float  randomSeed;      // 4  = 40 bytes total
+    float  randomSeed;      // 4
+    uint   useSixAxis;      // 4  = 44 bytes total
 };
 [[vk::push_constant]] ProbePC gPC;
 
@@ -44,6 +45,9 @@ struct ProbePC {
 [[vk::binding(5, 0)]] SamplerState                           gLinearClamp;
 [[vk::binding(6, 0)]] RWStructuredBuffer<float4>             gRayBuf;
 [[vk::binding(7, 0)]] RWTexture2D<float4>                    gProbeAtlas;
+[[vk::binding(8, 0)]] Texture3D<float4>                      gSixAxisX;
+[[vk::binding(9, 0)]] Texture3D<float4>                      gSixAxisY;
+[[vk::binding(10,0)]] Texture3D<float4>                      gSixAxisZ;
 
 // ---------------------------------------------------------------------------
 // Utilities
@@ -162,7 +166,23 @@ void cs_generateRays(uint3 dt : SV_DispatchThreadID) {
         float  cellSize = gFrame.vxgiGridMinCell.w;
         uint   gridRes = uint(gFrame.vxgiCounts.x);
         float3 voxelUv = (hitPos - gridMin) / (cellSize * float(gridRes));
-        hitRgb = gVoxelGrid.SampleLevel(gLinearClamp, voxelUv, 2.0).rgb;
+
+        if (gPC.useSixAxis != 0) {
+            // 6-axis directional sampling: blend +X/+Y/+Z axis by ray alignment
+            float3 ad = abs(rayDir);
+            float4 ax = gSixAxisX.SampleLevel(gLinearClamp, voxelUv, 2.0);
+            float4 ay = gSixAxisY.SampleLevel(gLinearClamp, voxelUv, 2.0);
+            float4 az = gSixAxisZ.SampleLevel(gLinearClamp, voxelUv, 2.0);
+            float3 posRgb = ax.rgb * ad.x + ay.rgb * ad.y + az.rgb * ad.z;
+            float  negLum = ax.a * ad.x + ay.a * ad.y + az.a * ad.z;
+            float  totalW = ad.x + ad.y + ad.z;
+            // Negative hemisphere: use luminance only, approximate grey
+            float3 negRgb = float3(negLum, negLum, negLum);
+            float3 blended = (posRgb + negRgb) / max(totalW, 0.001);
+            hitRgb = blended;
+        } else {
+            hitRgb = gVoxelGrid.SampleLevel(gLinearClamp, voxelUv, 2.0).rgb;
+        }
         hitDist = hitT;
     }
 

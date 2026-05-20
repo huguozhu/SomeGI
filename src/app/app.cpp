@@ -272,6 +272,9 @@ App::App() {
     if (m_rtSupported) {
         std::printf("[init] lumen resources...\n");
         m_lumen.create(*m_device, m_swap->extent());
+        // L.3b 6-axis voxel storage (only for Lumen mode)
+        m_vxgi.createSixAxis(*m_device);
+        m_vxgiSixAxisInited = true;
     }
     m_restirPass.bindResources(*m_device, m_restir, m_vxgi, m_rt, m_gbuffer.frameUboHandle());
 
@@ -302,6 +305,10 @@ App::App() {
     m_vxgiAniso.bindResources(*m_device, m_vxgi);
     m_vxgiRelight.init(*m_device);
     m_vxgiRelight.bindResources(*m_device, m_vxgi, m_vxgi.relightScratch().view());
+    m_vxgiRelight.bindResourcesPingPong(*m_device, m_vxgi, false);
+    m_vxgiRelight.bindResourcesPingPong(*m_device, m_vxgi, true);
+    m_vxgiResolve6Axis.init(*m_device);
+    m_vxgiResolve6Axis.bindResources(*m_device, m_vxgi);
 
     std::printf("[init] prt bake pass...\n");
     m_prtBake.init(*m_device);
@@ -612,6 +619,7 @@ App::~App() {
     m_vxgiMipmap.destroy();
     m_vxgiAniso.destroy();
     m_vxgiRelight.destroy();
+    m_vxgiResolve6Axis.destroy();
     m_sdfgiPass.destroy();
     m_sdfgi.destroy();
     m_lumenProbePass.destroy();
@@ -675,6 +683,8 @@ void App::applyGiSelection() {
     // M9 RT GI (index 10) — 不用额外 enabled flag，render loop 检查 m_rtGiBound && m_giIndexApplied == 10
     m_restirPass.enabled = (effective == 11);   // C.4
     m_lumenEnabled       = (effective == 12);   // L 阶段
+    // Lumen 模式自动开启 multi-bounce relight
+    if (m_lumenEnabled) m_vxgiRelightEnabled = true;
 
     m_giIndexApplied = effective;
     std::printf("[GI] applied technique index=%d (UI=%d SSGI=%d RSM=%d LPV=%d VXGI=%d PRT=%d DDGI=%d GTGI=%d SDFGI=%d RT=%d ReSTIR=%d Lumen=%d)\n",
@@ -727,7 +737,8 @@ void App::onSwapchainResized() {
         m_lumenOutInited  = false;
         if (m_lumenProbeInited) {
             m_lumenProbePass.bindResources(*m_device, m_lumen, m_rtAS, m_sceneGpu,
-                                            m_vxgi, m_rt, m_gbuffer.frameUboHandle());
+                                            m_vxgi, m_rt, m_gbuffer.frameUboHandle(),
+                                            m_vxgiSixAxisInited);
         }
         if (m_lumenFilterInited) {
             m_lumenFilterPass.bindResources(*m_device, m_lumen, m_rt,
@@ -1610,69 +1621,170 @@ void App::run() {
             m_vxgiAniso.record(cmd, m_vxgi);
             // pass 结尾所有 mip 已经在 SHADER_READ_ONLY（每 iter 自己转回）。
 
-            // C.2 multi-bounce relight：每 voxel cone-trace 自身 voxel grid
-            // gather 间接光 → scratch；然后 copy scratch → voxelGrid mip 0。
-            // 注：mip 1+ 不重建（性能优化），cone trace 在远 mip 看 1-bounce
-            // 旧值，近 mip 看 1.x-bounce 新值。视觉上多 bounce 效果可见。
+            // C.2 + L.3a multi-bounce relight：voxel cone-trace 自身 →
+            // scratch/scratch2 ping-pong → copy 最终结果回 voxelGrid mip 0。
+            // Lumen 模式：3 bounce；VXGI 独立 relight：1 bounce。
             if (m_vxgiRelightEnabled) {
-                // 1. scratch UNDEFINED → GENERAL
-                VkImageMemoryBarrier2 sb{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
-                sb.srcStageMask = VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
-                sb.srcAccessMask = 0;
-                sb.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-                sb.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-                sb.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-                sb.newLayout = VK_IMAGE_LAYOUT_GENERAL;
-                sb.image = m_vxgi.relightScratch().image();
-                sb.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-                VkDependencyInfo sdi{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-                sdi.imageMemoryBarrierCount = 1; sdi.pImageMemoryBarriers = &sb;
-                vkCmdPipelineBarrier2(cmd, &sdi);
+                int bounces = m_lumenEnabled ? 3 : 1;
 
-                m_vxgiRelight.record(cmd, kVxgiResolution, m_vxgi.mipLevels(),
+                // Helper: transition 3D image mip 0
+                auto transImg = [&](VkImage img, VkImageLayout oldL, VkImageLayout newL,
+                                    VkPipelineStageFlags2 srcS, VkAccessFlags2 srcA,
+                                    VkPipelineStageFlags2 dstS, VkAccessFlags2 dstA) {
+                    VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+                    b.srcStageMask = srcS; b.srcAccessMask = srcA;
+                    b.dstStageMask = dstS; b.dstAccessMask = dstA;
+                    b.oldLayout = oldL; b.newLayout = newL;
+                    b.image = img;
+                    b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+                    VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+                    di.imageMemoryBarrierCount = 1; di.pImageMemoryBarriers = &b;
+                    vkCmdPipelineBarrier2(cmd, &di);
+                };
+
+                auto blitScratchToVoxel = [&](VkImage srcImg) {
+                    // voxelGrid mip0 SR_O → TRANSFER_DST
+                    transImg(m_vxgi.image().image(),
+                        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                        VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
+                        VK_PIPELINE_STAGE_2_COPY_BIT,
+                        VK_ACCESS_2_TRANSFER_WRITE_BIT);
+                    // src GENERAL → TRANSFER_SRC
+                    transImg(srcImg,
+                        VK_IMAGE_LAYOUT_GENERAL,
+                        VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                        VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+                        VK_PIPELINE_STAGE_2_COPY_BIT,
+                        VK_ACCESS_2_TRANSFER_READ_BIT);
+                    // copy
+                    VkImageCopy region{};
+                    region.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+                    region.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+                    region.extent = {kVxgiResolution, kVxgiResolution, kVxgiResolution};
+                    vkCmdCopyImage(cmd,
+                        srcImg, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                        m_vxgi.image().image(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                        1, &region);
+                    // voxelGrid mip0 TRANSFER_DST → SR_O
+                    transImg(m_vxgi.image().image(),
+                        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                        VK_PIPELINE_STAGE_2_COPY_BIT,
+                        VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                        VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+                };
+
+                // Bounce 1: read voxelGrid → write scratch
+                transImg(m_vxgi.relightScratch().image(),
+                    VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
+                    VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
+                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                    VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
+                m_vxgiRelight.record(cmd, m_vxgiRelight.voxelSet(), kVxgiResolution,
+                    m_vxgi.mipLevels(), m_vxgiCellSize, m_vxgiGridMin,
+                    m_vxgiRelightStrength);
+
+                if (bounces >= 2) {
+                    // scratch GENERAL → SR_O, scratch2 UNDEFINED → GENERAL
+                    transImg(m_vxgi.relightScratch().image(),
+                        VK_IMAGE_LAYOUT_GENERAL,
+                        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                        VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+                        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                        VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+                    transImg(m_vxgi.relightScratch2().image(),
+                        VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
+                        VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
+                        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                        VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
+
+                    // Bounce 2: read scratch → write scratch2 (pp0)
+                    m_vxgiRelight.record(cmd, m_vxgiRelight.pingSet0(), kVxgiResolution,
+                        m_vxgi.mipLevels(), m_vxgiCellSize, m_vxgiGridMin,
+                        m_vxgiRelightStrength);
+
+                    if (bounces >= 3) {
+                        // scratch2 GENERAL → SR_O, scratch SR_O → GENERAL
+                        transImg(m_vxgi.relightScratch2().image(),
+                            VK_IMAGE_LAYOUT_GENERAL,
+                            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                            VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                            VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+                            VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                            VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+                        transImg(m_vxgi.relightScratch().image(),
+                            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                            VK_IMAGE_LAYOUT_GENERAL,
+                            VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                            VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
+                            VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                            VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
+
+                        // Bounce 3: read scratch2 → write scratch (pp1)
+                        m_vxgiRelight.record(cmd, m_vxgiRelight.pingSet1(), kVxgiResolution,
+                            m_vxgi.mipLevels(), m_vxgiCellSize, m_vxgiGridMin,
+                            m_vxgiRelightStrength);
+
+                        // Final result in scratch → copy to voxelGrid
+                        blitScratchToVoxel(m_vxgi.relightScratch().image());
+                    } else {
+                        // 2 bounces: final result in scratch2 → copy to voxelGrid
+                        blitScratchToVoxel(m_vxgi.relightScratch2().image());
+                    }
+                } else {
+                    // 1 bounce: final result in scratch → copy to voxelGrid
+                    blitScratchToVoxel(m_vxgi.relightScratch().image());
+                }
+            }
+
+            // L.3b 6-axis resolve: isotropic voxelGrid → 3-axis radiance
+            if (m_lumenEnabled && m_vxgiSixAxisInited) {
+                // Transition axis images UNDEFINED → GENERAL (first time)
+                // or SR_O → GENERAL (subsequent frames — same as relight scratch)
+                auto transAxisToGeneral = [&](VkImage img) {
+                    VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+                    b.srcStageMask = VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
+                    b.srcAccessMask = 0;
+                    b.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                    b.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+                    b.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+                    b.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+                    b.image = img;
+                    b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+                    VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+                    di.imageMemoryBarrierCount = 1; di.pImageMemoryBarriers = &b;
+                    vkCmdPipelineBarrier2(cmd, &di);
+                };
+                transAxisToGeneral(m_vxgi.sixAxisX().image());
+                transAxisToGeneral(m_vxgi.sixAxisY().image());
+                transAxisToGeneral(m_vxgi.sixAxisZ().image());
+
+                m_vxgiResolve6Axis.record(cmd, kVxgiResolution, m_vxgi.mipLevels(),
                     m_vxgiCellSize, m_vxgiGridMin, m_vxgiRelightStrength);
 
-                // 2. scratch GENERAL → TRANSFER_SRC
-                sb.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-                sb.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-                sb.dstStageMask = VK_PIPELINE_STAGE_2_COPY_BIT;
-                sb.dstAccessMask = VK_ACCESS_2_TRANSFER_READ_BIT;
-                sb.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
-                sb.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-                vkCmdPipelineBarrier2(cmd, &sdi);
-
-                // 3. voxelGrid mip 0 SHADER_READ_ONLY → TRANSFER_DST
-                VkImageMemoryBarrier2 vb{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
-                vb.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-                vb.srcAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
-                vb.dstStageMask = VK_PIPELINE_STAGE_2_COPY_BIT;
-                vb.dstAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
-                vb.oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-                vb.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-                vb.image = m_vxgi.image().image();
-                vb.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-                VkDependencyInfo vdiR{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-                vdiR.imageMemoryBarrierCount = 1; vdiR.pImageMemoryBarriers = &vb;
-                vkCmdPipelineBarrier2(cmd, &vdiR);
-
-                // 4. copy scratch → voxelGrid mip 0
-                VkImageCopy region{};
-                region.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-                region.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-                region.extent = {kVxgiResolution, kVxgiResolution, kVxgiResolution};
-                vkCmdCopyImage(cmd,
-                    m_vxgi.relightScratch().image(), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                    m_vxgi.image().image(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                    1, &region);
-
-                // 5. voxelGrid mip 0 TRANSFER_DST → SHADER_READ_ONLY
-                vb.srcStageMask = VK_PIPELINE_STAGE_2_COPY_BIT;
-                vb.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
-                vb.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-                vb.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
-                vb.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-                vb.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-                vkCmdPipelineBarrier2(cmd, &vdiR);
+                // Axis images GENERAL → SHADER_READ_ONLY for probe pass
+                auto transAxisToSRO = [&](VkImage img) {
+                    VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+                    b.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                    b.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+                    b.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                    b.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+                    b.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+                    b.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                    b.image = img;
+                    b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+                    VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+                    di.imageMemoryBarrierCount = 1; di.pImageMemoryBarriers = &b;
+                    vkCmdPipelineBarrier2(cmd, &di);
+                };
+                transAxisToSRO(m_vxgi.sixAxisX().image());
+                transAxisToSRO(m_vxgi.sixAxisY().image());
+                transAxisToSRO(m_vxgi.sixAxisZ().image());
             }
         } else {
             // VXGI/DDGI 都关：lighting 仍要求 voxelGrid binding 合法。
@@ -1950,7 +2062,8 @@ void App::run() {
             if (!m_lumenProbeInited) {
                 m_lumenProbePass.init(*m_device);
                 m_lumenProbePass.bindResources(*m_device, m_lumen, m_rtAS, m_sceneGpu,
-                                                m_vxgi, m_rt, m_gbuffer.frameUboHandle());
+                                                m_vxgi, m_rt, m_gbuffer.frameUboHandle(),
+                                                m_vxgiSixAxisInited);
                 m_lumenProbeInited = true;
             }
 
@@ -1977,7 +2090,8 @@ void App::run() {
             }
 
             // 1. Probe pass: TLAS RayQuery → voxelGrid → SH9 probe atlas
-            m_lumenProbePass.record(cmd, m_lumen, m_frameIndex);
+            m_lumenProbePass.record(cmd, m_lumen, m_frameIndex,
+                                     m_vxgiSixAxisInited);
 
             // Barrier: probeAtlas GENERAL → SHADER_READ_ONLY for filter pass
             {

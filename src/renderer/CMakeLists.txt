@@ -27,6 +27,8 @@ add_library(somegi_renderer STATIC
     vxgi_aniso_pass.cpp
     vxgi_relight_pass.h
     vxgi_relight_pass.cpp
+    vxgi_resolve_6axis_pass.h
+    vxgi_resolve_6axis_pass.cpp
     sdfgi_resources.h
     sdfgi_resources.cpp
     sdfgi_pass.h

@@ -31,11 +31,11 @@ public:
     void bindResources(Device& d, const LumenResources& res,
                        const SceneRtAS& rtAS, const SceneGpu& sceneGpu,
                        const VxgiResources& vxgi, const RenderTargets& rt,
-                       VkBuffer frameUbo);
+                       VkBuffer frameUbo, bool hasSixAxis);
 
     // 每帧录制两个 dispatch，中间加 pipeline barrier
     void record(VkCommandBuffer cmd, const LumenResources& res,
-                uint32_t frameIndex);
+                uint32_t frameIndex, bool useSixAxis);
 
 private:
     Device* m_device = nullptr;

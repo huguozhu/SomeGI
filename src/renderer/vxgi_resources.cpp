@@ -70,6 +70,36 @@ void VxgiResources::create(Device& d, uint32_t resolution) {
                 | VK_IMAGE_USAGE_SAMPLED_BIT
                 | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
     m_relightScratch = Image(d, sdesc);
+
+    // L.3a second scratch for multi-bounce ping-pong
+    ImageDesc sdesc2{};
+    sdesc2.format = VK_FORMAT_R16G16B16A16_SFLOAT;
+    sdesc2.extent = {resolution, resolution, resolution};
+    sdesc2.type = VK_IMAGE_TYPE_3D;
+    sdesc2.usage = VK_IMAGE_USAGE_STORAGE_BIT
+                 | VK_IMAGE_USAGE_SAMPLED_BIT
+                 | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+    m_relightScratch2 = Image(d, sdesc2);
+}
+
+void VxgiResources::createSixAxis(Device& d) {
+    if (m_hasSixAxis) return;
+    ImageDesc ax{};
+    ax.format = VK_FORMAT_R16G16B16A16_SFLOAT;
+    ax.extent = {m_resolution, m_resolution, m_resolution};
+    ax.type = VK_IMAGE_TYPE_3D;
+    ax.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+    m_sixAxisX = Image(d, ax);
+    m_sixAxisY = Image(d, ax);
+    m_sixAxisZ = Image(d, ax);
+    m_hasSixAxis = true;
+}
+
+void VxgiResources::destroySixAxis() {
+    m_sixAxisX.reset();
+    m_sixAxisY.reset();
+    m_sixAxisZ.reset();
+    m_hasSixAxis = false;
 }
 
 void VxgiResources::destroy() {
@@ -84,6 +114,8 @@ void VxgiResources::destroy() {
     m_anisoMipViews.clear();
     m_image.reset();
     m_aniso.reset();
+    m_relightScratch.reset();
+    m_relightScratch2.reset();
     m_resolution = 0;
     m_device = nullptr;
 }

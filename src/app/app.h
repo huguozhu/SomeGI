@@ -17,6 +17,7 @@
 #include "renderer/vxgi_mipmap_pass.h"
 #include "renderer/vxgi_aniso_pass.h"
 #include "renderer/vxgi_relight_pass.h"
+#include "renderer/vxgi_resolve_6axis_pass.h"
 #include "renderer/sdfgi_resources.h"
 #include "renderer/sdfgi_pass.h"
 #include "renderer/restir_resources.h"
@@ -111,7 +112,9 @@ private:
     VxgiMipmapPass m_vxgiMipmap;     // M7.2: 各级 mip 下采样
     VxgiAnisoPass m_vxgiAniso;       // B.6: 各向异性 alpha mipchain
     VxgiRelightPass m_vxgiRelight;   // C.2: multi-bounce voxel relight (Lumen-lite)
+    VxgiResolve6AxisPass m_vxgiResolve6Axis;  // L.3b 6-axis resolve
     bool m_vxgiRelightEnabled = false;
+    bool m_vxgiSixAxisInited  = false;
     float m_vxgiRelightStrength = 1.0f;
 
     // C.3 SDFGI-lite：JFA 构 UDF + sphere-trace。kGis[9] = SDFGI。

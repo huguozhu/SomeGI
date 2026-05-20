@@ -42,6 +42,18 @@ public:
     const Image& relightScratch() const { return m_relightScratch; }
     VkImageView relightScratchView() const { return m_relightScratch.view(); }
 
+    // L.3a multi-bounce ping-pong scratch
+    const Image& relightScratch2() const { return m_relightScratch2; }
+    VkImageView relightScratch2View() const { return m_relightScratch2.view(); }
+
+    // L.3b 6-axis directional radiance: 3× RGBA16F 3D, +X/+Y/+Z 主轴 radiance
+    const Image& sixAxisX() const { return m_sixAxisX; }
+    const Image& sixAxisY() const { return m_sixAxisY; }
+    const Image& sixAxisZ() const { return m_sixAxisZ; }
+    bool hasSixAxis() const { return m_hasSixAxis; }
+    void createSixAxis(Device& d);
+    void destroySixAxis();
+
 private:
     Device* m_device = nullptr;
     Image m_image;
@@ -49,6 +61,9 @@ private:
     Image m_aniso;
     std::vector<VkImageView> m_anisoMipViews;
     Image m_relightScratch;
+    Image m_relightScratch2;
+    Image m_sixAxisX, m_sixAxisY, m_sixAxisZ;
+    bool  m_hasSixAxis = false;
     uint32_t m_resolution = 0;
 };
 
