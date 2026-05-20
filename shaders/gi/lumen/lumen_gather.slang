@@ -24,7 +24,7 @@ struct GatherPC {
     float  probeTileSize;   // 4
     uint   probeGridW;      // 4
     uint   probeGridH;      // 4
-    uint   pad;             // 4  = 24 bytes total
+    uint   debugMode;       // 0=normal, 1=SH DC only, 2=probe UV color
 };
 [[vk::push_constant]] GatherPC gPC;
 
@@ -129,9 +129,21 @@ void cs_gather(uint3 dt : SV_DispatchThreadID) {
         for (int c = 0; c < 9; ++c) { shR[c] += r[c] * w11; shG[c] += g[c] * w11; shB[c] += b[c] * w11; }
     }
 
-    // Reconstruct irradiance + apply diffuse BRDF
-    float3 irradiance = shIrradiance(shR, shG, shB, N);
-    float3 diffuse = irradiance * albedo * (1.0 / 3.14159265);
-
-    gLumenGI[pix] = float4(diffuse, 1.0);
+    if (gPC.debugMode == 1) {
+        // SH DC only — 平均 radiance（应完全不闪）
+        float3 avgRad = float3(shR[0], shG[0], shB[0]) * kSH_Y00;
+        gLumenGI[pix] = float4(avgRad * albedo, 1.0);
+    } else if (gPC.debugMode == 2) {
+        // Probe grid color — 每个 probe 随机色，看 probe 边界
+        float3 probeColor = float3(
+            fract(float(bp0.x) * 0.123 + float(bp0.y) * 0.457),
+            fract(float(bp0.x) * 0.789 + float(bp0.y) * 0.321),
+            fract(float(bp0.x) * 0.456 + float(bp0.y) * 0.789));
+        gLumenGI[pix] = float4(probeColor, 1.0);
+    } else {
+        // Normal path
+        float3 irradiance = shIrradiance(shR, shG, shB, N);
+        float3 diffuse = irradiance * albedo * (1.0 / 3.14159265);
+        gLumenGI[pix] = float4(diffuse, 1.0);
+    }
 }

@@ -13,7 +13,7 @@ struct GatherPC {
     float    probeTileSize;
     uint32_t probeGridW;
     uint32_t probeGridH;
-    uint32_t pad;
+    uint32_t debugMode;
 };
 static_assert(sizeof(GatherPC) <= 128);
 }
@@ -148,7 +148,7 @@ void LumenGatherPass::bindResources(Device& d, const LumenResources& res,
 }
 
 void LumenGatherPass::record(VkCommandBuffer cmd, const LumenResources& res,
-                              const RenderTargets& rt) {
+                              const RenderTargets& rt, uint32_t debugMode) {
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipeline);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
         m_pipelineLayout, 0, 1, &m_set, 0, nullptr);
@@ -159,6 +159,7 @@ void LumenGatherPass::record(VkCommandBuffer cmd, const LumenResources& res,
     pc.probeTileSize  = (float)LumenResources::kProbeTileSize;
     pc.probeGridW     = res.probeGridW();
     pc.probeGridH     = res.probeGridH();
+    pc.debugMode      = debugMode;
     vkCmdPushConstants(cmd, m_pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT,
                        0, sizeof(pc), &pc);
 

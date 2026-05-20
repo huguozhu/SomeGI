@@ -133,9 +133,12 @@ void cs_generateRays(uint3 dt : SV_DispatchThreadID) {
     float3 probeN = normalize(nr.xyz);
     float3 probePos = worldFromDepth(probePix, depth);
 
-    // Cosine-hemisphere direction from Fibonacci + per-frame rotation
+    // Uniform hemisphere direction via Fibonacci + per-frame rotation.
+    // Reflect full-sphere dirs to upper hemisphere so every ray is valid.
     float3 dirZ = sphericalFibonacci(rayInProbe, gPC.raysPerProbe);
     dirZ = rotateY(dirZ, gPC.randomSeed);
+    dirZ.z = abs(dirZ.z);   // only upper hemisphere
+    dirZ = normalize(dirZ);
 
     // Tangent frame around probe normal
     float3 up = abs(probeN.y) < 0.999 ? float3(0, 1, 0) : float3(1, 0, 0);
@@ -143,31 +146,36 @@ void cs_generateRays(uint3 dt : SV_DispatchThreadID) {
     float3 B = cross(probeN, T);
     float3 rayDir = T * dirZ.x + B * dirZ.y + probeN * dirZ.z;
 
-    // TLAS ray query
-    RayDesc ray;
-    ray.Origin = probePos + probeN * 0.05;
-    ray.Direction = rayDir;
-    ray.TMin = 0.01;
-    ray.TMax = 200.0;
-
-    RayQuery<RAY_FLAG_CULL_NON_OPAQUE | RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES> q;
-    q.TraceRayInline(gTLAS, RAY_FLAG_NONE, 0xFF, ray);
-    q.Proceed();
-
     float3 hitRgb = float3(0);
     float  hitDist = 1e6;
 
-    if (q.CommittedStatus() == COMMITTED_TRIANGLE_HIT) {
-        float  hitT  = q.CommittedRayT();
-        float3 hitPos = ray.Origin + rayDir * hitT;
+    if (gPC.useSixAxis >= 2) {
+        // Debug bypass: skip TLAS, mark all rays as hit with const radiance
+        hitRgb = float3(1.0, 1.0, 1.0);
+        hitDist = 0.5;
+    } else {
+        // TLAS ray query
+        RayDesc ray;
+        ray.Origin = probePos + probeN * 0.05;
+        ray.Direction = rayDir;
+        ray.TMin = 0.01;
+        ray.TMax = 200.0;
 
-        // Sample voxel grid radiance at hit point
-        float3 gridMin = gFrame.vxgiGridMinCell.xyz;
-        float  cellSize = gFrame.vxgiGridMinCell.w;
-        uint   gridRes = uint(gFrame.vxgiCounts.x);
-        float3 voxelUv = (hitPos - gridMin) / (cellSize * float(gridRes));
+        RayQuery<RAY_FLAG_CULL_NON_OPAQUE | RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES> q;
+        q.TraceRayInline(gTLAS, RAY_FLAG_NONE, 0xFF, ray);
+        q.Proceed();
 
-        if (gPC.useSixAxis != 0) {
+        if (q.CommittedStatus() == COMMITTED_TRIANGLE_HIT) {
+            float  hitT  = q.CommittedRayT();
+            float3 hitPos = ray.Origin + rayDir * hitT;
+
+            // Sample voxel grid radiance at hit point
+            float3 gridMin = gFrame.vxgiGridMinCell.xyz;
+            float  cellSize = gFrame.vxgiGridMinCell.w;
+            uint   gridRes = uint(gFrame.vxgiCounts.x);
+            float3 voxelUv = (hitPos - gridMin) / (cellSize * float(gridRes));
+
+            if (gPC.useSixAxis != 0) {
             // 6-axis directional sampling: blend +X/+Y/+Z axis by ray alignment
             float3 ad = abs(rayDir);
             float4 ax = gSixAxisX.SampleLevel(gLinearClamp, voxelUv, 2.0);
@@ -183,7 +191,8 @@ void cs_generateRays(uint3 dt : SV_DispatchThreadID) {
         } else {
             hitRgb = gVoxelGrid.SampleLevel(gLinearClamp, voxelUv, 2.0).rgb;
         }
-        hitDist = hitT;
+            hitDist = hitT;
+        }
     }
 
     gRayBuf[rayIdx * 2 + 0] = float4(rayDir, 0);
@@ -214,7 +223,7 @@ void cs_projectSH(uint3 dt : SV_DispatchThreadID) {
     float shR[9] = {0,0,0,0,0,0,0,0,0};
     float shG[9] = {0,0,0,0,0,0,0,0,0};
     float shB[9] = {0,0,0,0,0,0,0,0,0};
-    float weightSum = 0.0;
+    uint hitCount = 0;
     uint baseSlot = probeIdx * gPC.raysPerProbe;
 
     for (uint r = 0; r < gPC.raysPerProbe; ++r) {
@@ -227,42 +236,37 @@ void cs_projectSH(uint3 dt : SV_DispatchThreadID) {
 
         if (dist >= 1e5) continue;  // miss
 
-        float cosW = max(0.0, dot(dir, probeN));
-        if (cosW <= 0) continue;
-
+        hitCount++;
         float shBasis[9];
         evalSH9(dir, shBasis);
 
+        // MC estimate of SH radiance: L_lm = (2π/N_hit)·Σ L·Y_lm
+        // Normalize by HIT count (not total rays) so result is independent
+        // of the hit ratio, which varies per-frame for edge probes.
         for (int c = 0; c < 9; ++c) {
-            float w = shBasis[c] * cosW;
-            shR[c] += rad.r * w;
-            shG[c] += rad.g * w;
-            shB[c] += rad.b * w;
+            shR[c] += rad.r * shBasis[c];
+            shG[c] += rad.g * shBasis[c];
+            shB[c] += rad.b * shBasis[c];
         }
-        weightSum += cosW;
     }
 
-    // Normalize: MC estimate of SH projection
-    //   L_lm = (1/N) * Σ [L(ω) * y_lm(ω) * (N·ω) / pdf]
-    // With cosine-hemisphere pdf = (N·ω)/π
-    //   L_lm = (π/N) * Σ L(ω) * y_lm(ω)
-    //
-    // But we're summing cosW directly (not per-ray pdf), so:
-    //   L_lm = (π / weightSum) * Σ [rad * sh_basis * cosW]
-    // Actually weightSum = Σ cosW, not Σ 1/pdf.
-    //
-    // For uniform hemisphere, E[cosW] = 0.5, so factor = 2π/N_eff
-    // For cosine-hemisphere: pdf = cosW/π, so L_lm = π/N * Σ rad * sh_basis
-    //
-    // Since rays are cosine-hemisphere distributed:
-    float invN = 3.14159265 / float(gPC.raysPerProbe);
+    // L_lm = (2π / N_hit) * accumulated sum
+    float mcNorm = (hitCount > 0) ? (6.2831853 / float(hitCount)) : 0.0;
 
     // Write SH coefs to probe atlas: (atlasX + coeffIdx, atlasY)
     uint baseX = px * 9;
     uint baseY = py;
 
-    for (int c = 0; c < 9; ++c) {
-        float3 coeff = float3(shR[c], shG[c], shB[c]) * invN;
-        gProbeAtlas[uint2(baseX + c, baseY)] = float4(coeff, 1.0);
+    if (gPC.useSixAxis == 3) {
+        // Bypass test: fixed SH = DC only, all probes identical
+        for (int c = 0; c < 9; ++c) {
+            float val = (c == 0) ? (2.0 * 3.14159265 * 0.282094792) : 0.0; // 2π*Y00 ≈ 1.77
+            gProbeAtlas[uint2(baseX + c, baseY)] = float4(val, val, val, 1.0);
+        }
+    } else {
+        for (int c = 0; c < 9; ++c) {
+            float3 coeff = float3(shR[c], shG[c], shB[c]) * mcNorm;
+            gProbeAtlas[uint2(baseX + c, baseY)] = float4(coeff, 1.0);
+        }
     }
 }

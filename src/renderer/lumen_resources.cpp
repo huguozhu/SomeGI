@@ -14,7 +14,7 @@ void LumenResources::create(Device& d, VkExtent2D screenExt) {
     desc.extent = {atlasWidth(), atlasHeight(), 1};
     desc.type = VK_IMAGE_TYPE_2D;
     desc.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT
-               | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+               | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
 
     m_probeAtlas    = Image(d, desc);
     m_filteredAtlas = Image(d, desc);

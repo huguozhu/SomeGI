@@ -223,6 +223,7 @@ private:
     bool            m_lumenFilterInited  = false;
     bool            m_lumenGatherInited  = false;
     bool            m_lumenOutInited     = false;
+    int             m_lumenDebugMode     = 0;   // 0=normal, 1=DC only, 2=probe color, 3=const radiance, 4=fixed SH, 5=clear only
 
     // B.4 SSGI 时序累积：保存上一帧 viewProj 用于 reproject。
     glm::mat4 m_prevViewProj{1.0f};

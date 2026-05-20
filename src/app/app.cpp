@@ -273,8 +273,8 @@ App::App() {
         std::printf("[init] lumen resources...\n");
         m_lumen.create(*m_device, m_swap->extent());
         // L.3b 6-axis voxel storage (only for Lumen mode)
-        m_vxgi.createSixAxis(*m_device);
-        m_vxgiSixAxisInited = true;
+        //m_vxgi.createSixAxis(*m_device);   // DIAG: disable 6-axis
+        //m_vxgiSixAxisInited = true;
     }
     m_restirPass.bindResources(*m_device, m_restir, m_vxgi, m_rt, m_gbuffer.frameUboHandle());
 
@@ -1103,6 +1103,10 @@ void App::buildUI() {
                                1.0f, 128.0f, "%.1f");
             ImGui::SliderFloat("Filter sigmaDist", &m_lumenFilterPass.sigmaDist,
                                1.0f, 500.0f, "%.1f");
+            ImGui::SliderFloat("Temporal alpha", &m_lumenFilterPass.temporalAlpha,
+                               0.0f, 0.98f, "%.2f");
+            ImGui::Combo("Debug mode", &m_lumenDebugMode,
+                         "Normal\0SH DC only\0Probe colors\0Const radiance\0Fixed SH\0Clear only\0");
         }
         ImGui::Separator();
         ImGui::Text("RSM");
@@ -1744,15 +1748,22 @@ void App::run() {
 
             // L.3b 6-axis resolve: isotropic voxelGrid → 3-axis radiance
             if (m_lumenEnabled && m_vxgiSixAxisInited) {
-                // Transition axis images UNDEFINED → GENERAL (first time)
-                // or SR_O → GENERAL (subsequent frames — same as relight scratch)
+                // Transition axis images to GENERAL for writing.
+                // First frame: UNDEFINED → GENERAL; later: SR_O → GENERAL
+                VkImageLayout axisOldL = m_lumenAtlasInited
+                    ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+                    : VK_IMAGE_LAYOUT_UNDEFINED;
+                VkPipelineStageFlags2 axisSrcS = m_lumenAtlasInited
+                    ? VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT
+                    : VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
+                VkAccessFlags2 axisSrcA = m_lumenAtlasInited
+                    ? VK_ACCESS_2_SHADER_SAMPLED_READ_BIT : 0u;
                 auto transAxisToGeneral = [&](VkImage img) {
                     VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
-                    b.srcStageMask = VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
-                    b.srcAccessMask = 0;
+                    b.srcStageMask = axisSrcS; b.srcAccessMask = axisSrcA;
                     b.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
                     b.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-                    b.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+                    b.oldLayout = axisOldL;
                     b.newLayout = VK_IMAGE_LAYOUT_GENERAL;
                     b.image = img;
                     b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
@@ -2057,7 +2068,34 @@ void App::run() {
         ++m_frameIndex;
 
         // === Phase 1.845: Lumen-lite screen probe + gather (compute) ======
-        if (m_lumenEnabled) {
+        // Debug mode 5: bypass all Lumen passes, just clear lumenGI to grey
+        if (m_lumenEnabled && m_lumenDebugMode == 5) {
+            VkImageLayout oldL = m_lumenOutInited
+                ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+                : VK_IMAGE_LAYOUT_UNDEFINED;
+            VkPipelineStageFlags2 srcS = m_lumenOutInited
+                ? VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT
+                : VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
+            VkAccessFlags2 srcA = m_lumenOutInited
+                ? VK_ACCESS_2_SHADER_SAMPLED_READ_BIT : 0u;
+            transitionImage(cmd, m_rt.lumenGI.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                oldL, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                srcS, srcA,
+                VK_PIPELINE_STAGE_2_CLEAR_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
+            VkClearColorValue grey{};
+            grey.float32[0] = 0.3f; grey.float32[1] = 0.3f;
+            grey.float32[2] = 0.3f; grey.float32[3] = 1.0f;
+            VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+            vkCmdClearColorImage(cmd, m_rt.lumenGI.image(),
+                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &grey, 1, &range);
+            transitionImage(cmd, m_rt.lumenGI.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                VK_PIPELINE_STAGE_2_CLEAR_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+            m_lumenOutInited = true;
+        } else if (m_lumenEnabled) {
             // -- Probe pass bootstrap --
             if (!m_lumenProbeInited) {
                 m_lumenProbePass.init(*m_device);
@@ -2067,15 +2105,24 @@ void App::run() {
                 m_lumenProbeInited = true;
             }
 
-            // Transition probe atlas to GENERAL on first frame
-            if (!m_lumenAtlasInited) {
-                auto bootstrapToGeneral = [&](VkImage img) {
+            // Transition probe + filtered atlas to GENERAL each frame before
+            // probe/filter writes (src layout: SR_O from previous frame's barriers,
+            // or UNDEFINED on first frame).
+            {
+                VkImageLayout oldL = m_lumenAtlasInited
+                    ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+                    : VK_IMAGE_LAYOUT_UNDEFINED;
+                VkPipelineStageFlags2 srcS = m_lumenAtlasInited
+                    ? VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT
+                    : VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
+                VkAccessFlags2 srcA = m_lumenAtlasInited
+                    ? VK_ACCESS_2_SHADER_SAMPLED_READ_BIT : 0u;
+                auto transToGeneral = [&](VkImage img) {
                     VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
-                    b.srcStageMask = VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
-                    b.srcAccessMask = 0;
+                    b.srcStageMask = srcS; b.srcAccessMask = srcA;
                     b.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
                     b.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-                    b.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+                    b.oldLayout = oldL;
                     b.newLayout = VK_IMAGE_LAYOUT_GENERAL;
                     b.image = img;
                     b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
@@ -2083,15 +2130,14 @@ void App::run() {
                     di.imageMemoryBarrierCount = 1; di.pImageMemoryBarriers = &b;
                     vkCmdPipelineBarrier2(cmd, &di);
                 };
-                bootstrapToGeneral(m_lumen.probeAtlas().image());
-                bootstrapToGeneral(m_lumen.filteredAtlas().image());
-                bootstrapToGeneral(m_lumen.prevAtlas().image());
+                transToGeneral(m_lumen.probeAtlas().image());
+                transToGeneral(m_lumen.filteredAtlas().image());
                 m_lumenAtlasInited = true;
             }
 
             // 1. Probe pass: TLAS RayQuery → voxelGrid → SH9 probe atlas
             m_lumenProbePass.record(cmd, m_lumen, m_frameIndex,
-                                     m_vxgiSixAxisInited);
+                                     m_lumenDebugMode >= 3 ? (uint32_t)m_lumenDebugMode - 1u : (m_vxgiSixAxisInited ? 1u : 0u));
 
             // Barrier: probeAtlas GENERAL → SHADER_READ_ONLY for filter pass
             {
@@ -2109,8 +2155,22 @@ void App::run() {
                 vkCmdPipelineBarrier2(cmd, &di);
             }
 
-            // 2a. L.4 Filter pass: 3×3 bilateral on SH9 → filteredAtlas
+            // 2a. L.4 Filter pass: spatial + temporal → filteredAtlas
+            // First frame: transition prevAtlas UNDEFINED → SR_O for filter read
             if (!m_lumenFilterInited) {
+                VkImageMemoryBarrier2 pb{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+                pb.srcStageMask = VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
+                pb.srcAccessMask = 0;
+                pb.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                pb.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+                pb.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+                pb.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                pb.image = m_lumen.prevAtlas().image();
+                pb.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+                VkDependencyInfo pdi{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+                pdi.imageMemoryBarrierCount = 1; pdi.pImageMemoryBarriers = &pb;
+                vkCmdPipelineBarrier2(cmd, &pdi);
+
                 m_lumenFilterPass.init(*m_device);
                 m_lumenFilterPass.bindResources(*m_device, m_lumen, m_rt,
                                                  m_gbuffer.frameUboHandle());
@@ -2118,20 +2178,52 @@ void App::run() {
             }
             m_lumenFilterPass.record(cmd, m_lumen, m_rt);
 
-            // Barrier: filteredAtlas GENERAL → SHADER_READ_ONLY for gather
+            // After filter: copy filteredAtlas → prevAtlas for next frame
             {
-                VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
-                b.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-                b.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-                b.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-                b.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
-                b.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
-                b.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-                b.image = m_lumen.filteredAtlas().image();
-                b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-                VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-                di.imageMemoryBarrierCount = 1; di.pImageMemoryBarriers = &b;
-                vkCmdPipelineBarrier2(cmd, &di);
+                auto imgBarrier = [&](VkImage img, VkImageLayout oldL, VkImageLayout newL,
+                                      VkPipelineStageFlags2 srcS, VkAccessFlags2 srcA,
+                                      VkPipelineStageFlags2 dstS, VkAccessFlags2 dstA) {
+                    VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+                    b.srcStageMask = srcS; b.srcAccessMask = srcA;
+                    b.dstStageMask = dstS; b.dstAccessMask = dstA;
+                    b.oldLayout = oldL; b.newLayout = newL;
+                    b.image = img;
+                    b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+                    VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+                    di.imageMemoryBarrierCount = 1; di.pImageMemoryBarriers = &b;
+                    vkCmdPipelineBarrier2(cmd, &di);
+                };
+
+                // filteredAtlas: GENERAL → TRANSFER_SRC
+                imgBarrier(m_lumen.filteredAtlas().image(),
+                    VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+                    VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
+                // prevAtlas: SR_O → TRANSFER_DST
+                imgBarrier(m_lumen.prevAtlas().image(),
+                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
+                    VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
+
+                VkImageCopy region{};
+                region.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+                region.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+                region.extent = {m_lumen.atlasWidth(), m_lumen.atlasHeight(), 1};
+                vkCmdCopyImage(cmd,
+                    m_lumen.filteredAtlas().image(), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                    m_lumen.prevAtlas().image(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                    1, &region);
+
+                // filteredAtlas: TRANSFER_SRC → SR_O (for gather)
+                imgBarrier(m_lumen.filteredAtlas().image(),
+                    VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                    VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_READ_BIT,
+                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+                // prevAtlas: TRANSFER_DST → SR_O (for next frame)
+                imgBarrier(m_lumen.prevAtlas().image(),
+                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                    VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
             }
 
             // 2b. Gather pass: filteredAtlas → SH9 irradiance → lumenGI
@@ -2163,7 +2255,8 @@ void App::run() {
                 di.imageMemoryBarrierCount = 1; di.pImageMemoryBarriers = &b;
                 vkCmdPipelineBarrier2(cmd, &di);
             }
-            m_lumenGatherPass.record(cmd, m_lumen, m_rt);
+            m_lumenGatherPass.record(cmd, m_lumen, m_rt,
+                                     (uint32_t)m_lumenDebugMode);
 
             // Transition lumenGI GENERAL → SHADER_READ_ONLY for lighting
             {
@@ -2181,26 +2274,9 @@ void App::run() {
                 vkCmdPipelineBarrier2(cmd, &di);
             }
             m_lumenOutInited = true;
-        } else if (m_lumenAtlasInited) {
-            // Lumen off：atlas back to SHADER_READ_ONLY
-            auto toSRO = [&](VkImage img) {
-                VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
-                b.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-                b.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-                b.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-                b.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
-                b.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
-                b.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-                b.image = img;
-                b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-                VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-                di.imageMemoryBarrierCount = 1; di.pImageMemoryBarriers = &b;
-                vkCmdPipelineBarrier2(cmd, &di);
-            };
-            toSRO(m_lumen.probeAtlas().image());
-            toSRO(m_lumen.filteredAtlas().image());
-            toSRO(m_lumen.prevAtlas().image());
         }
+        // When Lumen off: atlas images already end each frame in SR_O from
+        // the filter/gather barriers; no explicit transition needed here.
         // When Lumen off, ensure lumenGI is in SHADER_READ_ONLY for lighting.
         // First frame: UNDEFINED → TRANSFER_DST, later: SHADER_READ_ONLY → TRANSFER_DST.
         if (!m_lumenEnabled) {

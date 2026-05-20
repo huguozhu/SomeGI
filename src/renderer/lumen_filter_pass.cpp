@@ -16,7 +16,7 @@ struct FilterPC {
     float    sigmaDepth;
     float    normalPower;
     float    sigmaDist;
-    uint32_t pad;
+    float    temporalAlpha;
 };
 static_assert(sizeof(FilterPC) <= 128);
 }
@@ -24,21 +24,32 @@ static_assert(sizeof(FilterPC) <= 128);
 void LumenFilterPass::init(Device& d) {
     m_device = &d;
 
-    std::array<VkDescriptorSetLayoutBinding, 5> b{};
+    VkSamplerCreateInfo si{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
+    si.magFilter = VK_FILTER_NEAREST; si.minFilter = VK_FILTER_NEAREST;
+    si.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    si.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    VK_CHECK(vkCreateSampler(d.device(), &si, nullptr, &m_pointClamp));
+
+    // 0:FrameUBO 1:NormalRough 2:Depth 3:ProbeAtlas(in)
+    // 4:FilteredAtlas(out) 5:PrevAtlas(in) 6:Sampler
+    std::array<VkDescriptorSetLayoutBinding, 7> b{};
     b[0] = {0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
     b[1] = {1, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,  1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
     b[2] = {2, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,  1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
     b[3] = {3, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,  1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
     b[4] = {4, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,  1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
+    b[5] = {5, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,  1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
+    b[6] = {6, VK_DESCRIPTOR_TYPE_SAMPLER,        1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
 
     VkDescriptorSetLayoutCreateInfo li{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
     li.bindingCount = (uint32_t)b.size(); li.pBindings = b.data();
     VK_CHECK(vkCreateDescriptorSetLayout(d.device(), &li, nullptr, &m_setLayout));
 
-    std::array<VkDescriptorPoolSize, 3> ps{{
+    std::array<VkDescriptorPoolSize, 4> ps{{
         {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1},
-        {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,  3},
+        {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,  4},
         {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,  1},
+        {VK_DESCRIPTOR_TYPE_SAMPLER,        1},
     }};
     VkDescriptorPoolCreateInfo pci{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
     pci.maxSets = 1; pci.poolSizeCount = (uint32_t)ps.size(); pci.pPoolSizes = ps.data();
@@ -72,6 +83,7 @@ void LumenFilterPass::destroy() {
     if (m_pipelineLayout) vkDestroyPipelineLayout(dev, m_pipelineLayout, nullptr);
     if (m_pool)           vkDestroyDescriptorPool(dev, m_pool, nullptr);
     if (m_setLayout)      vkDestroyDescriptorSetLayout(dev, m_setLayout, nullptr);
+    if (m_pointClamp)     vkDestroySampler(dev, m_pointClamp, nullptr);
     *this = {};
 }
 
@@ -95,7 +107,13 @@ void LumenFilterPass::bindResources(Device& d, const LumenResources& res,
     outAtlas.imageView = res.filteredAtlas().view();
     outAtlas.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
 
-    std::array<VkWriteDescriptorSet, 5> w{};
+    VkDescriptorImageInfo prev{};
+    prev.imageView = res.prevAtlas().view();
+    prev.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+    VkDescriptorImageInfo smp{}; smp.sampler = m_pointClamp;
+
+    std::array<VkWriteDescriptorSet, 7> w{};
     w[0] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
     w[0].dstSet = m_set; w[0].dstBinding = 0; w[0].descriptorCount = 1;
     w[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER; w[0].pBufferInfo = &ub;
@@ -111,6 +129,12 @@ void LumenFilterPass::bindResources(Device& d, const LumenResources& res,
     w[4] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
     w[4].dstSet = m_set; w[4].dstBinding = 4; w[4].descriptorCount = 1;
     w[4].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE; w[4].pImageInfo = &outAtlas;
+    w[5] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+    w[5].dstSet = m_set; w[5].dstBinding = 5; w[5].descriptorCount = 1;
+    w[5].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE; w[5].pImageInfo = &prev;
+    w[6] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+    w[6].dstSet = m_set; w[6].dstBinding = 6; w[6].descriptorCount = 1;
+    w[6].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER; w[6].pImageInfo = &smp;
 
     vkUpdateDescriptorSets(d.device(), (uint32_t)w.size(), w.data(), 0, nullptr);
 }
@@ -130,6 +154,7 @@ void LumenFilterPass::record(VkCommandBuffer cmd, const LumenResources& res,
     pc.sigmaDepth     = sigmaDepth;
     pc.normalPower    = normalPower;
     pc.sigmaDist      = sigmaDist;
+    pc.temporalAlpha  = temporalAlpha;
     vkCmdPushConstants(cmd, m_pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT,
                        0, sizeof(pc), &pc);
 

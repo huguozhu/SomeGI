@@ -25,7 +25,7 @@ public:
 
     // 每帧 dispatch
     void record(VkCommandBuffer cmd, const LumenResources& res,
-                const RenderTargets& rt);
+                const RenderTargets& rt, uint32_t debugMode = 0);
 
 private:
     Device* m_device = nullptr;

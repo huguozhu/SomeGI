@@ -162,13 +162,12 @@ void cs_main(uint3 dt : SV_DispatchThreadID) {
             float3 iblSpec = evalIBLSpecular(N, V, albedo, metallic, roughness,
                                               (float)gFrame.counts.y);
             float3 specular = iblSpec;
-            // SSR 仍在 Lumen 之上运行（屏幕空间反射作为 specular 补充）
             if (ssrF.a > 0.0) {
                 float3 ssrSpec = applyIBLSpecularBRDF(ssrF.rgb, N, V, albedo, metallic, roughness);
                 specular = lerp(specular, ssrSpec, ssrF.a);
             }
             indirect = diffuse + specular;
-            indirect *= ao;
+            indirect *= aoMat;
             gOutHdr[pix] = float4(sun + indirect + emissive, 1);
             return;
         }

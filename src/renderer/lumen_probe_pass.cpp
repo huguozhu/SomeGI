@@ -208,7 +208,7 @@ void LumenProbePass::record(VkCommandBuffer cmd, const LumenResources& res,
     upc.probeTileSize  = LumenResources::kProbeTileSize;
     upc.raysPerProbe   = LumenResources::kRaysPerProbe;
     upc.totalProbes    = pc;
-    upc.randomSeed     = (float)(frameIndex % 359) * 0.0174533f;
+    upc.randomSeed     = 0.0f;   // fixed directions, no per-frame rotation
     upc.useSixAxis     = useSixAxis ? 1u : 0u;
     vkCmdPushConstants(cmd, m_pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT,
                        0, sizeof(upc), &upc);

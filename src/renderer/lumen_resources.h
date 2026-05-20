@@ -21,7 +21,7 @@ class Device;
 class LumenResources {
 public:
     static constexpr uint32_t kProbeTileSize  = 16;
-    static constexpr uint32_t kRaysPerProbe   = 32;
+    static constexpr uint32_t kRaysPerProbe   = 48;
     static constexpr uint32_t kSHCoeffs       = 9;   // SH9 = 3 bands
 
     void create(Device& d, VkExtent2D screenExt);
