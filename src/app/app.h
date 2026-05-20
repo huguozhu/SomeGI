@@ -39,6 +39,7 @@
 #include "renderer/lumen_resources.h"
 #include "renderer/lumen_probe_pass.h"
 #include "renderer/lumen_gather_pass.h"
+#include "renderer/lumen_filter_pass.h"
 #include <map>
 #include <memory>
 #include <filesystem>
@@ -211,12 +212,14 @@ private:
     // L.2 Lumen-lite：屏幕 probe atlas + ray buffer + probe pass
     LumenResources  m_lumen;
     LumenProbePass  m_lumenProbePass;
+    LumenFilterPass m_lumenFilterPass;
     LumenGatherPass m_lumenGatherPass;
     bool            m_lumenEnabled       = false;
-    bool            m_lumenAtlasInited   = false;  // probeAtlas 首次 transition
-    bool            m_lumenProbeInited   = false;  // probe pass init 完成
-    bool            m_lumenGatherInited  = false;  // gather pass init 完成
-    bool            m_lumenOutInited     = false;  // lumenGI 首次 transition
+    bool            m_lumenAtlasInited   = false;
+    bool            m_lumenProbeInited   = false;
+    bool            m_lumenFilterInited  = false;
+    bool            m_lumenGatherInited  = false;
+    bool            m_lumenOutInited     = false;
 
     // B.4 SSGI 时序累积：保存上一帧 viewProj 用于 reproject。
     glm::mat4 m_prevViewProj{1.0f};

@@ -615,6 +615,7 @@ App::~App() {
     m_sdfgiPass.destroy();
     m_sdfgi.destroy();
     m_lumenProbePass.destroy();
+    m_lumenFilterPass.destroy();
     m_lumenGatherPass.destroy();
     m_lumen.destroy();
     m_restirPass.destroy();
@@ -728,9 +729,13 @@ void App::onSwapchainResized() {
             m_lumenProbePass.bindResources(*m_device, m_lumen, m_rtAS, m_sceneGpu,
                                             m_vxgi, m_rt, m_gbuffer.frameUboHandle());
         }
+        if (m_lumenFilterInited) {
+            m_lumenFilterPass.bindResources(*m_device, m_lumen, m_rt,
+                                             m_gbuffer.frameUboHandle());
+        }
         if (m_lumenGatherInited) {
             m_lumenGatherPass.bindResources(*m_device, m_lumen, m_rt,
-                                             m_gbuffer.frameUboHandle());
+                                             m_gbuffer.frameUboHandle(), true);
         }
     }
     m_tonemap.bindTargets(*m_device, m_rt);
@@ -1072,6 +1077,22 @@ void App::buildUI() {
         ImGui::DragFloat("ReSTIR spatial radius (px)", &m_restirPass.spatialRadius, 1.0f, 4.0f, 96.0f);
         ImGui::SliderInt("ReSTIR shadow steps", &m_restirPass.shadowSteps, 0, 16);
         ImGui::DragFloat("ReSTIR intensity scale", &m_restirPass.intensityScale, 0.05f, 0.0f, 8.0f);
+        ImGui::Separator();
+        ImGui::Text("Lumen-lite (L.2+L.5 Screen Probes)");
+        ImGui::Text("Lumen %s（GI 下拉切到 'Lumen-lite'）",
+                    m_lumenEnabled ? "active" : "off");
+        if (m_lumenEnabled) {
+            ImGui::Text("Probe grid: %d x %d (%d probes, %d rays each)",
+                        m_lumen.probeGridW(), m_lumen.probeGridH(),
+                        m_lumen.probeCount(), (int)LumenResources::kRaysPerProbe);
+            // L.4 filter params
+            ImGui::SliderFloat("Filter sigmaDepth", &m_lumenFilterPass.sigmaDepth,
+                               0.01f, 1.0f, "%.3f");
+            ImGui::SliderFloat("Filter normalPower", &m_lumenFilterPass.normalPower,
+                               1.0f, 128.0f, "%.1f");
+            ImGui::SliderFloat("Filter sigmaDist", &m_lumenFilterPass.sigmaDist,
+                               1.0f, 500.0f, "%.1f");
+        }
         ImGui::Separator();
         ImGui::Text("RSM");
         ImGui::Checkbox("RSM enabled",     &m_rsmSample.enabled);
@@ -1958,7 +1979,7 @@ void App::run() {
             // 1. Probe pass: TLAS RayQuery → voxelGrid → SH9 probe atlas
             m_lumenProbePass.record(cmd, m_lumen, m_frameIndex);
 
-            // Barrier: probeAtlas GENERAL → SHADER_READ_ONLY for gather pass
+            // Barrier: probeAtlas GENERAL → SHADER_READ_ONLY for filter pass
             {
                 VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
                 b.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
@@ -1974,15 +1995,38 @@ void App::run() {
                 vkCmdPipelineBarrier2(cmd, &di);
             }
 
-            // -- Gather pass bootstrap --
+            // 2a. L.4 Filter pass: 3×3 bilateral on SH9 → filteredAtlas
+            if (!m_lumenFilterInited) {
+                m_lumenFilterPass.init(*m_device);
+                m_lumenFilterPass.bindResources(*m_device, m_lumen, m_rt,
+                                                 m_gbuffer.frameUboHandle());
+                m_lumenFilterInited = true;
+            }
+            m_lumenFilterPass.record(cmd, m_lumen, m_rt);
+
+            // Barrier: filteredAtlas GENERAL → SHADER_READ_ONLY for gather
+            {
+                VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+                b.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                b.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+                b.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                b.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+                b.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+                b.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                b.image = m_lumen.filteredAtlas().image();
+                b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+                VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+                di.imageMemoryBarrierCount = 1; di.pImageMemoryBarriers = &b;
+                vkCmdPipelineBarrier2(cmd, &di);
+            }
+
+            // 2b. Gather pass: filteredAtlas → SH9 irradiance → lumenGI
             if (!m_lumenGatherInited) {
                 m_lumenGatherPass.init(*m_device);
                 m_lumenGatherPass.bindResources(*m_device, m_lumen, m_rt,
-                                                 m_gbuffer.frameUboHandle());
+                                                 m_gbuffer.frameUboHandle(), true);
                 m_lumenGatherInited = true;
             }
-
-            // 2. Gather pass: probe atlas → SH9 irradiance → lumenGI
             // Transition lumenGI to GENERAL
             {
                 VkImageLayout oldL = m_lumenOutInited
