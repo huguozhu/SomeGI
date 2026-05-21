@@ -12,11 +12,14 @@ void ImGuiPass::init(Device& d, GLFWwindow* window, VkFormat swapchainFormat, ui
 
     VkDescriptorPoolSize ps[] = {
         {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1024},
+        {VK_DESCRIPTOR_TYPE_SAMPLER,                1024},
+        {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,          1024},
+        {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,          1024},
     };
     VkDescriptorPoolCreateInfo pci{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
     pci.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
     pci.maxSets = 1024;
-    pci.poolSizeCount = 1; pci.pPoolSizes = ps;
+    pci.poolSizeCount = (uint32_t)(sizeof(ps) / sizeof(ps[0])); pci.pPoolSizes = ps;
     VK_CHECK(vkCreateDescriptorPool(d.device(), &pci, nullptr, &m_pool));
 
     IMGUI_CHECKVERSION();

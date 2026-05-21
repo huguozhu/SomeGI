@@ -110,6 +110,7 @@ PersistedAll loadAllSceneStates() {
         else if (key == "amb.x")           st.ambient.x = v;
         else if (key == "amb.y")           st.ambient.y = v;
         else if (key == "amb.z")           st.ambient.z = v;
+        else if (key == "taa.blend")       st.taaBlendAlpha = v;
     }
     return out;
 }
@@ -136,6 +137,7 @@ void saveAllSceneStates(const std::map<std::string, SceneState>& states,
         f << "amb.x "         << s.ambient.x << "\n";
         f << "amb.y "         << s.ambient.y << "\n";
         f << "amb.z "         << s.ambient.z << "\n";
+        f << "taa.blend "     << s.taaBlendAlpha << "\n";
         f << "\n";
     }
 }
@@ -640,6 +642,7 @@ SceneState App::captureSceneState() const {
     s.sunDir = m_sunDir;
     s.sunIntensity = m_sunIntensity;
     s.ambient = m_ambient;
+    s.taaBlendAlpha = m_taaBlendAlpha;
     return s;
 }
 
@@ -653,6 +656,7 @@ void App::applyState(const SceneState& s) {
     m_sunDir = s.sunDir;
     m_sunIntensity = s.sunIntensity;
     m_ambient = s.ambient;
+    m_taaBlendAlpha = s.taaBlendAlpha;
 }
 
 void App::persistAllStates() {
@@ -1147,6 +1151,9 @@ void App::buildUI() {
                 }
                 ImGui::EndCombo();
             }
+        }
+        if (m_aaMethod == AAMethod::TAA) {
+            ImGui::SliderFloat("TAA blend", &m_taaBlendAlpha, 0.5f, 0.98f, "%.3f");
         }
         ImGui::Separator();
         ImGui::Text("GI Technique");
@@ -2744,7 +2751,7 @@ void App::run() {
 
                 m_taa.bindResources(*m_device, m_rt, frame.frameInFlight);
                 m_taa.record(cmd, m_rt, m_jitter, m_prevJitter,
-                            ubo.invViewProj, m_prevViewProj, frame.frameInFlight);
+                            ubo.invViewProj, m_prevViewProj, frame.frameInFlight, m_taaBlendAlpha);
 
                 // Copy aaHdr → aaHistory for next frame
                 transitionImage(cmd, m_rt.aaHdr.image(), VK_IMAGE_ASPECT_COLOR_BIT,

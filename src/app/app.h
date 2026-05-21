@@ -64,6 +64,7 @@ struct SceneState {
     glm::vec3 sunDir{-0.4f, -1.0f, -0.3f};
     float sunIntensity = 3.0f;
     glm::vec3 ambient{0.10f, 0.12f, 0.15f};
+    float taaBlendAlpha = 0.92f;
     bool camValid = false;   // false = use auto-framing for camera
 };
 
@@ -154,6 +155,7 @@ private:
     AAMethod m_aaMethod = AAMethod::MSAA;
     glm::vec2 m_jitter{};       // current frame TAA jitter in NDC
     glm::vec2 m_prevJitter{};   // previous frame TAA jitter
+    float m_taaBlendAlpha = 0.92f;
     SsrPass m_ssr;             // M4.2: screen-space reflections, replaces IBL specular
     SsgiPass m_ssgi;           // M4.3: screen-space 1-bounce diffuse, replaces IBL diffuse
     GtgiPass m_gtgi;           // C.1: GTGI（horizon-based GI，Sucker Punch 2024）
