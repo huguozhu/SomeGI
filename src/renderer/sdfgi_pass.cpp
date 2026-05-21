@@ -21,16 +21,19 @@ struct SeedPC {
     float    threshold;
     float    pad0, pad1;
 };
+static_assert(sizeof(SeedPC) == 16, "SeedPC must match shader push constant layout");
 struct JfaPC {
     uint32_t resolution;
     int32_t  k;
     uint32_t pad0, pad1;
 };
+static_assert(sizeof(JfaPC) == 16, "JfaPC must match shader push constant layout");
 struct FinalizePC {
     uint32_t resolution;
     float    maxDist;
     float    pad0, pad1;
 };
+static_assert(sizeof(FinalizePC) == 16, "FinalizePC must match shader push constant layout");
 struct TracePC {
     uint32_t outSizeX, outSizeY;
     float    invOutSizeX, invOutSizeY;
@@ -41,6 +44,7 @@ struct TracePC {
     uint32_t frameIndex;
     uint32_t pad0, pad1, pad2;
 };
+static_assert(sizeof(TracePC) == 48, "TracePC must match shader push constant layout");
 
 VkImageMemoryBarrier2 makeBarrier3D(VkImage img,
     VkImageLayout oldL, VkImageLayout newL,

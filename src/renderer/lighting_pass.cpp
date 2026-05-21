@@ -22,6 +22,7 @@ struct LightingPC {
     uint32_t outSizeX, outSizeY;
     float    invOutSizeX, invOutSizeY;
 };
+static_assert(sizeof(LightingPC) == 16, "LightingPC must match shader push constant layout");
 }
 
 void LightingPass::init(Device& d) {

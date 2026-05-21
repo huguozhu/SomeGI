@@ -14,6 +14,7 @@ struct RelightPC {
     float    gridMinX, gridMinY, gridMinZ;
     float    _pad0;
 };
+static_assert(sizeof(RelightPC) == 32, "RelightPC must match shader push constant layout");
 }
 
 void VxgiRelightPass::init(Device& d) {

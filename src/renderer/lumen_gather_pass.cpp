@@ -15,7 +15,7 @@ struct GatherPC {
     uint32_t probeGridH;
     uint32_t debugMode;
 };
-static_assert(sizeof(GatherPC) <= 128);
+static_assert(sizeof(GatherPC) == 24, "GatherPC must match shader push constant layout");
 }
 
 void LumenGatherPass::init(Device& d) {

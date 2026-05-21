@@ -20,6 +20,7 @@ struct SsgiPC {
     float    thickness;
     uint32_t sampleCount;
 };
+static_assert(sizeof(SsgiPC) == 32, "SsgiPC must match shader push constant layout");
 }
 
 void SsgiPass::init(Device& d) {

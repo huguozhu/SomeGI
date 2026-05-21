@@ -13,6 +13,7 @@ struct InjectPC {
     float    gridMinX, gridMinY, gridMinZ;
     float    cellSize;
 };
+static_assert(sizeof(InjectPC) == 32, "InjectPC must match shader push constant layout");
 }
 
 void LpvInjectPass::init(Device& d, uint32_t rsmSize) {

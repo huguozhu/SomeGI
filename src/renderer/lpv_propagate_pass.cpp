@@ -12,6 +12,7 @@ struct PropagatePC {
     float    gvOcclusionStrength;   // B.8
     uint32_t _p1;
 };
+static_assert(sizeof(PropagatePC) == 16, "PropagatePC must match shader push constant layout");
 }
 
 void LpvPropagatePass::init(Device& d) {

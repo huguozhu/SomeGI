@@ -18,6 +18,7 @@ struct RsmSamplePC {
     float    intensity;
     uint32_t _pad;
 };
+static_assert(sizeof(RsmSamplePC) == 32, "RsmSamplePC must match shader push constant layout");
 }
 
 void RsmSamplePass::init(Device& d) {

@@ -23,6 +23,13 @@ struct RsmFrameUbo {
     glm::vec4 sunColor_intensity;
 };
 
+struct PC {
+    glm::mat4 model;
+    int materialIndex;
+    int p0, p1, p2;
+};
+static_assert(sizeof(PC) == 80, "PC must match shader push constant layout");
+
 // barrier helper —— 与 ibl_baker / app.cpp 中的 transitionImage 类似。
 void transitionImage2(VkCommandBuffer cmd, VkImage img,
                       VkImageAspectFlags aspect,
@@ -122,7 +129,7 @@ void RsmGeometryPass::buildPipeline() {
 
     VkPushConstantRange pc{};
     pc.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
-    pc.size = 64 + 16;   // mat4 model + materialIndex + 3 ints
+    pc.size = sizeof(PC);
 
     VkPipelineLayoutCreateInfo plci{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
     plci.setLayoutCount = 1; plci.pSetLayouts = &m_setLayout;
@@ -377,11 +384,7 @@ void RsmGeometryPass::record(VkCommandBuffer cmd, const SceneCpu& cpu, const Sce
     vkCmdBindVertexBuffers(cmd, 0, 1, &vb, &zero);
     vkCmdBindIndexBuffer(cmd, gpu.indexBuffer.handle(), 0, VK_INDEX_TYPE_UINT32);
 
-    struct PC {
-        glm::mat4 model;
-        int materialIndex;
-        int p0, p1, p2;
-    } pc;
+    PC pc;
     for (auto& n : cpu.nodes) {
         if (n.meshIndex < 0) continue;
         const Mesh& M = cpu.meshes[n.meshIndex];

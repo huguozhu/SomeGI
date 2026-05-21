@@ -13,6 +13,7 @@ struct AnisoPC {
     uint32_t srcLevel;
     uint32_t _pad;
 };
+static_assert(sizeof(AnisoPC) == 16, "AnisoPC must match shader push constant layout");
 }
 
 void VxgiAnisoPass::init(Device& d, uint32_t mipLevels) {

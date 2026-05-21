@@ -8,6 +8,13 @@ namespace somegi {
 
 static constexpr uint32_t kMaxTextures = 128;
 
+namespace {
+struct RtPC {
+    uint32_t outSizeX, outSizeY;
+    float invOutSizeX, invOutSizeY;
+};
+static_assert(sizeof(RtPC) == 16, "RtPC must match shader push constant layout");
+}
 
 void RtGiPass::init(Device& d) {
     m_device = &d;
@@ -71,7 +78,7 @@ void RtGiPass::init(Device& d) {
     // Pipeline layout
     VkPushConstantRange pc{};
     pc.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-    pc.size = sizeof(uint32_t) * 4;   // RtPC: 2 uint + 2 float
+    pc.size = sizeof(RtPC);
     VkPipelineLayoutCreateInfo plci{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
     plci.setLayoutCount = 1; plci.pSetLayouts = &m_setLayout;
     plci.pushConstantRangeCount = 1; plci.pPushConstantRanges = &pc;
@@ -183,10 +190,7 @@ void RtGiPass::record(VkCommandBuffer cmd, const RenderTargets& rt) {
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
         m_pipelineLayout, 0, 1, &m_set, 0, nullptr);
 
-    struct RtPC {
-        uint32_t outSizeX, outSizeY;
-        float invOutSizeX, invOutSizeY;
-    } pc;
+    RtPC pc;
     pc.outSizeX = rt.extent.width;  pc.outSizeY = rt.extent.height;
     pc.invOutSizeX = 1.0f / (float)rt.extent.width;
     pc.invOutSizeY = 1.0f / (float)rt.extent.height;

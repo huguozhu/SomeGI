@@ -15,6 +15,7 @@ struct SixAxisPC {
     float    gridMinX, gridMinY, gridMinZ;
     float    _pad0;
 };
+static_assert(sizeof(SixAxisPC) == 32, "SixAxisPC must match shader push constant layout");
 }
 
 void VxgiResolve6AxisPass::init(Device& d) {

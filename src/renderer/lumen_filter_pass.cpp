@@ -18,7 +18,7 @@ struct FilterPC {
     float    sigmaDist;
     float    temporalAlpha;
 };
-static_assert(sizeof(FilterPC) <= 128);
+static_assert(sizeof(FilterPC) == 36, "FilterPC must match shader push constant layout");
 }
 
 void LumenFilterPass::init(Device& d) {

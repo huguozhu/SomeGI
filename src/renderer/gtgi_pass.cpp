@@ -17,6 +17,7 @@ struct GtgiPC {
     uint32_t sliceCount;
     uint32_t samplesPerSlice;
 };
+static_assert(sizeof(GtgiPC) == 32, "GtgiPC must match shader push constant layout");
 }
 
 void GtgiPass::init(Device& d) {

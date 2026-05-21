@@ -24,6 +24,7 @@ struct SsaoPC {
     uint32_t  sampleCount;
     uint32_t  _pad;
 };
+static_assert(sizeof(SsaoPC) == 224, "SsaoPC must match shader push constant layout");
 }
 
 void SsaoPass::init(Device& d) {

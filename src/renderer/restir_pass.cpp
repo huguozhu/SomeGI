@@ -16,6 +16,7 @@ struct InitPC {
     uint32_t frameIndex;
     uint32_t pad0;
 };
+static_assert(sizeof(InitPC) == 32, "InitPC must match shader push constant layout");
 struct SpatialPC {
     uint32_t outX, outY;
     float    invX, invY;
@@ -24,6 +25,7 @@ struct SpatialPC {
     float    radiusPixels;
     uint32_t frameIndex;
 };
+static_assert(sizeof(SpatialPC) == 32, "SpatialPC must match shader push constant layout");
 struct ShadePC {
     uint32_t outX, outY;
     float    invX, invY;
@@ -32,6 +34,7 @@ struct ShadePC {
     float    intensityScale;
     uint32_t pad0;
 };
+static_assert(sizeof(ShadePC) == 32, "ShadePC must match shader push constant layout");
 
 VkImageMemoryBarrier2 makeBarrier2D(VkImage img,
     VkImageLayout oldL, VkImageLayout newL,

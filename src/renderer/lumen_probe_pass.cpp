@@ -21,7 +21,7 @@ struct ProbePC {
     uint32_t useSixAxis;
     uint32_t _pad1, _pad2, _pad3;   // align to 64 bytes
 };
-static_assert(sizeof(ProbePC) <= 128);
+static_assert(sizeof(ProbePC) == 56, "ProbePC must match shader push constant layout");
 }
 
 void LumenProbePass::init(Device& d) {

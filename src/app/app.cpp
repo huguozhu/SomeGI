@@ -390,7 +390,7 @@ App::App() {
     m_tonemap.bindTargets(*m_device, m_rt);
     std::printf("[init] aa passes...\n");
     m_taa.init(*m_device);
-    m_smaa.init(*m_device);
+    m_smaa.init(*m_device, m_swap->extent());
     std::printf("[init] imgui pass...\n");
     m_imgui.init(*m_device, m_window->handle(), m_swap->format(), kFramesInFlight);
     std::printf("[init] all set up, entering main loop.\n");
@@ -833,6 +833,8 @@ void App::onSwapchainResized() {
     if (m_aaMethod == AAMethod::TAA || m_aaMethod == AAMethod::SMAA) {
         m_rt.ensureAaResources(*m_device);
         m_taa.bindResources(*m_device, m_rt, 0);
+        m_smaa.destroy();
+        m_smaa.init(*m_device, m_swap->extent());
         m_smaa.bindResources(*m_device, m_rt);
     }
     bootstrapHdrPrev();   // fresh hdrPrev image — clear it before SSR can read

@@ -20,7 +20,7 @@ struct UpdatePC {
     float    vxgiGridMinX, vxgiGridMinY, vxgiGridMinZ;
     float    _pad2;
 };
-static_assert(sizeof(UpdatePC) <= 128, "UpdatePC fits push limit");
+static_assert(sizeof(UpdatePC) == 80, "UpdatePC must match shader push constant layout");
 
 struct BlendPC {
     uint32_t probesX, probesY, probesZ;
@@ -30,12 +30,14 @@ struct BlendPC {
     float    hysteresis;
     float    maxRayDistance;
 };
+static_assert(sizeof(BlendPC) == 32, "BlendPC must match shader push constant layout");
 struct ClassifyPC {
     uint32_t probeCount;
     uint32_t raysPerProbe;
     float    closeHitDist;
     float    closeHitFrac;
 };
+static_assert(sizeof(ClassifyPC) == 16, "ClassifyPC must match shader push constant layout");
 }
 
 void DdgiPass::init(Device& d) {

@@ -16,6 +16,7 @@ struct TaaPC {
     float _pad;       // std140: align float2 invRes to 8-byte boundary
     float invResX, invResY;
 };
+static_assert(sizeof(TaaPC) == 160, "TaaPC must match shader push constant layout");
 }
 
 void TaaPass::init(Device& d) {

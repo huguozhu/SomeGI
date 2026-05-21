@@ -20,6 +20,7 @@ struct GtaoPC {
     uint32_t  sliceCount;
     uint32_t  samplesPerSlice;
 };
+static_assert(sizeof(GtaoPC) == 224, "GtaoPC must match shader push constant layout");
 }
 
 void GtaoPass::init(Device& d) {

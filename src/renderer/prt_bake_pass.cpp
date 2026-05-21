@@ -18,7 +18,7 @@ struct BakePC {
     uint32_t vxgiResolution;
     uint32_t _pad1, _pad2, _pad3;
 };
-static_assert(sizeof(BakePC) <= 128, "BakePC fits push limit");
+static_assert(sizeof(BakePC) == 64, "BakePC must match shader push constant layout");
 }
 
 void PrtBakePass::init(Device& d) {

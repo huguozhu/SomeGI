@@ -11,6 +11,7 @@ struct MipmapPC {
     uint32_t dstSize;
     uint32_t _p0, _p1, _p2;
 };
+static_assert(sizeof(MipmapPC) == 16, "MipmapPC must match shader push constant layout");
 }
 
 void VxgiMipmapPass::init(Device& d, uint32_t mipLevels) {

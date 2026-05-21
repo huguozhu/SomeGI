@@ -21,6 +21,7 @@ struct SsrPC {
     float     thickness;
     float     roughThreshold;
 };
+static_assert(sizeof(SsrPC) == 32, "SsrPC must match shader push constant layout");
 }
 
 void SsrPass::init(Device& d) {

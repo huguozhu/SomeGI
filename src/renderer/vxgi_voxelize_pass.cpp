@@ -18,7 +18,7 @@ struct VoxelizePC {
     uint32_t gridResolution;
     uint32_t _pad0, _pad1, _pad2;
 };
-static_assert(sizeof(VoxelizePC) <= 128, "PC must fit standard 128B push limit");
+static_assert(sizeof(VoxelizePC) == 112, "VoxelizePC must match shader push constant layout");
 }
 
 void VxgiVoxelizePass::init(Device& d, uint32_t maxTextures) {

@@ -6,6 +6,15 @@
 
 namespace somegi {
 
+namespace {
+struct PC {
+    glm::mat4 model;
+    int materialIndex;
+    int p0, p1, p2;
+};
+static_assert(sizeof(PC) == 80, "PC must match shader push constant layout");
+}
+
 void ForwardPass::init(Device& d, VkFormat colorFmt, VkFormat depthFmt, uint32_t maxTextures) {
     m_device = &d;
     m_colorFmt = colorFmt;
@@ -54,7 +63,7 @@ void ForwardPass::buildPipeline(const char* variant, VkDescriptorSetLayout giDsl
 
     VkPushConstantRange pc{};
     pc.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
-    pc.size = 64 + 16;
+    pc.size = sizeof(PC);
 
     std::array<VkDescriptorSetLayout, 2> sets{m_setLayout, giDsl};
 
@@ -234,11 +243,7 @@ void ForwardPass::record(VkCommandBuffer cmd, const RenderTargets& rt,
     vkCmdBindVertexBuffers(cmd, 0, 1, &vb, &zero);
     vkCmdBindIndexBuffer(cmd, gpu.indexBuffer.handle(), 0, VK_INDEX_TYPE_UINT32);
 
-    struct PC {
-        glm::mat4 model;
-        int materialIndex;
-        int p0, p1, p2;
-    } pc;
+    PC pc;
     for (auto& n : cpu.nodes) {
         if (n.meshIndex < 0) continue;
         const Mesh& M = cpu.meshes[n.meshIndex];
