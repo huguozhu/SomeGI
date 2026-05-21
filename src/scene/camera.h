@@ -12,7 +12,7 @@ public:
     float yaw = -90.0f;
     float pitch = 0.0f;
     float fovDeg = 60.0f;
-    float nearZ = 0.05f;
+    float nearZ = 0.5f;
     float farZ = 200.0f;
 
     glm::vec3 forward() const;
