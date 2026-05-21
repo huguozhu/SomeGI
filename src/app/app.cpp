@@ -22,8 +22,10 @@ namespace somegi {
 namespace {
 struct SceneEntry { const char* name; const char* relPath; };
 constexpr SceneEntry kScenes[] = {
-    { "cube",   "gltf/cube/cube.gltf" },
-    { "Sponza", "gltf/Sponza/Sponza.gltf" },
+    { "cube",           "gltf/cube/cube.gltf" },
+    { "Sponza",         "gltf/Sponza/Sponza.gltf" },
+    { "CornellBox",     "gltf/CornellBox/CornellBox.gltf" },
+    { "DamagedHelmet",  "gltf/DamagedHelmet/DamagedHelmet.gltf" },
 };
 
 // 用 implemented=false 占位的下拉项当 roadmap 用：选中后 applyGiSelection

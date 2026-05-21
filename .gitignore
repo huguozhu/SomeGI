@@ -23,3 +23,4 @@ scene_state.ini
 # Downloaded glTF test models (auto-fetched by CMake)
 assets/gltf/cube/
 assets/gltf/Sponza/
+assets/gltf/DamagedHelmet/
