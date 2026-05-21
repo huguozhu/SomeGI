@@ -187,7 +187,7 @@ void RenderTargets::ensureAaResources(Device& d) {
     ImageDesc hdr{};
     hdr.format = VK_FORMAT_R16G16B16A16_SFLOAT;
     hdr.extent = {extent.width, extent.height, 1};
-    hdr.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+    hdr.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
     aaHdr = Image(d, hdr);
 
     ImageDesc hist{};

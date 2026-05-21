@@ -13,6 +13,7 @@ struct TaaPC {
     glm::mat4 invViewProj;
     glm::mat4 prevViewProj;
     float blendAlpha;
+    float _pad;       // std140: align float2 invRes to 8-byte boundary
     float invResX, invResY;
 };
 }
@@ -45,17 +46,18 @@ void TaaPass::init(Device& d) {
     cpci.stage = stage; cpci.layout = m_pipelineLayout;
     VK_CHECK(vkCreateComputePipelines(d.device(), VK_NULL_HANDLE, 1, &cpci, nullptr, &m_pipeline));
 
-    std::array<VkDescriptorPoolSize, 4> ps{{
-        {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 3},
-        {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1},
+    std::array<VkDescriptorPoolSize, 2> ps{{
+        {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 3u * kFramesInFlight},
+        {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1u * kFramesInFlight},
     }};
     VkDescriptorPoolCreateInfo pci{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
-    pci.maxSets = 1; pci.poolSizeCount = (uint32_t)ps.size(); pci.pPoolSizes = ps.data();
+    pci.maxSets = kFramesInFlight; pci.poolSizeCount = (uint32_t)ps.size(); pci.pPoolSizes = ps.data();
     VK_CHECK(vkCreateDescriptorPool(d.device(), &pci, nullptr, &m_pool));
 
+    VkDescriptorSetLayout layouts[] = {m_setLayout, m_setLayout};
     VkDescriptorSetAllocateInfo dai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
-    dai.descriptorPool = m_pool; dai.descriptorSetCount = 1; dai.pSetLayouts = &m_setLayout;
-    VK_CHECK(vkAllocateDescriptorSets(d.device(), &dai, &m_set));
+    dai.descriptorPool = m_pool; dai.descriptorSetCount = kFramesInFlight; dai.pSetLayouts = layouts;
+    VK_CHECK(vkAllocateDescriptorSets(d.device(), &dai, m_sets));
 }
 
 void TaaPass::destroy() {
@@ -68,7 +70,7 @@ void TaaPass::destroy() {
     *this = {};
 }
 
-void TaaPass::bindResources(Device& d, const RenderTargets& rt) {
+void TaaPass::bindResources(Device& d, const RenderTargets& rt, uint32_t frameIdx) {
     VkDescriptorImageInfo curr{};
     curr.imageView = rt.aaHdr.view();
     curr.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
@@ -88,7 +90,7 @@ void TaaPass::bindResources(Device& d, const RenderTargets& rt) {
     std::array<VkWriteDescriptorSet, 4> w{};
     auto setImg = [&](VkWriteDescriptorSet& W, uint32_t bi, VkDescriptorType t, const VkDescriptorImageInfo* p) {
         W = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-        W.dstSet = m_set; W.dstBinding = bi; W.descriptorCount = 1;
+        W.dstSet = m_sets[frameIdx]; W.dstBinding = bi; W.descriptorCount = 1;
         W.descriptorType = t; W.pImageInfo = p;
     };
     setImg(w[0], 0, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, &curr);
@@ -101,10 +103,10 @@ void TaaPass::bindResources(Device& d, const RenderTargets& rt) {
 void TaaPass::record(VkCommandBuffer cmd, const RenderTargets& rt,
                      const glm::vec2& jitter, const glm::vec2& prevJitter,
                      const glm::mat4& invViewProj, const glm::mat4& prevViewProj,
-                     float blendAlpha) {
+                     uint32_t frameIdx, float blendAlpha) {
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipeline);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
-        m_pipelineLayout, 0, 1, &m_set, 0, nullptr);
+        m_pipelineLayout, 0, 1, &m_sets[frameIdx], 0, nullptr);
 
     TaaPC pc{};
     pc.jitterX = jitter.x; pc.jitterY = jitter.y;

@@ -508,7 +508,7 @@ void App::applySceneSelection() {
         m_tonemap.bindTargets(*m_device, m_rt);
         if (m_aaMethod == AAMethod::TAA || m_aaMethod == AAMethod::SMAA) {
             m_rt.ensureAaResources(*m_device);
-            m_taa.bindResources(*m_device, m_rt);
+            m_taa.bindResources(*m_device, m_rt, 0);
             m_smaa.bindResources(*m_device, m_rt);
         }
     }
@@ -828,7 +828,7 @@ void App::onSwapchainResized() {
     // AA resources were destroyed by m_rt.destroy(), recreate if needed
     if (m_aaMethod == AAMethod::TAA || m_aaMethod == AAMethod::SMAA) {
         m_rt.ensureAaResources(*m_device);
-        m_taa.bindResources(*m_device, m_rt);
+        m_taa.bindResources(*m_device, m_rt, 0);
         m_smaa.bindResources(*m_device, m_rt);
     }
     bootstrapHdrPrev();   // fresh hdrPrev image — clear it before SSR can read
@@ -1135,7 +1135,7 @@ void App::buildUI() {
                             m_aaMethod = (AAMethod)i;
                             if (m_aaMethod == AAMethod::TAA || m_aaMethod == AAMethod::SMAA) {
                                 m_rt.ensureAaResources(*m_device);
-                                m_taa.bindResources(*m_device, m_rt);
+                                m_taa.bindResources(*m_device, m_rt, 0);
                                 m_smaa.bindResources(*m_device, m_rt);
                             } else {
                                 m_rt.destroyAaResources();
@@ -2733,11 +2733,26 @@ void App::run() {
                 VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
 
             if (m_aaMethod == AAMethod::TAA) {
-                m_taa.bindResources(*m_device, m_rt);
+                // Depth is in DEPTH_ATTACHMENT_OPTIMAL after skybox; TAA reads it as sampled
+                transitionImage(cmd, m_rt.depth.image(), VK_IMAGE_ASPECT_DEPTH_BIT,
+                    VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
+                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                    VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
+                    VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT,
+                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                    VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+
+                m_taa.bindResources(*m_device, m_rt, frame.frameInFlight);
                 m_taa.record(cmd, m_rt, m_jitter, m_prevJitter,
-                            ubo.invViewProj, m_prevViewProj);
+                            ubo.invViewProj, m_prevViewProj, frame.frameInFlight);
 
                 // Copy aaHdr → aaHistory for next frame
+                transitionImage(cmd, m_rt.aaHdr.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                    VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                    VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
+                    VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
                 transitionImage(cmd, m_rt.aaHistory.image(), VK_IMAGE_ASPECT_COLOR_BIT,
                     VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                     VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
@@ -2747,9 +2762,15 @@ void App::run() {
                 histCopy.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
                 histCopy.extent = {m_rt.extent.width, m_rt.extent.height, 1};
                 vkCmdCopyImage(cmd,
-                    m_rt.aaHdr.image(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                    m_rt.aaHdr.image(), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                     m_rt.aaHistory.image(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                     1, &histCopy);
+                transitionImage(cmd, m_rt.aaHdr.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                    VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                    VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_READ_BIT,
+                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                    VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
                 transitionImage(cmd, m_rt.aaHistory.image(), VK_IMAGE_ASPECT_COLOR_BIT,
                     VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                     VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
