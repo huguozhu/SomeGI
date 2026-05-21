@@ -24,7 +24,6 @@ struct SceneEntry { const char* name; const char* relPath; };
 constexpr SceneEntry kScenes[] = {
     { "cube",           "gltf/cube/cube.gltf" },
     { "Sponza",         "gltf/Sponza/Sponza.gltf" },
-    { "CornellBox",     "gltf/CornellBox/CornellBox.gltf" },
     { "DamagedHelmet",  "gltf/DamagedHelmet/DamagedHelmet.gltf" },
     { "Bistro",         "gltf/Bistro/Bistro.gltf" },
 };
