@@ -157,6 +157,7 @@ App::App() {
     m_window = std::make_unique<Window>(wd);
     m_device = std::make_unique<Device>(*m_window, /*validation=*/true);
 
+    try {
     // Clamp default MSAA to device-supported sample counts
     {
         VkSampleCountFlags supp = m_device->supportedSampleCounts();
@@ -382,6 +383,10 @@ App::App() {
     std::printf("[init] imgui pass...\n");
     m_imgui.init(*m_device, m_window->handle(), m_swap->format(), kFramesInFlight);
     std::printf("[init] all set up, entering main loop.\n");
+    } catch (...) {
+        cleanup();
+        throw;
+    }
 }
 
 void App::bakeEnvIbl() {
@@ -615,6 +620,10 @@ App::~App() {
         m_sceneStates[kScenes[m_sceneIndexApplied].name] = captureSceneState();
         persistAllStates();
     }
+    cleanup();
+}
+
+void App::cleanup() {
     if (m_device) m_device->waitIdle();
     m_imgui.destroy();
     m_tonemap.destroy();

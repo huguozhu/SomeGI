@@ -41,7 +41,7 @@ void VxgiRelightPass::init(Device& d) {
 
     std::array<VkDescriptorPoolSize, 3> ps{{
         {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 2 * 3},
-        {VK_DESCRIPTOR_TYPE_SAMPLER,       1},
+        {VK_DESCRIPTOR_TYPE_SAMPLER,       3},
         {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1 * 3},
     }};
     VkDescriptorPoolCreateInfo pci{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};

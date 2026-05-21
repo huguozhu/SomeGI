@@ -80,6 +80,7 @@ private:
     SceneState captureSceneState() const;
     void applyState(const SceneState& s);
     void persistAllStates();
+    void cleanup();                    // destroy all Vulkan resources; safe on partial init
 
     std::unique_ptr<Window> m_window;
     std::unique_ptr<Device> m_device;
