@@ -75,7 +75,7 @@ private:
     void onSwapchainResized();
     void bootstrapHdrPrev();           // one-shot clear hdrPrev to zero, layout SHADER_READ_ONLY
     void bootstrapSsgiTemporal();      // B.4 一次性清 ssgi + ssgiPrev 为 0，layout SHADER_READ_ONLY
-    void loadAndUploadScene(const std::filesystem::path& gltfPath);
+    bool loadAndUploadScene(const std::filesystem::path& gltfPath, std::string& outErr);
     void applySceneSelection();        // honor m_currentSceneIndex changes from UI
     SceneState captureSceneState() const;
     void applyState(const SceneState& s);
@@ -169,6 +169,7 @@ private:
     float m_dtMs = 0.0f;
     int m_currentSceneIndex = 1;       // 0 = cube, 1 = Sponza (default)
     int m_sceneIndexApplied = -1;      // last scene actually loaded
+    std::string m_sceneLoadError;      // popup message when scene load fails
     int m_currentGiIndex = 0;          // default = None
     int m_giIndexApplied = -1;         // last index actually attached
     VkSampleCountFlagBits m_msaaSamples = VK_SAMPLE_COUNT_4_BIT;

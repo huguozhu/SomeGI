@@ -407,10 +407,9 @@ void App::bakeEnvIbl() {
     baker.bake(*m_device, m_pool, env, m_envIbl);
 }
 
-void App::loadAndUploadScene(const std::filesystem::path& gltfPath) {
-    std::string err;
-    if (!loadGltf(gltfPath, m_scene, err)) {
-        throw std::runtime_error("loadGltf: " + err);
+bool App::loadAndUploadScene(const std::filesystem::path& gltfPath, std::string& outErr) {
+    if (!loadGltf(gltfPath, m_scene, outErr)) {
+        return false;
     }
     std::printf("[scene] %s\n  vertices=%zu  indices=%zu  meshes=%zu  materials=%zu  textures=%zu\n  AABB min=(%.2f,%.2f,%.2f) max=(%.2f,%.2f,%.2f)\n",
         gltfPath.string().c_str(),
@@ -422,6 +421,7 @@ void App::loadAndUploadScene(const std::filesystem::path& gltfPath) {
     std::printf("[scene] uploading to GPU...\n");
     uploadScene(*m_device, m_pool, m_scene, m_sceneGpu, m_useMipmaps);
     std::printf("[scene] GPU upload done.\n");
+    return true;
 }
 
 void App::applySceneSelection() {
@@ -432,19 +432,54 @@ void App::applySceneSelection() {
         return;
     }
 
-    if (m_sceneIndexApplied >= 0) {
-        // Mid-run switch: snapshot the outgoing scene's state into the in-memory
-        // map (we'll write the whole file once the switch completes, so
-        // `last_scene` matches the new active scene).
-        m_sceneStates[kScenes[m_sceneIndexApplied].name] = captureSceneState();
+    // Remember which scene we came from, in case the new one fails to load.
+    int      prevIndex    = m_sceneIndexApplied;
+    SceneCpu prevSceneCpu = std::move(m_scene);
+    SceneGpu prevSceneGpu = std::move(m_sceneGpu);
+
+    if (prevIndex >= 0) {
+        m_sceneStates[kScenes[prevIndex].name] = captureSceneState();
         m_device->waitIdle();
-        destroySceneSamplers(*m_device, m_sceneGpu);
-        m_sceneGpu = SceneGpu{};
-        m_scene = SceneCpu{};
     }
 
     auto path = std::filesystem::path(SOMEGI_ASSET_DIR) / kScenes[m_currentSceneIndex].relPath;
-    loadAndUploadScene(path);
+    m_scene = SceneCpu{};
+    m_sceneGpu = SceneGpu{};
+
+    std::string loadErr;
+    if (!loadAndUploadScene(path, loadErr)) {
+        std::fprintf(stderr, "[scene] failed to load '%s': %s\n",
+                     kScenes[m_currentSceneIndex].name, loadErr.c_str());
+        m_sceneLoadError = std::string(kScenes[m_currentSceneIndex].name)
+                         + " 加载失败：\n" + loadErr;
+
+        // Restore previous scene
+        if (prevIndex >= 0) {
+            m_scene = std::move(prevSceneCpu);
+            m_sceneGpu = std::move(prevSceneGpu);
+            m_currentSceneIndex = prevIndex;
+        } else {
+            // First load failed — try each remaining scene until one works.
+            bool recovered = false;
+            for (int i = 0; i < kSceneCount; ++i) {
+                if (i == m_currentSceneIndex) continue;
+                auto fallbackPath = std::filesystem::path(SOMEGI_ASSET_DIR) / kScenes[i].relPath;
+                if (loadAndUploadScene(fallbackPath, loadErr)) {
+                    m_currentSceneIndex = i;
+                    recovered = true;
+                    break;
+                }
+            }
+            if (!recovered) {
+                throw std::runtime_error("no usable scene found: " + loadErr);
+            }
+        }
+        ImGui::OpenPopup("Scene load failed");
+    } else {
+        if (prevIndex >= 0) {
+            destroySceneSamplers(*m_device, prevSceneGpu);
+        }
+    }
 
     // M9：场景已加载，构建加速结构 + bindFrame（仅 HW 支持时）。
     if (m_rtSupported) {
@@ -1101,6 +1136,12 @@ void App::buildUI() {
                 if (ImGui::Button("确定", ImVec2(120, 0))) ImGui::CloseCurrentPopup();
                 ImGui::EndPopup();
             }
+        }
+        if (ImGui::BeginPopupModal("Scene load failed", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+            ImGui::Text("%s", m_sceneLoadError.c_str());
+            ImGui::Spacing();
+            if (ImGui::Button("确定", ImVec2(120, 0))) ImGui::CloseCurrentPopup();
+            ImGui::EndPopup();
         }
         if (m_giTech) {
             ImGui::Text("Active: %s", m_giTech->name());
