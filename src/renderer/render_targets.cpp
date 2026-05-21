@@ -182,6 +182,26 @@ void RenderTargets::recreateMsaa(Device& d, VkSampleCountFlagBits samples) {
            VK_IMAGE_ASPECT_DEPTH_BIT, depthMs);
 }
 
+void RenderTargets::ensureAaResources(Device& d) {
+    if (aaHdr.image() != VK_NULL_HANDLE) return;
+    ImageDesc hdr{};
+    hdr.format = VK_FORMAT_R16G16B16A16_SFLOAT;
+    hdr.extent = {extent.width, extent.height, 1};
+    hdr.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+    aaHdr = Image(d, hdr);
+
+    ImageDesc hist{};
+    hist.format = VK_FORMAT_R16G16B16A16_SFLOAT;
+    hist.extent = {extent.width, extent.height, 1};
+    hist.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    aaHistory = Image(d, hist);
+}
+
+void RenderTargets::destroyAaResources() {
+    aaHdr.reset();
+    aaHistory.reset();
+}
+
 void RenderTargets::destroy() {
     hdrColor.reset();
     depth.reset();
@@ -202,6 +222,8 @@ void RenderTargets::destroy() {
     restir.reset();
     rtGI.reset();
     lumenGI.reset();
+    aaHdr.reset();
+    aaHistory.reset();
 }
 
 }

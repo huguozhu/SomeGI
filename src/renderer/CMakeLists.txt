@@ -65,6 +65,10 @@ add_library(somegi_renderer STATIC
     skybox_pass.cpp
     tonemap_pass.h
     tonemap_pass.cpp
+    taa_pass.h
+    taa_pass.cpp
+    smaa_pass.h
+    smaa_pass.cpp
     imgui_pass.h
     imgui_pass.cpp
     lumen_resources.h

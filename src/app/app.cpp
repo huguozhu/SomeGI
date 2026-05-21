@@ -386,6 +386,9 @@ App::App() {
     std::printf("[init] tonemap pass...\n");
     m_tonemap.init(*m_device, m_sceneGpu.linearSampler);
     m_tonemap.bindTargets(*m_device, m_rt);
+    std::printf("[init] aa passes...\n");
+    m_taa.init(*m_device);
+    m_smaa.init(*m_device);
     std::printf("[init] imgui pass...\n");
     m_imgui.init(*m_device, m_window->handle(), m_swap->format(), kFramesInFlight);
     std::printf("[init] all set up, entering main loop.\n");
@@ -503,6 +506,11 @@ void App::applySceneSelection() {
         m_tonemap.destroy();
         m_tonemap.init(*m_device, m_sceneGpu.linearSampler);
         m_tonemap.bindTargets(*m_device, m_rt);
+        if (m_aaMethod == AAMethod::TAA || m_aaMethod == AAMethod::SMAA) {
+            m_rt.ensureAaResources(*m_device);
+            m_taa.bindResources(*m_device, m_rt);
+            m_smaa.bindResources(*m_device, m_rt);
+        }
     }
 
     // Camera framing.
@@ -668,6 +676,8 @@ void App::cleanup() {
     if (m_device) m_device->waitIdle();
     m_imgui.destroy();
     m_tonemap.destroy();
+    m_taa.destroy();
+    m_smaa.destroy();
     m_rtGiPass.destroy();
     m_rtAS.destroy();
     m_skybox.destroy();
@@ -815,6 +825,12 @@ void App::onSwapchainResized() {
         }
     }
     m_tonemap.bindTargets(*m_device, m_rt);
+    // AA resources were destroyed by m_rt.destroy(), recreate if needed
+    if (m_aaMethod == AAMethod::TAA || m_aaMethod == AAMethod::SMAA) {
+        m_rt.ensureAaResources(*m_device);
+        m_taa.bindResources(*m_device, m_rt);
+        m_smaa.bindResources(*m_device, m_rt);
+    }
     bootstrapHdrPrev();   // fresh hdrPrev image — clear it before SSR can read
     bootstrapSsgiTemporal();
 }
@@ -1106,6 +1122,33 @@ void App::buildUI() {
             }
         }
         ImGui::Separator();
+        ImGui::Text("Anti-Aliasing");
+        {
+            const char* items[] = {"None", "MSAA", "TAA", "SMAA"};
+            int cur = (int)m_aaMethod;
+            if (ImGui::BeginCombo("AA method", items[cur])) {
+                for (int i = 0; i < 4; ++i) {
+                    bool sel = (cur == i);
+                    if (ImGui::Selectable(items[i], sel)) {
+                        if (i != (int)m_aaMethod) {
+                            m_device->waitIdle();
+                            m_aaMethod = (AAMethod)i;
+                            if (m_aaMethod == AAMethod::TAA || m_aaMethod == AAMethod::SMAA) {
+                                m_rt.ensureAaResources(*m_device);
+                                m_taa.bindResources(*m_device, m_rt);
+                                m_smaa.bindResources(*m_device, m_rt);
+                            } else {
+                                m_rt.destroyAaResources();
+                                m_tonemap.bindOutput(*m_device, m_rt.ldrTonemap.view());
+                            }
+                        }
+                    }
+                    if (sel) ImGui::SetItemDefaultFocus();
+                }
+                ImGui::EndCombo();
+            }
+        }
+        ImGui::Separator();
         ImGui::Text("GI Technique");
         {
             char curBuf[64];
@@ -1343,10 +1386,29 @@ void App::run() {
             onSwapchainResized();
         }
 
+        // TAA jitter: Halton(2,3) sequence
+        m_prevJitter = m_jitter;
+        if (m_aaMethod == AAMethod::TAA) {
+            auto halton = [](int idx, int base) -> float {
+                float f = 1.0f, r = 0.0f;
+                int i = idx + 1;
+                while (i > 0) { f /= (float)base; r += f * (float)(i % base); i /= base; }
+                return r;
+            };
+            float jx = (halton((int)m_frameIndex, 2) - 0.5f) * 2.0f;
+            float jy = (halton((int)m_frameIndex, 3) - 0.5f) * 2.0f;
+            m_jitter = glm::vec2(jx / m_rt.extent.width, jy / m_rt.extent.height);
+        } else {
+            m_jitter = glm::vec2(0.0f);
+        }
+
         // Update FrameUBO
         FrameUBO ubo{};
         ubo.view = m_camera.view();
         ubo.proj = m_camera.proj((float)m_rt.extent.width / (float)m_rt.extent.height);
+        // Apply jitter to projection
+        ubo.proj[2][0] += m_jitter.x;
+        ubo.proj[2][1] += m_jitter.y;
         ubo.viewProj = ubo.proj * ubo.view;
         ubo.invViewProj = glm::inverse(ubo.viewProj);
         ubo.prevViewProj = m_prevViewProj;   // B.4 SSGI 时序 reproject 用
@@ -2638,25 +2700,87 @@ void App::run() {
             VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
             VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
 
-        // === Phase 4: Tonemap (compute) ===
+        // === Phase 4: Tonemap (compute) + optional AA ===
         // hdrColor finishes phase 3.5 in TRANSFER_SRC, so transition from there.
         transitionImage(cmd, m_rt.hdrColor.image(), VK_IMAGE_ASPECT_COLOR_BIT,
             VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
             VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_READ_BIT,
             VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT);
-        transitionImage(cmd, m_rt.ldrTonemap.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-            VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
-            VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
-            VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
 
-        m_tonemap.record(cmd, m_rt);
+        bool aaActive = (m_aaMethod == AAMethod::TAA || m_aaMethod == AAMethod::SMAA);
+        if (aaActive) {
+            m_rt.ensureAaResources(*m_device);
 
-        // Phase 3: blit ldr → swapchain
-        transitionImage(cmd, m_rt.ldrTonemap.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-            VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-            VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
-            VK_PIPELINE_STAGE_2_BLIT_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
+            // Tonemap writes to aaHdr
+            transitionImage(cmd, m_rt.aaHdr.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
+                VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
+                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
+            m_tonemap.bindOutput(*m_device, m_rt.aaHdr.view());
+            m_tonemap.record(cmd, m_rt);
+
+            // Barrier: aaHdr GENERAL → SHADER_READ_ONLY for AA pass
+            transitionImage(cmd, m_rt.aaHdr.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
+                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT);
+
+            // AA write target: ldrTonemap
+            transitionImage(cmd, m_rt.ldrTonemap.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
+                VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
+                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
+
+            if (m_aaMethod == AAMethod::TAA) {
+                m_taa.bindResources(*m_device, m_rt);
+                m_taa.record(cmd, m_rt, m_jitter, m_prevJitter,
+                            ubo.invViewProj, m_prevViewProj);
+
+                // Copy aaHdr → aaHistory for next frame
+                transitionImage(cmd, m_rt.aaHistory.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                    VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                    VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
+                    VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
+                VkImageCopy histCopy{};
+                histCopy.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+                histCopy.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+                histCopy.extent = {m_rt.extent.width, m_rt.extent.height, 1};
+                vkCmdCopyImage(cmd,
+                    m_rt.aaHdr.image(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                    m_rt.aaHistory.image(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                    1, &histCopy);
+                transitionImage(cmd, m_rt.aaHistory.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                    VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                    VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+            } else {
+                m_smaa.bindResources(*m_device, m_rt);
+                m_smaa.record(cmd, m_rt);
+            }
+
+            // Barrier: ldrTonemap GENERAL → TRANSFER_SRC for blit
+            transitionImage(cmd, m_rt.ldrTonemap.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
+                VK_PIPELINE_STAGE_2_BLIT_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
+        } else {
+            // No AA: tonemap writes directly to ldrTonemap
+            transitionImage(cmd, m_rt.ldrTonemap.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
+                VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
+                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
+            m_tonemap.bindOutput(*m_device, m_rt.ldrTonemap.view());
+            m_tonemap.record(cmd, m_rt);
+
+            // Barrier: ldrTonemap GENERAL → TRANSFER_SRC for blit
+            transitionImage(cmd, m_rt.ldrTonemap.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
+                VK_PIPELINE_STAGE_2_BLIT_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
+        }
         transitionImage(cmd, frame.image, VK_IMAGE_ASPECT_COLOR_BIT,
             VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
             VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,

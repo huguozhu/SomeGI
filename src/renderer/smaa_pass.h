@@ -1,17 +1,15 @@
 #pragma once
-#include "core/shader.h"
-#include "render_targets.h"
+#include "core/vk_common.h"
 
 namespace somegi {
 class Device;
+struct RenderTargets;
 
-class TonemapPass {
+class SmaaPass {
 public:
-    void init(Device& d, VkSampler linearSampler);
+    void init(Device& d);
     void destroy();
-
-    void bindTargets(Device& d, const RenderTargets& rt);
-    void bindOutput(Device& d, VkImageView outView);   // rebind only output image
+    void bindResources(Device& d, const RenderTargets& rt);
     void record(VkCommandBuffer cmd, const RenderTargets& rt);
 
 private:
@@ -21,7 +19,6 @@ private:
     VkPipeline m_pipeline = VK_NULL_HANDLE;
     VkDescriptorPool m_pool = VK_NULL_HANDLE;
     VkDescriptorSet m_set = VK_NULL_HANDLE;
-    VkSampler m_sampler = VK_NULL_HANDLE;
 };
 
 }

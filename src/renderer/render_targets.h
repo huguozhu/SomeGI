@@ -53,9 +53,16 @@ struct RenderTargets {
     // RGBA16F: rgb=间接 diffuse radiance, a=1.0。
     Image lumenGI;        // STORAGE | SAMPLED | TRANSFER_DST
 
+    // AA intermediate targets (only valid when ensureAaResources has been called)
+    Image aaHdr;          // RGBA16F: tonemap output (HDR before LDR conversion)
+    Image aaHistory;      // RGBA16F: previous frame for TAA
+
     void create(Device& d, VkExtent2D ext, VkSampleCountFlagBits msaaSamples = VK_SAMPLE_COUNT_4_BIT);
     void destroy();
     void recreateMsaa(Device& d, VkSampleCountFlagBits samples);
+
+    void ensureAaResources(Device& d);
+    void destroyAaResources();
 
     VkExtent2D extent{};
 };

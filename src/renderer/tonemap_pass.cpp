@@ -58,6 +58,17 @@ void TonemapPass::destroy() {
     m_device = nullptr;
 }
 
+void TonemapPass::bindOutput(Device& d, VkImageView outView) {
+    VkDescriptorImageInfo ldrInfo{};
+    ldrInfo.imageView = outView;
+    ldrInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+
+    VkWriteDescriptorSet w{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+    w.dstSet = m_set; w.dstBinding = 2; w.descriptorCount = 1;
+    w.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE; w.pImageInfo = &ldrInfo;
+    vkUpdateDescriptorSets(d.device(), 1, &w, 0, nullptr);
+}
+
 void TonemapPass::bindTargets(Device& d, const RenderTargets& rt) {
     VkDescriptorImageInfo hdrInfo{};
     hdrInfo.imageView = rt.hdrColor.view();

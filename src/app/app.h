@@ -34,6 +34,8 @@
 #include "renderer/gtgi_pass.h"
 #include "renderer/skybox_pass.h"
 #include "renderer/tonemap_pass.h"
+#include "renderer/taa_pass.h"
+#include "renderer/smaa_pass.h"
 #include "renderer/imgui_pass.h"
 #include "renderer/scene_rt_as.h"
 #include "renderer/rt_gi_pass.h"
@@ -146,6 +148,12 @@ private:
     // 一帧只跑其中一个；None 走 clear-to-1.0 路径。
     enum class AOMethod : int { None = 0, SSAO = 1, GTAO = 2 };
     AOMethod m_aoMethod = AOMethod::SSAO;
+
+    // AA 方法选择
+    enum class AAMethod : int { None = 0, MSAA = 1, TAA = 2, SMAA = 3 };
+    AAMethod m_aaMethod = AAMethod::MSAA;
+    glm::vec2 m_jitter{};       // current frame TAA jitter in NDC
+    glm::vec2 m_prevJitter{};   // previous frame TAA jitter
     SsrPass m_ssr;             // M4.2: screen-space reflections, replaces IBL specular
     SsgiPass m_ssgi;           // M4.3: screen-space 1-bounce diffuse, replaces IBL diffuse
     GtgiPass m_gtgi;           // C.1: GTGI（horizon-based GI，Sucker Punch 2024）
@@ -153,6 +161,8 @@ private:
     SceneRtAS m_rtAS;      // M9 HW RT acceleration structure (BLAS + TLAS)
     RtGiPass  m_rtGiPass;  // M9 HW RT GI compute pass
     TonemapPass m_tonemap;
+    TaaPass m_taa;
+    SmaaPass m_smaa;
     ImGuiPass m_imgui;
 
     // Pre-baked env from skybox.hdr — owned by App, lives across GI changes.
