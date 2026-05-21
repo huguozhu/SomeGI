@@ -26,6 +26,7 @@ constexpr SceneEntry kScenes[] = {
     { "Sponza",         "gltf/Sponza/Sponza.gltf" },
     { "CornellBox",     "gltf/CornellBox/CornellBox.gltf" },
     { "DamagedHelmet",  "gltf/DamagedHelmet/DamagedHelmet.gltf" },
+    { "Bistro",         "gltf/Bistro/Bistro.gltf" },
 };
 
 // 用 implemented=false 占位的下拉项当 roadmap 用：选中后 applyGiSelection
