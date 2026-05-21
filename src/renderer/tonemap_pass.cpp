@@ -35,17 +35,18 @@ void TonemapPass::init(Device& d, VkSampler linearSampler) {
     VK_CHECK(vkCreateComputePipelines(d.device(), VK_NULL_HANDLE, 1, &cpci, nullptr, &m_pipeline));
 
     std::array<VkDescriptorPoolSize, 3> ps{{
-        {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1},
-        {VK_DESCRIPTOR_TYPE_SAMPLER,       1},
-        {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1},
+        {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1u * kFramesInFlight},
+        {VK_DESCRIPTOR_TYPE_SAMPLER,       1u * kFramesInFlight},
+        {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1u * kFramesInFlight},
     }};
     VkDescriptorPoolCreateInfo pci{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
-    pci.maxSets = 1; pci.poolSizeCount = (uint32_t)ps.size(); pci.pPoolSizes = ps.data();
+    pci.maxSets = kFramesInFlight; pci.poolSizeCount = (uint32_t)ps.size(); pci.pPoolSizes = ps.data();
     VK_CHECK(vkCreateDescriptorPool(d.device(), &pci, nullptr, &m_pool));
 
+    VkDescriptorSetLayout layouts[] = {m_setLayout, m_setLayout};
     VkDescriptorSetAllocateInfo dai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
-    dai.descriptorPool = m_pool; dai.descriptorSetCount = 1; dai.pSetLayouts = &m_setLayout;
-    VK_CHECK(vkAllocateDescriptorSets(d.device(), &dai, &m_set));
+    dai.descriptorPool = m_pool; dai.descriptorSetCount = kFramesInFlight; dai.pSetLayouts = layouts;
+    VK_CHECK(vkAllocateDescriptorSets(d.device(), &dai, m_sets));
 }
 
 void TonemapPass::destroy() {
@@ -58,13 +59,13 @@ void TonemapPass::destroy() {
     m_device = nullptr;
 }
 
-void TonemapPass::bindOutput(Device& d, VkImageView outView) {
+void TonemapPass::bindOutput(Device& d, VkImageView outView, uint32_t frameIdx) {
     VkDescriptorImageInfo ldrInfo{};
     ldrInfo.imageView = outView;
     ldrInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
 
     VkWriteDescriptorSet w{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-    w.dstSet = m_set; w.dstBinding = 2; w.descriptorCount = 1;
+    w.dstSet = m_sets[frameIdx]; w.dstBinding = 2; w.descriptorCount = 1;
     w.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE; w.pImageInfo = &ldrInfo;
     vkUpdateDescriptorSets(d.device(), 1, &w, 0, nullptr);
 }
@@ -81,23 +82,25 @@ void TonemapPass::bindTargets(Device& d, const RenderTargets& rt) {
     ldrInfo.imageView = rt.ldrTonemap.view();
     ldrInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
 
-    std::array<VkWriteDescriptorSet, 3> w{};
-    w[0] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-    w[0].dstSet = m_set; w[0].dstBinding = 0; w[0].descriptorCount = 1;
-    w[0].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE; w[0].pImageInfo = &hdrInfo;
-    w[1] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-    w[1].dstSet = m_set; w[1].dstBinding = 1; w[1].descriptorCount = 1;
-    w[1].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER; w[1].pImageInfo = &sampInfo;
-    w[2] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-    w[2].dstSet = m_set; w[2].dstBinding = 2; w[2].descriptorCount = 1;
-    w[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE; w[2].pImageInfo = &ldrInfo;
-    vkUpdateDescriptorSets(d.device(), (uint32_t)w.size(), w.data(), 0, nullptr);
+    for (uint32_t fi = 0; fi < kFramesInFlight; ++fi) {
+        std::array<VkWriteDescriptorSet, 3> w{};
+        w[0] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+        w[0].dstSet = m_sets[fi]; w[0].dstBinding = 0; w[0].descriptorCount = 1;
+        w[0].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE; w[0].pImageInfo = &hdrInfo;
+        w[1] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+        w[1].dstSet = m_sets[fi]; w[1].dstBinding = 1; w[1].descriptorCount = 1;
+        w[1].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER; w[1].pImageInfo = &sampInfo;
+        w[2] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+        w[2].dstSet = m_sets[fi]; w[2].dstBinding = 2; w[2].descriptorCount = 1;
+        w[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE; w[2].pImageInfo = &ldrInfo;
+        vkUpdateDescriptorSets(d.device(), (uint32_t)w.size(), w.data(), 0, nullptr);
+    }
 }
 
-void TonemapPass::record(VkCommandBuffer cmd, const RenderTargets& rt) {
+void TonemapPass::record(VkCommandBuffer cmd, const RenderTargets& rt, uint32_t frameIdx) {
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipeline);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
-                            m_pipelineLayout, 0, 1, &m_set, 0, nullptr);
+                            m_pipelineLayout, 0, 1, &m_sets[frameIdx], 0, nullptr);
     uint32_t gx = (rt.extent.width  + 7) / 8;
     uint32_t gy = (rt.extent.height + 7) / 8;
     vkCmdDispatch(cmd, gx, gy, 1);

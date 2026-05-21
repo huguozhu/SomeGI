@@ -1139,7 +1139,7 @@ void App::buildUI() {
                                 m_smaa.bindResources(*m_device, m_rt);
                             } else {
                                 m_rt.destroyAaResources();
-                                m_tonemap.bindOutput(*m_device, m_rt.ldrTonemap.view());
+                                m_tonemap.bindOutput(*m_device, m_rt.ldrTonemap.view(), 0);
                             }
                         }
                     }
@@ -2717,8 +2717,8 @@ void App::run() {
                 VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
                 VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
                 VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
-            m_tonemap.bindOutput(*m_device, m_rt.aaHdr.view());
-            m_tonemap.record(cmd, m_rt);
+            m_tonemap.bindOutput(*m_device, m_rt.aaHdr.view(), frame.frameInFlight);
+            m_tonemap.record(cmd, m_rt, frame.frameInFlight);
 
             // Barrier: aaHdr GENERAL → SHADER_READ_ONLY for AA pass
             transitionImage(cmd, m_rt.aaHdr.image(), VK_IMAGE_ASPECT_COLOR_BIT,
@@ -2793,8 +2793,8 @@ void App::run() {
                 VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
                 VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
                 VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
-            m_tonemap.bindOutput(*m_device, m_rt.ldrTonemap.view());
-            m_tonemap.record(cmd, m_rt);
+            m_tonemap.bindOutput(*m_device, m_rt.ldrTonemap.view(), frame.frameInFlight);
+            m_tonemap.record(cmd, m_rt, frame.frameInFlight);
 
             // Barrier: ldrTonemap GENERAL → TRANSFER_SRC for blit
             transitionImage(cmd, m_rt.ldrTonemap.image(), VK_IMAGE_ASPECT_COLOR_BIT,

@@ -11,8 +11,8 @@ public:
     void destroy();
 
     void bindTargets(Device& d, const RenderTargets& rt);
-    void bindOutput(Device& d, VkImageView outView);   // rebind only output image
-    void record(VkCommandBuffer cmd, const RenderTargets& rt);
+    void bindOutput(Device& d, VkImageView outView, uint32_t frameIdx);
+    void record(VkCommandBuffer cmd, const RenderTargets& rt, uint32_t frameIdx);
 
 private:
     Device* m_device = nullptr;
@@ -20,7 +20,7 @@ private:
     VkPipelineLayout m_pipelineLayout = VK_NULL_HANDLE;
     VkPipeline m_pipeline = VK_NULL_HANDLE;
     VkDescriptorPool m_pool = VK_NULL_HANDLE;
-    VkDescriptorSet m_set = VK_NULL_HANDLE;
+    VkDescriptorSet m_sets[kFramesInFlight]{};
     VkSampler m_sampler = VK_NULL_HANDLE;
 };
 
