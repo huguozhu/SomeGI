@@ -28,7 +28,7 @@ constexpr SceneEntry kScenes[] = {
 
 // 用 implemented=false 占位的下拉项当 roadmap 用：选中后 applyGiSelection
 // 把 effective 落到 IBL 兜底，但 dropdown 标签仍显示原 name + " (未实现)"。
-struct GiEntry { const char* name; bool implemented; };
+struct GiEntry { const char* name; bool implemented; bool requiresRt = false; };
 GiEntry kGis[] = {
     {"None (direct only)", true},
     {"IBL",                true},
@@ -40,15 +40,19 @@ GiEntry kGis[] = {
     {"DDGI",               true},   // M11（M9/M10 软件版兼并的实用替代）
     {"GTGI",               true},   // C.1 Sucker Punch 2024 horizon-based GI
     {"SDFGI",              true},   // C.3 Godot 4 风格 SDFGI-lite（JFA + sphere-trace）
-    {"RayTracing",         false},  // M9 deferred (no HW RT on Intel UHD 770)
+    {"RayTracing",         false, true},  // M9 deferred (no HW RT on Intel UHD 770)
     {"ReSTIR DI",          true},   // C.4 软件版（reservoir resampling on point lights）
-    {"Lumen-lite",         false},  // L 阶段：UE5 Lumen 简化复刻（Phase L1）
+    {"Lumen-lite",         false, true},  // L 阶段：UE5 Lumen 简化复刻（Phase L1）
 };
 constexpr int kGiCount = (int)(sizeof(kGis)/sizeof(kGis[0]));
 
 inline const char* giLabel(int i, char* buf, size_t bufSize) {
     if (i < 0 || i >= kGiCount) return "?";
-    if (kGis[i].implemented) return kGis[i].name;
+    if (kGis[i].implemented && !kGis[i].requiresRt) return kGis[i].name;
+    if (kGis[i].implemented && kGis[i].requiresRt) {
+        std::snprintf(buf, bufSize, "%s (RT)", kGis[i].name);
+        return buf;
+    }
     std::snprintf(buf, bufSize, "%s (未实现)", kGis[i].name);
     return buf;
 }
@@ -1078,10 +1082,22 @@ void App::buildUI() {
                     char itemBuf[64];
                     const char* itemLabel = giLabel(i, itemBuf, sizeof(itemBuf));
                     bool sel = (i == m_currentGiIndex);
-                    if (ImGui::Selectable(itemLabel, sel)) m_currentGiIndex = i;
+                    if (ImGui::Selectable(itemLabel, sel)) {
+                        if (kGis[i].requiresRt && !m_rtSupported) {
+                            ImGui::OpenPopup("RT not supported");
+                        } else {
+                            m_currentGiIndex = i;
+                        }
+                    }
                     if (sel) ImGui::SetItemDefaultFocus();
                 }
                 ImGui::EndCombo();
+            }
+            if (ImGui::BeginPopupModal("RT not supported", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+                ImGui::Text("此 GI 需要硬件光线追踪（Ray Tracing），\n当前设备不支持。");
+                ImGui::Spacing();
+                if (ImGui::Button("确定", ImVec2(120, 0))) ImGui::CloseCurrentPopup();
+                ImGui::EndPopup();
             }
         }
         if (m_giTech) {
