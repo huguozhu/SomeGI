@@ -1037,7 +1037,12 @@ void App::buildUI() {
     if (ImGui::Begin("SomeGI Debug")) {
         ImGui::Text("Frame: %.2f ms (%.0f fps)  GPU: %.2f ms",
                     m_dtMs, m_fpsAvg, m_gpuMs);
-        ImGui::Separator();
+
+        if (ImGui::BeginTabBar("MainTabs")) {
+
+        // ===== Tab 1: Scene =====
+        if (ImGui::BeginTabItem("Scene")) {
+
         ImGui::Text("Scene");
         {
             const char* curName = (m_currentSceneIndex >= 0 &&
@@ -1060,6 +1065,7 @@ void App::buildUI() {
         ImGui::Text("  AABB min: %.1f %.1f %.1f", m_scene.aabbMin.x, m_scene.aabbMin.y, m_scene.aabbMin.z);
         ImGui::Text("  AABB max: %.1f %.1f %.1f", m_scene.aabbMax.x, m_scene.aabbMax.y, m_scene.aabbMax.z);
         ImGui::Separator();
+
         ImGui::Text("Camera");
         ImGui::DragFloat3("position", &m_camera.position.x, 0.5f);
         ImGui::DragFloat("yaw", &m_camera.yaw, 0.5f);
@@ -1068,11 +1074,20 @@ void App::buildUI() {
         glm::vec3 fwd = m_camera.forward();
         ImGui::Text("forward: %.2f %.2f %.2f", fwd.x, fwd.y, fwd.z);
         ImGui::Separator();
+
         ImGui::Text("Lighting");
         ImGui::DragFloat3("sun dir", &m_sunDir.x, 0.05f, -1.0f, 1.0f);
         ImGui::DragFloat("sun intensity", &m_sunIntensity, 0.05f, 0.0f, 20.0f);
         ImGui::ColorEdit3("ambient", &m_ambient.x);
         ImGui::Separator();
+
+        ImGui::Text("Mouse RMB: rotate  WASD/QE: move  Shift: fast");
+        ImGui::EndTabItem();
+        }
+
+        // ===== Tab 2: Display =====
+        if (ImGui::BeginTabItem("Display")) {
+
         ImGui::Text("MSAA");
         {
             VkSampleCountFlags supported = m_device->supportedSampleCounts();
@@ -1128,6 +1143,7 @@ void App::buildUI() {
             }
         }
         ImGui::Separator();
+
         ImGui::Text("Anti-Aliasing");
         {
             const char* items[] = {"None", "MSAA", "TAA", "SMAA"};
@@ -1158,6 +1174,72 @@ void App::buildUI() {
             ImGui::SliderFloat("TAA blend", &m_taaBlendAlpha, 0.5f, 0.98f, "%.3f");
         }
         ImGui::Separator();
+
+        ImGui::Text("Ambient Occlusion");
+        const char* aoLabels[] = {"None", "SSAO", "GTAO"};
+        int aoIdx = (int)m_aoMethod;
+        if (ImGui::BeginCombo("AO method", aoLabels[aoIdx])) {
+            for (int i = 0; i < 3; ++i) {
+                if (ImGui::Selectable(aoLabels[i], aoIdx == i)) m_aoMethod = (AOMethod)i;
+            }
+            ImGui::EndCombo();
+        }
+        if (m_aoMethod == AOMethod::SSAO) {
+            ImGui::DragFloat("SSAO radius",  &m_ssao.radius, 0.05f, 0.05f, 100.0f, "%.3f");
+            ImGui::DragFloat("SSAO bias",    &m_ssao.bias,   0.005f, 0.0f, 0.5f);
+            ImGui::SliderInt("SSAO samples", &m_ssao.sampleCount, 4, 64);
+        } else if (m_aoMethod == AOMethod::GTAO) {
+            ImGui::SliderInt("GTAO slices",   &m_gtao.sliceCount, 1, 8);
+            ImGui::SliderInt("GTAO samples/slice", &m_gtao.samplesPerSlice, 2, 16);
+            ImGui::DragFloat("GTAO radius (px)", &m_gtao.radiusPixels, 1.0f, 4.0f, 256.0f);
+            ImGui::DragFloat("GTAO falloff", &m_gtao.falloff, 0.1f, 0.5f, 50.0f);
+        }
+
+        ImGui::EndTabItem();
+        }
+
+        // ===== Tab 3: Effects =====
+        if (ImGui::BeginTabItem("Effects")) {
+
+        ImGui::Text("SSR (Screen-Space Reflections)");
+        ImGui::Checkbox("SSR enabled",     &m_ssr.enabled);
+        ImGui::SliderInt("SSR steps",      &m_ssr.maxSteps, 8, 128);
+        ImGui::DragFloat("SSR max dist",   &m_ssr.maxDist,  0.5f, 0.1f, 1000.0f);
+        ImGui::DragFloat("SSR thickness",  &m_ssr.thickness, 0.005f, 0.001f, 0.5f);
+        ImGui::DragFloat("SSR rough threshold", &m_ssr.roughThreshold, 0.01f, 0.0f, 1.0f);
+        ImGui::Separator();
+
+        ImGui::Text("SSGI (Screen-Space GI)");
+        ImGui::Checkbox("SSGI enabled",    &m_ssgi.enabled);
+        ImGui::SliderInt("SSGI samples",   &m_ssgi.sampleCount, 2, 32);
+        ImGui::SliderInt("SSGI steps",     &m_ssgi.maxSteps, 8, 64);
+        ImGui::DragFloat("SSGI max dist",  &m_ssgi.maxDist,  0.2f, 0.1f, 500.0f);
+        ImGui::DragFloat("SSGI thickness", &m_ssgi.thickness, 0.005f, 0.001f, 0.5f);
+        ImGui::Separator();
+
+        ImGui::Text("GTGI (Horizon-Based GI)");
+        ImGui::Checkbox("GTGI enabled",   &m_gtgi.enabled);
+        ImGui::SliderInt("GTGI slices",   &m_gtgi.sliceCount, 1, 8);
+        ImGui::SliderInt("GTGI samples/slice", &m_gtgi.samplesPerSlice, 2, 16);
+        ImGui::DragFloat("GTGI radius (px)", &m_gtgi.radiusPixels, 1.0f, 4.0f, 256.0f);
+        ImGui::DragFloat("GTGI falloff", &m_gtgi.falloff, 0.1f, 0.5f, 50.0f);
+
+        if (m_rtSupported) {
+            ImGui::Separator();
+            ImGui::Text("RT GI (Hardware Ray Tracing)");
+            ImGui::Text("RT GI %s (switch GI to 'RayTracing')",
+                        m_giIndexApplied == 10 ? "active" : "off");
+            if (m_rtAS.instanceCount() > 0) {
+                ImGui::Text("TLAS instances: %u", m_rtAS.instanceCount());
+            }
+        }
+
+        ImGui::EndTabItem();
+        }
+
+        // ===== Tab 4: GI =====
+        if (ImGui::BeginTabItem("GI")) {
+
         ImGui::Text("GI Technique");
         {
             char curBuf[64];
@@ -1182,79 +1264,47 @@ void App::buildUI() {
                 }
                 ImGui::EndCombo();
             }
-            if (ImGui::BeginPopupModal("RT not supported", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-                ImGui::Text("此 GI 需要硬件光线追踪（Ray Tracing），\n当前设备不支持。");
-                ImGui::Spacing();
-                if (ImGui::Button("确定", ImVec2(120, 0))) ImGui::CloseCurrentPopup();
-                ImGui::EndPopup();
-            }
-        }
-        if (ImGui::BeginPopupModal("Scene load failed", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-            ImGui::Text("%s", m_sceneLoadError.c_str());
-            ImGui::Spacing();
-            if (ImGui::Button("确定", ImVec2(120, 0))) ImGui::CloseCurrentPopup();
-            ImGui::EndPopup();
         }
         if (m_giTech) {
             ImGui::Text("Active: %s", m_giTech->name());
             m_giTech->drawUI();
         }
         ImGui::Separator();
-        ImGui::Text("SSAO");
-        // AO method radio
-        const char* aoLabels[] = {"None", "SSAO", "GTAO"};
-        int aoIdx = (int)m_aoMethod;
-        if (ImGui::BeginCombo("AO method", aoLabels[aoIdx])) {
-            for (int i = 0; i < 3; ++i) {
-                if (ImGui::Selectable(aoLabels[i], aoIdx == i)) m_aoMethod = (AOMethod)i;
-            }
-            ImGui::EndCombo();
-        }
-        if (m_aoMethod == AOMethod::SSAO) {
-            ImGui::DragFloat("SSAO radius",  &m_ssao.radius, 0.05f, 0.05f, 100.0f, "%.3f");
-            ImGui::DragFloat("SSAO bias",    &m_ssao.bias,   0.005f, 0.0f, 0.5f);
-            ImGui::SliderInt("SSAO samples", &m_ssao.sampleCount, 4, 64);
-        } else if (m_aoMethod == AOMethod::GTAO) {
-            ImGui::SliderInt("GTAO slices",   &m_gtao.sliceCount, 1, 8);
-            ImGui::SliderInt("GTAO samples/slice", &m_gtao.samplesPerSlice, 2, 16);
-            ImGui::DragFloat("GTAO radius (px)", &m_gtao.radiusPixels, 1.0f, 4.0f, 256.0f);
-            ImGui::DragFloat("GTAO falloff", &m_gtao.falloff, 0.1f, 0.5f, 50.0f);
-        }
-        ImGui::Separator();
-        ImGui::Text("SSR");
-        ImGui::Checkbox("SSR enabled",     &m_ssr.enabled);
-        ImGui::SliderInt("SSR steps",      &m_ssr.maxSteps, 8, 128);
-        ImGui::DragFloat("SSR max dist",   &m_ssr.maxDist,  0.5f, 0.1f, 1000.0f);
-        ImGui::DragFloat("SSR thickness",  &m_ssr.thickness, 0.005f, 0.001f, 0.5f);
-        ImGui::DragFloat("SSR rough threshold", &m_ssr.roughThreshold, 0.01f, 0.0f, 1.0f);
-        ImGui::Separator();
-        ImGui::Text("SSGI");
-        ImGui::Checkbox("SSGI enabled",    &m_ssgi.enabled);
-        ImGui::SliderInt("SSGI samples",   &m_ssgi.sampleCount, 2, 32);
-        ImGui::SliderInt("SSGI steps",     &m_ssgi.maxSteps, 8, 64);
-        ImGui::DragFloat("SSGI max dist",  &m_ssgi.maxDist,  0.2f, 0.1f, 500.0f);
-        ImGui::DragFloat("SSGI thickness", &m_ssgi.thickness, 0.005f, 0.001f, 0.5f);
-        ImGui::Separator();
-        ImGui::Text("GTGI (Sucker Punch 2024 horizon-based GI)");
-        ImGui::Checkbox("GTGI enabled",   &m_gtgi.enabled);
-        ImGui::SliderInt("GTGI slices",   &m_gtgi.sliceCount, 1, 8);
-        ImGui::SliderInt("GTGI samples/slice", &m_gtgi.samplesPerSlice, 2, 16);
-        ImGui::DragFloat("GTGI radius (px)", &m_gtgi.radiusPixels, 1.0f, 4.0f, 256.0f);
-        ImGui::DragFloat("GTGI falloff", &m_gtgi.falloff, 0.1f, 0.5f, 50.0f);
-        ImGui::Separator();
-        // M9 RT GI：在 HW 支持时显示状态信息
-        if (m_rtSupported) {
-            ImGui::Text("RT GI (M9 硬件光线追踪)");
-            ImGui::Text("RT GI %s（GI 下拉切到 'RayTracing'）",
-                        m_giIndexApplied == 10 ? "active" : "off");
-            if (m_rtAS.instanceCount() > 0) {
-                ImGui::Text("TLAS instances: %u", m_rtAS.instanceCount());
-            }
-            ImGui::Separator();
-        }
 
-        ImGui::Text("SDFGI (C.3 Godot4 风格 - JFA UDF + sphere-trace)");
-        ImGui::Text("SDFGI %s（GI 下拉切到 'SDFGI'）",
+        ImGui::Text("RSM (Reflective Shadow Maps)");
+        ImGui::Checkbox("RSM enabled",     &m_rsmSample.enabled);
+        ImGui::SliderInt("RSM samples",    &m_rsmSample.sampleCount, 4, 128);
+        ImGui::DragFloat("RSM radius",     &m_rsmSample.radius,    0.005f, 0.001f, 0.5f);
+        ImGui::DragFloat("RSM intensity",  &m_rsmSample.intensity, 0.05f,  0.0f, 20.0f);
+        ImGui::Separator();
+
+        ImGui::Text("LPV (Light Propagation Volumes, 32^3)");
+        ImGui::Checkbox("LPV enabled",     &m_lpvEnabled);
+        ImGui::SliderInt("LPV iterations", &m_lpvProp.iterations, 0, 16);
+        ImGui::DragFloat("LPV amplifier",  &m_lpvProp.occlusionAmplifier, 0.05f, 0.0f, 5.0f);
+        ImGui::DragFloat("LPV GV occlusion", &m_lpvProp.gvOcclusionStrength, 0.05f, 0.0f, 5.0f);
+        ImGui::Text("LPV cell=%.2f gridMin=(%.1f %.1f %.1f)",
+                    m_lpvCellSize, m_lpvGridMin.x, m_lpvGridMin.y, m_lpvGridMin.z);
+        ImGui::Separator();
+
+        ImGui::Text("VXGI (Voxel Cone Tracing, 128^3)");
+        ImGui::Checkbox("VXGI enabled", &m_vxgiEnabled);
+        ImGui::Text("VXGI cell=%.3f mipLevels=%u",
+                    m_vxgiCellSize, m_vxgi.mipLevels());
+        ImGui::Checkbox("VXGI multi-bounce relight", &m_vxgiRelightEnabled);
+        ImGui::SliderFloat("Relight bounce strength", &m_vxgiRelightStrength,
+                           0.0f, 4.0f, "%.2f");
+        ImGui::Separator();
+
+        ImGui::Text("DDGI (Dynamic Diffuse GI)");
+        ImGui::Checkbox("DDGI enabled", &m_ddgiEnabled);
+        ImGui::Text("spacing=(%.1f %.1f %.1f) origin=(%.1f %.1f %.1f)",
+                    m_ddgiSpacing.x, m_ddgiSpacing.y, m_ddgiSpacing.z,
+                    m_ddgiOrigin.x, m_ddgiOrigin.y, m_ddgiOrigin.z);
+        ImGui::Separator();
+
+        ImGui::Text("SDFGI (Signed Distance Field GI)");
+        ImGui::Text("SDFGI %s (switch GI to 'SDFGI')",
                     m_sdfgiPass.enabled ? "active" : "off");
         ImGui::SliderInt("SDFGI rays", &m_sdfgiPass.numRays, 1, 16);
         ImGui::SliderInt("SDFGI maxSteps", &m_sdfgiPass.maxSteps, 8, 96);
@@ -1262,10 +1312,25 @@ void App::buildUI() {
         ImGui::DragFloat("SDFGI hitEps (cells)", &m_sdfgiPass.hitEpsCells, 0.05f, 0.1f, 2.0f);
         ImGui::DragFloat("SDFGI seedThr", &m_sdfgiPass.seedThreshold, 0.005f, 0.0f, 0.5f);
         ImGui::Separator();
+
+        ImGui::Text("PRT (Precomputed Radiance Transfer, 32^3)");
+        ImGui::Checkbox("PRT enabled", &m_prtEnabled);
+        const char* shLabels[] = {
+            "SH4  (order-1, 4 coefs)",
+            "SH9  (order-2, 9 coefs)",
+            "SH16 (order-3, 16 coefs)"
+        };
+        ImGui::Combo("PRT SH order", &m_prtShOrder, shLabels, 3);
+        if (m_prtShOrder < 0) m_prtShOrder = 0;
+        if (m_prtShOrder > 2) m_prtShOrder = 2;
+        ImGui::Text("PRT cell=%.2f baked=%s", m_prtCellSize, m_prtBaked ? "yes" : "no");
+        if (ImGui::Button("Re-bake PRT")) m_prtBaked = false;
+        ImGui::Separator();
+
         bool restirUsingRt = m_rtSupported && m_rtGiBound && m_restirPass.enabled;
-        ImGui::Text("ReSTIR DI (%s - reservoir resampling on point lights)",
-                    restirUsingRt ? "M10 HW RT visibility" : "C.4 voxel visibility");
-        ImGui::Text("ReSTIR %s（GI 下拉切到 'ReSTIR DI'）",
+        ImGui::Text("ReSTIR DI (%s)",
+                    restirUsingRt ? "HW RT visibility" : "voxel visibility");
+        ImGui::Text("ReSTIR %s (switch GI to 'ReSTIR DI')",
                     m_restirPass.enabled ? "active" : "off");
         if (ImGui::SliderInt("ReSTIR demo lights", &m_demoLightCount, 0, 8)) {
             rebuildDemoLights();
@@ -1279,14 +1344,14 @@ void App::buildUI() {
         ImGui::SliderInt("ReSTIR shadow steps", &m_restirPass.shadowSteps, 0, 16);
         ImGui::DragFloat("ReSTIR intensity scale", &m_restirPass.intensityScale, 0.05f, 0.0f, 8.0f);
         ImGui::Separator();
-        ImGui::Text("Lumen-lite (L.2+L.5 Screen Probes)");
-        ImGui::Text("Lumen %s（GI 下拉切到 'Lumen-lite'）",
+
+        ImGui::Text("Lumen-lite (Screen Probes)");
+        ImGui::Text("Lumen %s (switch GI to 'Lumen-lite')",
                     m_lumenEnabled ? "active" : "off");
         if (m_lumenEnabled) {
             ImGui::Text("Probe grid: %d x %d (%d probes, %d rays each)",
                         m_lumen.probeGridW(), m_lumen.probeGridH(),
                         m_lumen.probeCount(), (int)LumenResources::kRaysPerProbe);
-            // L.4 filter params
             ImGui::SliderFloat("Filter sigmaDepth", &m_lumenFilterPass.sigmaDepth,
                                0.01f, 1.0f, "%.3f");
             ImGui::SliderFloat("Filter normalPower", &m_lumenFilterPass.normalPower,
@@ -1298,54 +1363,26 @@ void App::buildUI() {
             ImGui::Combo("Debug mode", &m_lumenDebugMode,
                          "Normal\0SH DC only\0Probe colors\0Const radiance\0Fixed SH\0Clear only\0");
         }
-        ImGui::Separator();
-        ImGui::Text("RSM");
-        ImGui::Checkbox("RSM enabled",     &m_rsmSample.enabled);
-        ImGui::SliderInt("RSM samples",    &m_rsmSample.sampleCount, 4, 128);
-        ImGui::DragFloat("RSM radius",     &m_rsmSample.radius,    0.005f, 0.001f, 0.5f);
-        ImGui::DragFloat("RSM intensity",  &m_rsmSample.intensity, 0.05f,  0.0f, 20.0f);
-        ImGui::Separator();
-        ImGui::Text("LPV (32^3 grid)");
-        ImGui::Checkbox("LPV enabled",     &m_lpvEnabled);
-        ImGui::SliderInt("LPV iterations", &m_lpvProp.iterations, 0, 16);
-        ImGui::DragFloat("LPV amplifier",  &m_lpvProp.occlusionAmplifier, 0.05f, 0.0f, 5.0f);
-        ImGui::DragFloat("LPV GV occlusion", &m_lpvProp.gvOcclusionStrength, 0.05f, 0.0f, 5.0f);
-        ImGui::Text("LPV cell=%.2f gridMin=(%.1f %.1f %.1f)",
-                    m_lpvCellSize, m_lpvGridMin.x, m_lpvGridMin.y, m_lpvGridMin.z);
-        ImGui::Separator();
-        ImGui::Text("VXGI (128^3 voxel + cone trace)");
-        ImGui::Checkbox("VXGI enabled", &m_vxgiEnabled);
-        ImGui::Text("VXGI cell=%.3f mipLevels=%u",
-                    m_vxgiCellSize, m_vxgi.mipLevels());
-        // C.2 multi-bounce relight：每帧把 indirect cone-gather 加回 voxel mip 0
-        // → 下一帧 lighting 的 cone trace 看到 2-bounce 间接光。
-        ImGui::Checkbox("VXGI multi-bounce relight (C.2)", &m_vxgiRelightEnabled);
-        ImGui::SliderFloat("Relight bounce strength", &m_vxgiRelightStrength,
-                           0.0f, 4.0f, "%.2f");
-        ImGui::Separator();
-        ImGui::Text("PRT (32^3 visibility transfer SH)");
-        ImGui::Checkbox("PRT enabled", &m_prtEnabled);
-        // SH order toggle：bake 永远是 SH16（16 系数），lighting 按 toggle 选 4/9/16。
-        // SH16 的 l=3 项 A_3=0（Ramamoorthi-Hanrahan）→ diffuse 与 SH9 数值
-        // 等价；SH16 选项主要为 toggle 验证 + 后续 specular PRT 预留基础。
-        const char* shLabels[] = {
-            "SH4  (order-1, 4 coefs)",
-            "SH9  (order-2, 9 coefs)",
-            "SH16 (order-3, 16 coefs; A_3=0 → diffuse = SH9)"
-        };
-        ImGui::Combo("PRT SH order", &m_prtShOrder, shLabels, 3);
-        if (m_prtShOrder < 0) m_prtShOrder = 0;
-        if (m_prtShOrder > 2) m_prtShOrder = 2;
-        ImGui::Text("PRT cell=%.2f baked=%s", m_prtCellSize, m_prtBaked ? "yes" : "no");
-        if (ImGui::Button("Re-bake PRT")) m_prtBaked = false;
-        ImGui::Separator();
-        ImGui::Text("DDGI (8x4x8 probes, octahedral atlas)");
-        ImGui::Checkbox("DDGI enabled", &m_ddgiEnabled);
-        ImGui::Text("DDGI spacing=(%.1f %.1f %.1f) origin=(%.1f %.1f %.1f)",
-                    m_ddgiSpacing.x, m_ddgiSpacing.y, m_ddgiSpacing.z,
-                    m_ddgiOrigin.x, m_ddgiOrigin.y, m_ddgiOrigin.z);
-        ImGui::Separator();
-        ImGui::Text("Mouse RMB: rotate  WASD/QE: move  Shift: fast");
+
+        ImGui::EndTabItem();
+        }
+
+        ImGui::EndTabBar();
+        }
+
+        // Global modal popups (outside tab bar)
+        if (ImGui::BeginPopupModal("RT not supported", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+            ImGui::Text("This GI requires hardware Ray Tracing,\nnot supported on this device.");
+            ImGui::Spacing();
+            if (ImGui::Button("OK", ImVec2(120, 0))) ImGui::CloseCurrentPopup();
+            ImGui::EndPopup();
+        }
+        if (ImGui::BeginPopupModal("Scene load failed", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+            ImGui::Text("%s", m_sceneLoadError.c_str());
+            ImGui::Spacing();
+            if (ImGui::Button("OK", ImVec2(120, 0))) ImGui::CloseCurrentPopup();
+            ImGui::EndPopup();
+        }
     }
     ImGui::End();
     (void)io;
