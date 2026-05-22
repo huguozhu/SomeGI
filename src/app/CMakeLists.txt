@@ -3,7 +3,7 @@ add_executable(SomeGI
     app.h
     app.cpp
 )
-target_link_libraries(SomeGI PRIVATE somegi_core somegi_scene somegi_gi somegi_renderer somegi_nanite)
+target_link_libraries(SomeGI PRIVATE somegi_core somegi_scene somegi_gi somegi_renderer)
 target_compile_definitions(SomeGI PRIVATE
     SOMEGI_SHADER_DIR="${CMAKE_BINARY_DIR}/shaders"
     SOMEGI_ASSET_DIR="${CMAKE_SOURCE_DIR}/assets"
