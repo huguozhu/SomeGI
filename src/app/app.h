@@ -43,6 +43,7 @@
 #include "renderer/lumen_probe_pass.h"
 #include "renderer/lumen_gather_pass.h"
 #include "renderer/lumen_filter_pass.h"
+#include "renderer/barrier_manager.h"
 #include <map>
 #include <memory>
 #include <filesystem>
@@ -170,6 +171,7 @@ private:
     SceneRtAS m_rtAS;      // M9 HW RT acceleration structure (BLAS + TLAS)
     RtGiPass  m_rtGiPass;  // M9 HW RT GI compute pass
     TonemapPass m_tonemap;
+    BarrierManager m_barriers;
     TaaPass m_taa;
     SmaaPass m_smaa;
     bool m_aaHistoryNeedsInit = false;   // aaHistory needs UNDEFINED→SHADER_READ_ONLY transition

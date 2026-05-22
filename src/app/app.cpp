@@ -219,6 +219,18 @@ App::App() {
 
     std::printf("[init] render targets...\n");
     m_rt.create(*m_device, m_swap->extent(), m_msaaSamples);
+
+    // Register all pipeline images with BarrierManager for automatic layout tracking
+    m_barriers.registerImage(m_rt.gAlbedoMetal.image(), VK_IMAGE_ASPECT_COLOR_BIT);
+    m_barriers.registerImage(m_rt.gNormalRough.image(),  VK_IMAGE_ASPECT_COLOR_BIT);
+    m_barriers.registerImage(m_rt.gEmissiveAO.image(),   VK_IMAGE_ASPECT_COLOR_BIT);
+    m_barriers.registerImage(m_rt.depth.image(),          VK_IMAGE_ASPECT_DEPTH_BIT);
+    m_barriers.registerImage(m_rt.hdrColor.image(),       VK_IMAGE_ASPECT_COLOR_BIT);
+    m_barriers.registerImage(m_rt.ssao.image(),           VK_IMAGE_ASPECT_COLOR_BIT);
+    m_barriers.registerImage(m_rt.ssr.image(),            VK_IMAGE_ASPECT_COLOR_BIT);
+    m_barriers.registerImage(m_rt.ssgi.image(),           VK_IMAGE_ASPECT_COLOR_BIT);
+    m_barriers.registerImage(m_rt.ldrTonemap.image(),     VK_IMAGE_ASPECT_COLOR_BIT);
+
     std::printf("[init] gbuffer pass...\n");
     m_gbuffer.init(*m_device,
                    VK_FORMAT_R8G8B8A8_UNORM,
