@@ -92,11 +92,18 @@ private:
     VkCommandPool m_pool = VK_NULL_HANDLE;
     VkCommandBuffer m_cmds[kFramesInFlight]{};
 
-    // A.2: GPU 时间戳。每帧 2 个 query (TOP + BOTTOM)；下一次同 in-flight
-    // 帧消费上次的结果。timestampPeriod 来自 device limits。
+    // A.2: GPU per-pass timestamp profiling
+    static constexpr uint32_t kTimestampSlots = 9; // slots per frame
+    // Slot order: start, gbuffer, ao+ss, voxel_gi, lighting, skybox, tonemap, aa, end
+    enum TimestampSlot : uint32_t {
+        kTsStart = 0, kTsGBuffer, kTsAO, kTsVoxelGI, kTsLighting,
+        kTsSkybox, kTsTonemap, kTsAA, kTsEnd, kTsCount = kTsEnd
+    };
     VkQueryPool m_timestampPool = VK_NULL_HANDLE;
     bool m_timestampValid[kFramesInFlight]{};
-    float m_gpuMs = 0.0f;       // 平滑后的最近 GPU 帧时
+    float m_gpuMs = 0.0f;           // smoothed total GPU frame time
+    float m_passMs[kFramesInFlight][kTimestampSlots]{}; // per-pass smoothed times
+    const char* m_passNames[kTimestampSlots]{};
 
     SceneCpu m_scene;
     SceneGpu m_sceneGpu;

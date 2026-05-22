@@ -200,15 +200,22 @@ App::App() {
     ai.commandBufferCount = kFramesInFlight;
     VK_CHECK(vkAllocateCommandBuffers(m_device->device(), &ai, m_cmds));
 
-    // A.2：GPU timestamp query pool。每帧 2 个 (start + end)，per-in-flight
-    // 各占 2 个 query slot。读回时机：下一轮同 frameInFlight 时，上次结果
-    // 已经完成（vkWaitForFences 已保证），可安全 vkGetQueryPoolResults。
+    // A.2：GPU per-pass timestamp query pool
     {
         VkQueryPoolCreateInfo qpci{VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO};
         qpci.queryType = VK_QUERY_TYPE_TIMESTAMP;
-        qpci.queryCount = kFramesInFlight * 2;
+        qpci.queryCount = kFramesInFlight * kTimestampSlots;
         VK_CHECK(vkCreateQueryPool(m_device->device(), &qpci, nullptr, &m_timestampPool));
     }
+    m_passNames[kTsStart]    = "Start";
+    m_passNames[kTsGBuffer]  = "GBuffer";
+    m_passNames[kTsAO]       = "AO+SS";
+    m_passNames[kTsVoxelGI]  = "VoxelGI";
+    m_passNames[kTsLighting] = "Lighting";
+    m_passNames[kTsSkybox]   = "Skybox";
+    m_passNames[kTsTonemap]  = "Tonemap";
+    m_passNames[kTsAA]       = "AA";
+    m_passNames[kTsEnd]      = "End";
 
     std::printf("[init] render targets...\n");
     m_rt.create(*m_device, m_swap->extent(), m_msaaSamples);
@@ -1242,6 +1249,24 @@ void App::buildUI() {
         ImGui::ColorEdit3("ambient", &m_ambient.x);
         ImGui::Separator();
 
+        ImGui::Separator();
+        ImGui::Text("GPU Profile");
+        {
+            uint32_t fi = 0; // show most recent frame's data
+            float* ms = m_passMs[fi];
+            float maxMs = 0.02f; // min bar width
+            for (uint32_t i = kTsGBuffer; i <= kTsEnd; ++i)
+                if (ms[i] > maxMs) maxMs = ms[i];
+
+            for (uint32_t i = kTsGBuffer; i <= kTsAA; ++i) {
+                const char* name = m_passNames[i];
+                float t = ms[i];
+                ImGui::Text("%-10s", name); ImGui::SameLine(80);
+                ImGui::ProgressBar(t / maxMs, ImVec2(120, 0), "");
+                ImGui::SameLine(); ImGui::Text("%5.2f ms", t);
+            }
+        }
+
         ImGui::Text("Mouse RMB: rotate  WASD/QE: move  Shift: fast");
         ImGui::EndTabItem();
         }
@@ -1742,19 +1767,34 @@ void App::run() {
 
         // A.2：先读上次这个 in-flight 的结果（acquireNextFrame 已经
         // wait-fence，老 query 安全），再 reset 写新 query。
-        uint32_t qBase = frame.frameInFlight * 2;
+        uint32_t qBase = frame.frameInFlight * kTimestampSlots;
+
+        // Read back previous frame's per-pass timestamps
         if (m_timestampValid[frame.frameInFlight]) {
-            uint64_t ts[2] = {0, 0};
+            uint64_t ts[kTimestampSlots] = {};
             VkResult r = vkGetQueryPoolResults(m_device->device(), m_timestampPool,
-                qBase, 2, sizeof(ts), ts, sizeof(uint64_t), VK_QUERY_RESULT_64_BIT);
-            if (r == VK_SUCCESS && ts[1] > ts[0]) {
-                float ms = float(ts[1] - ts[0]) * m_device->timestampPeriod() * 1e-6f;
-                m_gpuMs = m_gpuMs * 0.9f + ms * 0.1f;
+                qBase, kTimestampSlots, sizeof(ts), ts, sizeof(uint64_t), VK_QUERY_RESULT_64_BIT);
+            if (r == VK_SUCCESS) {
+                float period = m_device->timestampPeriod() * 1e-6f;
+                float total = 0;
+                float* dst = m_passMs[frame.frameInFlight];
+                for (uint32_t i = 1; i < kTimestampSlots; ++i) {
+                    if (ts[i] > ts[i-1]) {
+                        float ms = float(ts[i] - ts[i-1]) * period;
+                        dst[i] = dst[i] * 0.9f + ms * 0.1f;
+                        total += ms;
+                    }
+                }
+                if (total > 0) m_gpuMs = m_gpuMs * 0.9f + total * 0.1f;
             }
         }
-        vkCmdResetQueryPool(cmd, m_timestampPool, qBase, 2);
+
+        // Reset + write start timestamp
+        vkCmdResetQueryPool(cmd, m_timestampPool, qBase, kTimestampSlots);
         vkCmdWriteTimestamp2(cmd, VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT,
-                             m_timestampPool, qBase + 0);
+                             m_timestampPool, qBase + kTsStart);
+
+#define TS(slot) vkCmdWriteTimestamp2(cmd, VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT, m_timestampPool, qBase + (slot))
 
         // === Phase 0: RSM 几何（sun-view MRT） ===
         // 独立于主 camera，不依赖 GBuffer 也无 GBuffer 依赖；放最前面方
@@ -1815,6 +1855,8 @@ void App::run() {
             VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
             VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
             VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+
+        TS(kTsGBuffer);
 
         // MSAA images stay in attachment layout (no transition needed);
         // next frame's VK_IMAGE_LAYOUT_UNDEFINED oldLayout discards them.
@@ -1971,6 +2013,8 @@ void App::run() {
         bool needVoxelGrid = m_vxgiEnabled || m_ddgiEnabled || m_sdfgiPass.enabled
                            || m_lumenEnabled
                           || m_restirPass.enabled;
+        TS(kTsAO);
+
         if (needVoxelGrid) {
             // 1. clear 整张 mip chain 到 0。barrier 必须覆盖所有 mip（验证
             //    层会检查 vkCmdClearColorImage 的 range 内每一级 mip 都
@@ -2871,6 +2915,7 @@ void App::run() {
         }
 
         // === Phase 2: Lighting (compute) ===
+        TS(kTsVoxelGI);
         transitionImage(cmd, m_rt.hdrColor.image(), VK_IMAGE_ASPECT_COLOR_BIT,
             VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
             VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
@@ -2878,6 +2923,7 @@ void App::run() {
             VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
 
         m_lighting.record(cmd, m_rt);
+        TS(kTsLighting);
 
         // === Phase 3: Skybox (graphics) ===
         // hdrColor: GENERAL → COLOR_ATTACHMENT (test depth, fill where depth==1).
@@ -2926,6 +2972,8 @@ void App::run() {
             VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
             VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
 
+        TS(kTsSkybox);
+
         // === Phase 4: Tonemap (compute) + optional AA ===
         // hdrColor finishes phase 3.5 in TRANSFER_SRC, so transition from there.
         transitionImage(cmd, m_rt.hdrColor.image(), VK_IMAGE_ASPECT_COLOR_BIT,
@@ -2944,6 +2992,8 @@ void App::run() {
                 VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
             m_tonemap.bindOutput(*m_device, frame.view, frame.frameInFlight);
             m_tonemap.record(cmd, m_rt, frame.frameInFlight, true, 1.0f);
+            TS(kTsTonemap);
+            TS(kTsAA);  // no AA in HDR, immediately after tonemap
 
             // Transition swapchain to COLOR_ATTACHMENT for ImGui
             transitionImage(cmd, frame.image, VK_IMAGE_ASPECT_COLOR_BIT,
@@ -2963,6 +3013,7 @@ void App::run() {
                 VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
             m_tonemap.bindOutput(*m_device, m_rt.aaHdr.view(), frame.frameInFlight);
             m_tonemap.record(cmd, m_rt, frame.frameInFlight);
+            TS(kTsTonemap);
 
             // Barrier: aaHdr GENERAL → SHADER_READ_ONLY for AA pass
             transitionImage(cmd, m_rt.aaHdr.image(), VK_IMAGE_ASPECT_COLOR_BIT,
@@ -3034,6 +3085,7 @@ void App::run() {
                 m_smaa.bindResources(*m_device, m_rt);
                 m_smaa.record(cmd, m_rt);
             }
+            TS(kTsAA);
 
             // Barrier: ldrTonemap GENERAL → TRANSFER_SRC for blit
             transitionImage(cmd, m_rt.ldrTonemap.image(), VK_IMAGE_ASPECT_COLOR_BIT,
@@ -3048,6 +3100,7 @@ void App::run() {
                 VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
             m_tonemap.bindOutput(*m_device, m_rt.ldrTonemap.view(), frame.frameInFlight);
             m_tonemap.record(cmd, m_rt, frame.frameInFlight);
+            TS(kTsTonemap);
 
             // Barrier: ldrTonemap GENERAL → TRANSFER_SRC for blit
             transitionImage(cmd, m_rt.ldrTonemap.image(), VK_IMAGE_ASPECT_COLOR_BIT,
@@ -3080,6 +3133,8 @@ void App::run() {
 
         // Phase 4: ImGui on top of swapchain image
 
+        TS(kTsEnd);
+
         m_imgui.render(cmd, frame.view, frame.extent);
 
         transitionImage(cmd, frame.image, VK_IMAGE_ASPECT_COLOR_BIT,
@@ -3087,9 +3142,6 @@ void App::run() {
             VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
             VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT, 0);
 
-        // A.2：写 end timestamp，标记本 in-flight 的 query 有效。
-        vkCmdWriteTimestamp2(cmd, VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT,
-                             m_timestampPool, qBase + 1);
         m_timestampValid[frame.frameInFlight] = true;
 
         VK_CHECK(vkEndCommandBuffer(cmd));
