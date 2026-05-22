@@ -6,8 +6,6 @@ add_library(somegi_core STATIC
     device.cpp
     swapchain.h
     swapchain.cpp
-    allocator.h
-    allocator.cpp
     buffer.h
     buffer.cpp
     image.h
