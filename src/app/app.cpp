@@ -1303,6 +1303,15 @@ void App::buildUI() {
                 m_vxgiVoxelize.bindScene(*m_device, m_sceneGpu, (uint32_t)m_sceneGpu.images.size(), m_vxgi);
             }
         }
+        if (m_swap->hdrAvailable()) {
+            bool hdrOn = m_swap->hdrEnabled();
+            if (ImGui::Checkbox("HDR (scRGB)", &hdrOn)) {
+                m_device->waitIdle();
+                m_swap->setHdrEnabled(hdrOn);
+                m_imgui.destroy();
+                m_imgui.init(*m_device, m_window->handle(), m_swap->format(), kFramesInFlight);
+            }
+        }
         ImGui::Separator();
 
         ImGui::Text("Anti-Aliasing");
@@ -2925,6 +2934,24 @@ void App::run() {
             VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_READ_BIT,
             VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT);
 
+        bool hdrActive = m_swap->hdrEnabled();
+
+        // HDR path: tonemap → swapchain directly (scRGB), no AA, no blit
+        if (hdrActive) {
+            transitionImage(cmd, frame.image, VK_IMAGE_ASPECT_COLOR_BIT,
+                VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
+                VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
+                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
+            m_tonemap.bindOutput(*m_device, frame.view, frame.frameInFlight);
+            m_tonemap.record(cmd, m_rt, frame.frameInFlight, true, 1.0f);
+
+            // Transition swapchain to COLOR_ATTACHMENT for ImGui
+            transitionImage(cmd, frame.image, VK_IMAGE_ASPECT_COLOR_BIT,
+                VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
+                VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
+        } else {
+
         bool aaActive = (m_aaMethod == AAMethod::TAA || m_aaMethod == AAMethod::SMAA);
         if (aaActive) {
             m_rt.ensureAaResources(*m_device);
@@ -3043,11 +3070,15 @@ void App::run() {
             frame.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
             1, &blit, VK_FILTER_LINEAR);
 
-        // Phase 4: ImGui on top of swapchain image
+        // SDR: transition swapchain to COLOR_ATTACHMENT for ImGui
         transitionImage(cmd, frame.image, VK_IMAGE_ASPECT_COLOR_BIT,
             VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
             VK_PIPELINE_STAGE_2_BLIT_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
             VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
+
+        } // end SDR path
+
+        // Phase 4: ImGui on top of swapchain image
 
         m_imgui.render(cmd, frame.view, frame.extent);
 

@@ -4,6 +4,15 @@
 
 namespace somegi {
 
+namespace {
+struct TonemapPC {
+    uint32_t hdrMode;
+    float    exposure;
+    uint32_t pad0, pad1;
+};
+static_assert(sizeof(TonemapPC) == 16, "TonemapPC must match shader push constant layout");
+}
+
 void TonemapPass::init(Device& d, VkSampler linearSampler) {
     m_device = &d;
     m_sampler = linearSampler;
@@ -17,8 +26,10 @@ void TonemapPass::init(Device& d, VkSampler linearSampler) {
     li.bindingCount = (uint32_t)b.size(); li.pBindings = b.data();
     VK_CHECK(vkCreateDescriptorSetLayout(d.device(), &li, nullptr, &m_setLayout));
 
+    VkPushConstantRange pc{VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(TonemapPC)};
     VkPipelineLayoutCreateInfo plci{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
     plci.setLayoutCount = 1; plci.pSetLayouts = &m_setLayout;
+    plci.pushConstantRangeCount = 1; plci.pPushConstantRanges = &pc;
     VK_CHECK(vkCreatePipelineLayout(d.device(), &plci, nullptr, &m_pipelineLayout));
 
     auto sd = shaderDir();
@@ -97,10 +108,18 @@ void TonemapPass::bindTargets(Device& d, const RenderTargets& rt) {
     }
 }
 
-void TonemapPass::record(VkCommandBuffer cmd, const RenderTargets& rt, uint32_t frameIdx) {
+void TonemapPass::record(VkCommandBuffer cmd, const RenderTargets& rt, uint32_t frameIdx,
+                          bool hdrMode, float exposure) {
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipeline);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
                             m_pipelineLayout, 0, 1, &m_sets[frameIdx], 0, nullptr);
+
+    TonemapPC tpc{};
+    tpc.hdrMode = hdrMode ? 1u : 0u;
+    tpc.exposure = exposure;
+    vkCmdPushConstants(cmd, m_pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT,
+                       0, sizeof(tpc), &tpc);
+
     uint32_t gx = (rt.extent.width  + 7) / 8;
     uint32_t gy = (rt.extent.height + 7) / 8;
     vkCmdDispatch(cmd, gx, gy, 1);

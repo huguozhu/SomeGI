@@ -12,7 +12,8 @@ public:
 
     void bindTargets(Device& d, const RenderTargets& rt);
     void bindOutput(Device& d, VkImageView outView, uint32_t frameIdx);
-    void record(VkCommandBuffer cmd, const RenderTargets& rt, uint32_t frameIdx);
+    void record(VkCommandBuffer cmd, const RenderTargets& rt, uint32_t frameIdx,
+                bool hdrMode = false, float exposure = 1.0f);
 
 private:
     Device* m_device = nullptr;

@@ -66,7 +66,7 @@ void Swapchain::create() {
     auto vkbsc = ret.value();
     m_swapchain = vkbsc.swapchain;
     m_format = vkbsc.image_format;
-    m_colorSpace = vkbsc.image_color_space;
+    m_colorSpace = vkbsc.color_space;
     m_extent = vkbsc.extent;
     m_images = vkbsc.get_images().value();
     m_views = vkbsc.get_image_views().value();
