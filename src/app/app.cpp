@@ -778,6 +778,117 @@ void App::applyGiSelection() {
                 m_lumenEnabled ? 1 : 0);
 }
 
+void App::startBenchmark() {
+    m_benchResults.clear();
+    m_benchGi = 0; m_benchAa = 0; m_benchAo = 0;
+    m_benchRunning = true;
+    m_benchCollecting = false;
+    m_benchTimer = 0;
+    applyBenchSettings();
+    std::printf("[bench] starting — GI(0..12) x AA(0..3) x AO(0..2) = 156 tests\n");
+}
+
+void App::applyBenchSettings() {
+    m_device->waitIdle();
+
+    // GI
+    m_currentGiIndex = m_benchGi;
+    m_giIndexApplied = -1;
+    applyGiSelection();
+
+    // AA
+    AAMethod newAa = (AAMethod)m_benchAa;
+    if (newAa != m_aaMethod) {
+        m_aaMethod = newAa;
+        if (m_aaMethod == AAMethod::TAA || m_aaMethod == AAMethod::SMAA) {
+            m_rt.ensureAaResources(*m_device);
+            m_taa.bindResources(*m_device, m_rt, 0);
+            m_smaa.bindResources(*m_device, m_rt);
+            m_aaHistoryNeedsInit = true;
+        } else {
+            m_rt.destroyAaResources();
+            m_tonemap.bindOutput(*m_device, m_rt.ldrTonemap.view(), 0);
+        }
+    }
+
+    // AO
+    m_aoMethod = (AOMethod)m_benchAo;
+
+    // Reset collection state
+    m_benchCollecting = false;
+    m_benchTimer = 0;
+    m_benchFrameCount = 0;
+    m_benchFpsSum = 0; m_benchGpuSum = 0;
+}
+
+void App::tickBenchmark(float dt) {
+    if (!m_benchRunning) return;
+
+    // Cap dt to avoid waitIdle spikes skewing the timer
+    m_benchTimer += (dt > 0.1f ? 0.016f : dt);
+
+    // Stabilization phase: wait for pipeline to settle
+    float warmupTime = 0.8f;
+    float collectTime = 1.0f;
+    if (!m_benchCollecting) {
+        if (m_benchTimer >= warmupTime) {
+            m_benchCollecting = true;
+            m_benchTimer = 0;
+        }
+        return;
+    }
+
+    // Collection phase
+    m_benchGpuSum += m_gpuMs;
+    m_benchFrameCount++;
+
+    if (m_benchTimer >= collectTime) {
+        BenchResult r{};
+        r.gi = m_benchGi; r.aa = m_benchAa; r.ao = m_benchAo;
+        r.fps = (float)m_benchFrameCount / m_benchTimer;
+        r.gpuMs = m_benchGpuSum / (float)m_benchFrameCount;
+        m_benchResults.push_back(r);
+        std::printf("[bench] GI=%2d AA=%d AO=%d  fps=%6.1f  gpu=%.2fms\n",
+                    r.gi, r.aa, r.ao, r.fps, r.gpuMs);
+
+        // Advance to next combination
+        m_benchAo++;
+        if (m_benchAo >= 3) { m_benchAo = 0; m_benchAa++; }
+        if (m_benchAa >= 4) { m_benchAa = 0; m_benchGi++; }
+
+        if (m_benchGi >= 13) {
+            // Done — print matrix
+            m_benchRunning = false;
+            std::printf("\n[bench] === Performance Matrix (fps / gpu ms) ===\n");
+            std::printf("[bench] GI technique               | None     | MSAA     | TAA      | SMAA     |\n");
+            std::printf("[bench] --------------------------- | -------- | -------- | -------- | -------- |\n");
+            static const char* kGiNames[] = {
+                "None", "IBL", "SSGI", "RSM", "LPV", "VXGI", "PRT",
+                "DDGI", "GTGI", "SDFGI", "RT GI", "ReSTIR", "Lumen"
+            };
+            for (int gi = 0; gi < 13; ++gi) {
+                std::printf("[bench] %-28s |", kGiNames[gi]);
+                for (int aa = 0; aa < 4; ++aa) {
+                    // Average across AO modes
+                    float sumFps = 0, sumGpu = 0;
+                    int count = 0;
+                    for (auto& br : m_benchResults) {
+                        if (br.gi == gi && br.aa == aa) { sumFps += br.fps; sumGpu += br.gpuMs; count++; }
+                    }
+                    if (count > 0)
+                        std::printf(" %4.0f/%4.2f |", sumFps / count, sumGpu / count);
+                    else
+                        std::printf(" %8s |", "—");
+                }
+                std::printf("\n");
+            }
+            std::printf("[bench] Done.\n");
+        } else {
+            applyBenchSettings();
+        }
+    }
+}
+
 void App::onSwapchainResized() {
     m_device->waitIdle();
     m_rt.destroy();
@@ -1037,6 +1148,15 @@ void App::buildUI() {
     if (ImGui::Begin("SomeGI Debug")) {
         ImGui::Text("Frame: %.2f ms (%.0f fps)  GPU: %.2f ms",
                     m_dtMs, m_fpsAvg, m_gpuMs);
+        ImGui::SameLine(); ImGui::TextDisabled("  F2: benchmark");
+
+        if (m_benchRunning) {
+            ImGui::SameLine();
+            ImGui::TextColored(ImVec4(1,1,0,1), "  [%d/%d] GI=%d AA=%d AO=%d %s",
+                (int)m_benchResults.size(), 156,
+                m_benchGi, m_benchAa, m_benchAo,
+                m_benchCollecting ? "collecting..." : "warming...");
+        }
 
         if (ImGui::BeginTabBar("MainTabs")) {
 
@@ -1416,7 +1536,17 @@ void App::run() {
         }
         buildUI();
         applySceneSelection();  // user-driven scene switch from UI dropdown
-        applyGiSelection();     // user-driven GI switch from UI dropdown
+
+        // F2: start benchmark
+        if (!wantKbd && ImGui::IsKeyPressed(ImGuiKey_F2)) {
+            startBenchmark();
+        }
+
+        if (m_benchRunning) {
+            tickBenchmark(dt);
+        } else {
+            applyGiSelection();     // user-driven GI switch from UI dropdown
+        }
 
         // M8 PRT 一次性 bake：scene 切换 / 第一帧时执行；oneShot 内部
         // waitIdle 不会让 main loop 卡顿，但这一帧会有明显停顿（visible
@@ -2779,6 +2909,15 @@ void App::run() {
                 VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
 
             if (m_aaMethod == AAMethod::TAA) {
+                // aaHistory may be UNDEFINED after ensureAaResources
+                if (m_aaHistoryNeedsInit) {
+                    transitionImage(cmd, m_rt.aaHistory.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                        VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                        VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
+                        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+                    m_aaHistoryNeedsInit = false;
+                }
+
                 // Depth is in DEPTH_ATTACHMENT_OPTIMAL after skybox; TAA reads it as sampled
                 transitionImage(cmd, m_rt.depth.image(), VK_IMAGE_ASPECT_DEPTH_BIT,
                     VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,

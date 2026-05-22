@@ -165,6 +165,7 @@ private:
     TonemapPass m_tonemap;
     TaaPass m_taa;
     SmaaPass m_smaa;
+    bool m_aaHistoryNeedsInit = false;   // aaHistory needs UNDEFINED→SHADER_READ_ONLY transition
     ImGuiPass m_imgui;
 
     // Pre-baked env from skybox.hdr — owned by App, lives across GI changes.
@@ -243,6 +244,22 @@ private:
 
     // B.4 SSGI 时序累积：保存上一帧 viewProj 用于 reproject。
     glm::mat4 m_prevViewProj{1.0f};
+
+    // Benchmark state
+    struct BenchResult {
+        int gi, aa, ao;
+        float fps, gpuMs;
+    };
+    bool m_benchRunning = false;
+    int m_benchGi = 0, m_benchAa = 0, m_benchAo = 0;
+    float m_benchTimer = 0;
+    int m_benchFrameCount = 0;
+    float m_benchFpsSum = 0, m_benchGpuSum = 0;
+    std::vector<BenchResult> m_benchResults;
+    bool m_benchCollecting = false;
+    void startBenchmark();
+    void tickBenchmark(float dt);
+    void applyBenchSettings();
 
     void buildUI();
 
