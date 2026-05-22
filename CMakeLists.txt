@@ -113,7 +113,6 @@ endif()
 # ---- Project ----
 add_subdirectory(src/core)
 add_subdirectory(src/scene)
-add_subdirectory(src/nanite)
 add_subdirectory(src/gi)
 add_subdirectory(src/renderer)
 add_subdirectory(src/app)
