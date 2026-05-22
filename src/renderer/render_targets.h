@@ -53,9 +53,6 @@ struct RenderTargets {
     // RGBA16F: rgb=间接 diffuse radiance, a=1.0。
     Image lumenGI;        // STORAGE | SAMPLED | TRANSFER_DST
 
-    // Nanite Phase 1: Visibility buffer (triangleID + depth)
-    Image visBuffer;      // R32G32_UINT: x=triangleID, y=depth_bits
-
     // AA intermediate targets (only valid when ensureAaResources has been called)
     Image aaHdr;          // RGBA16F: tonemap output (HDR before LDR conversion)
     Image aaHistory;      // RGBA16F: previous frame for TAA

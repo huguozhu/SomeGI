@@ -227,8 +227,6 @@ App::App() {
                    VK_FORMAT_D32_SFLOAT,
                    kMaxTextures,
                    m_msaaSamples);
-    std::printf("[init] resolve pass...\n");
-    m_resolvePass.init(*m_device, kMaxTextures);
     // M5.0：RSM 几何 pass（sun-view 4-RT）。本里程碑只跑 record，下游
     // 暂不消费（RsmSamplePass 在 M5.1 接入）。
     std::printf("[init] rsm geometry pass...\n");
@@ -510,8 +508,6 @@ void App::applySceneSelection() {
     }
 
     m_gbuffer.bindScene(*m_device, m_sceneGpu, (uint32_t)m_sceneGpu.images.size());
-    m_resolvePass.bindScene(*m_device, m_sceneGpu, (uint32_t)m_sceneGpu.images.size(),
-                            m_gbuffer.frameUboHandle());
     m_rsmGeom.bindScene(*m_device, m_sceneGpu, (uint32_t)m_sceneGpu.images.size());
     m_vxgiVoxelize.bindScene(*m_device, m_sceneGpu, (uint32_t)m_sceneGpu.images.size(), m_vxgi);
     if (m_sceneIndexApplied >= 0) {
@@ -727,7 +723,6 @@ void App::cleanup() {
     m_rsmSample.destroy();
     m_rsmGeom.destroy();
     m_gbuffer.destroy();
-    m_resolvePass.destroy();
     m_giTech.reset();       // GI onDetach (releases borrow of m_envIbl)
     if (m_device) m_envIbl.destroy(*m_device);
     m_rt.destroy();
@@ -1808,68 +1803,6 @@ void App::run() {
         m_rsmGeom.record(cmd, m_scene, m_sceneGpu);
 
         // === Phase 1: GBuffer prepass (graphics, MRT) with MSAA ===
-        if (m_useVisBuffer) {
-            // === Phase 1: Vis buffer path ===
-            // Depth + visBuffer to attachment layout
-            transitionImage(cmd, m_rt.depth.image(), VK_IMAGE_ASPECT_DEPTH_BIT,
-                VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
-                VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
-                VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT,
-                VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT);
-            transitionImage(cmd, m_rt.visBuffer.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-                VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-                VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
-                VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-                VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
-
-            // Write visBuffer (triangleID + depth)
-            m_gbuffer.recordVis(cmd, m_rt, m_scene, m_sceneGpu);
-
-            // Transition visBuffer → sampled, depth → sampled
-            transitionImage(cmd, m_rt.visBuffer.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-                VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-                VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
-                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
-            transitionImage(cmd, m_rt.depth.image(), VK_IMAGE_ASPECT_DEPTH_BIT,
-                VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
-                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
-                VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
-                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
-
-            TS(kTsGBuffer);
-
-            // Resolve: visBuffer → 3 GBuffer RTs
-            m_resolvePass.bindTargets(*m_device, m_rt, frame.frameInFlight);
-            auto toGeneral = [&](VkImage img) {
-                transitionImage(cmd, img, VK_IMAGE_ASPECT_COLOR_BIT,
-                    VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
-                    VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
-                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                    VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
-            };
-            toGeneral(m_rt.gAlbedoMetal.image());
-            toGeneral(m_rt.gNormalRough.image());
-            toGeneral(m_rt.gEmissiveAO.image());
-            m_resolvePass.record(cmd, m_rt, frame.frameInFlight);
-
-            // Transition GBuffer RTs → SHADER_READ_ONLY for downstream
-            auto toSampled = [&](VkImage img) {
-                transitionImage(cmd, img, VK_IMAGE_ASPECT_COLOR_BIT,
-                    VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                    VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
-                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                    VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
-            };
-            toSampled(m_rt.gAlbedoMetal.image());
-            toSampled(m_rt.gNormalRough.image());
-            toSampled(m_rt.gEmissiveAO.image());
-        } else {
         // MSAA images + SS resolve targets all go to attachment layout.
         // resolveImageLayout = COLOR_ATTACHMENT / DEPTH_ATTACHMENT。
         auto toColorAttach = [&](VkImage img) {
@@ -1924,7 +1857,6 @@ void App::run() {
             VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
 
         TS(kTsGBuffer);
-        } // end vis-buffer else
 
         // MSAA images stay in attachment layout (no transition needed);
         // next frame's VK_IMAGE_LAYOUT_UNDEFINED oldLayout discards them.

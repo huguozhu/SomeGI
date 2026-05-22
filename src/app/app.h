@@ -43,7 +43,6 @@
 #include "renderer/lumen_probe_pass.h"
 #include "renderer/lumen_gather_pass.h"
 #include "renderer/lumen_filter_pass.h"
-#include "renderer/resolve_pass.h"
 #include <map>
 #include <memory>
 #include <filesystem>
@@ -174,10 +173,6 @@ private:
     TaaPass m_taa;
     SmaaPass m_smaa;
     bool m_aaHistoryNeedsInit = false;   // aaHistory needs UNDEFINED→SHADER_READ_ONLY transition
-
-    // Nanite Phase 1: Visibility buffer + resolve pass
-    ResolvePass m_resolvePass;
-    bool m_useVisBuffer = true;
     ImGuiPass m_imgui;
 
     // Pre-baked env from skybox.hdr — owned by App, lives across GI changes.
