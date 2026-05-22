@@ -35,6 +35,9 @@ public:
 
     VkFormat format() const { return m_format; }
     VkExtent2D extent() const { return m_extent; }
+    bool hdrAvailable() const { return m_hdrAvailable; }
+    bool hdrEnabled() const { return m_hdrEnabled; }
+    void setHdrEnabled(bool on);
 
 private:
     void create();
@@ -44,6 +47,9 @@ private:
     Window& m_window;
     VkSwapchainKHR m_swapchain = VK_NULL_HANDLE;
     VkFormat m_format = VK_FORMAT_UNDEFINED;
+    VkColorSpaceKHR m_colorSpace = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
+    bool m_hdrAvailable = false;
+    bool m_hdrEnabled = false;
     VkExtent2D m_extent{};
     std::vector<VkImage> m_images;
     std::vector<VkImageView> m_views;
