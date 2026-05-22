@@ -4,8 +4,6 @@ add_library(somegi_nanite STATIC
     cluster_builder.cpp
     nanite_gpu.h
     nanite_gpu.cpp
-    nanite_streaming.h
-    nanite_streaming.cpp
 )
 
 target_link_libraries(somegi_nanite
