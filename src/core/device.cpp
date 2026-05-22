@@ -93,9 +93,24 @@ Device::Device(Window& window, bool enableValidation) {
 
     // Load extension function pointers from dispatch table.
     m_dispatch = m_device.make_table();
+
+    // Create VMA allocator
+    VmaVulkanFunctions vmaFuncs{};
+    vmaFuncs.vkGetInstanceProcAddr = vkGetInstanceProcAddr;
+    vmaFuncs.vkGetDeviceProcAddr = vkGetDeviceProcAddr;
+
+    VmaAllocatorCreateInfo aci{};
+    aci.flags = VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT;
+    aci.physicalDevice = m_physicalDevice.physical_device;
+    aci.device = m_device.device;
+    aci.instance = m_instance.instance;
+    aci.vulkanApiVersion = VK_API_VERSION_1_3;
+    aci.pVulkanFunctions = &vmaFuncs;
+    vmaCreateAllocator(&aci, &m_allocator);
 }
 
 Device::~Device() {
+    if (m_allocator) vmaDestroyAllocator(m_allocator);
     if (m_device.device) vkb::destroy_device(m_device);
     if (m_surface) vkDestroySurfaceKHR(m_instance.instance, m_surface, nullptr);
     if (m_instance.instance) vkb::destroy_instance(m_instance);

@@ -2,6 +2,10 @@
 #include "vk_common.h"
 #include <VkBootstrap.h>
 
+#define VMA_STATIC_VULKAN_FUNCTIONS 1
+#define VMA_DYNAMIC_VULKAN_FUNCTIONS 0
+#include <VulkanMemoryAllocator/vk_mem_alloc.h>
+
 namespace somegi {
 
 class Window;
@@ -44,6 +48,9 @@ public:
     // vk-bootstrap dispatch table（加载了所有 extension 函数指针）。
     const vkb::DispatchTable& dispatch() const { return m_dispatch; }
 
+    // VMA allocator
+    VmaAllocator allocator() const { return m_allocator; }
+
 private:
     vkb::Instance m_instance{};
     VkSurfaceKHR m_surface = VK_NULL_HANDLE;
@@ -53,6 +60,7 @@ private:
     VkQueue m_graphicsQueue = VK_NULL_HANDLE;
     uint32_t m_graphicsQueueFamily = 0;
     DeviceFeatures m_features{};
+    VmaAllocator m_allocator = VK_NULL_HANDLE;
 };
 
 }

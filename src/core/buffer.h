@@ -1,6 +1,9 @@
 #pragma once
 #include "vk_common.h"
 
+struct VmaAllocation_T;
+typedef VmaAllocation_T* VmaAllocation;
+
 namespace somegi {
 
 class Device;
@@ -21,7 +24,6 @@ public:
     void reset();
 
     VkBuffer handle() const { return m_buffer; }
-    VkDeviceMemory memory() const { return m_memory; }
     VkDeviceSize size() const { return m_size; }
     VkDeviceAddress deviceAddress() const { return m_address; }
     void* mapped() const { return m_mapped; }
@@ -29,7 +31,7 @@ public:
 private:
     Device* m_device = nullptr;
     VkBuffer m_buffer = VK_NULL_HANDLE;
-    VkDeviceMemory m_memory = VK_NULL_HANDLE;
+    VmaAllocation m_allocation = VK_NULL_HANDLE;
     VkDeviceSize m_size = 0;
     VkDeviceAddress m_address = 0;
     void* m_mapped = nullptr;

@@ -1,6 +1,5 @@
 #include "image.h"
 #include "device.h"
-#include "allocator.h"
 #include <utility>
 
 namespace somegi {
@@ -18,17 +17,12 @@ Image::Image(Device& d, const ImageDesc& desc) : m_device(&d), m_desc(desc) {
     ci.usage = desc.usage;
     ci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
     ci.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    VK_CHECK(vkCreateImage(d.device(), &ci, nullptr, &m_image));
 
-    VkMemoryRequirements req;
-    vkGetImageMemoryRequirements(d.device(), m_image, &req);
+    VmaAllocationCreateInfo aci{};
+    aci.usage = VMA_MEMORY_USAGE_AUTO;
+    aci.requiredFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
 
-    VkMemoryAllocateInfo ai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
-    ai.allocationSize = req.size;
-    ai.memoryTypeIndex = findMemoryType(d.physicalDevice(), req.memoryTypeBits,
-                                        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-    VK_CHECK(vkAllocateMemory(d.device(), &ai, nullptr, &m_memory));
-    VK_CHECK(vkBindImageMemory(d.device(), m_image, m_memory, 0));
+    VK_CHECK(vmaCreateImage(d.allocator(), &ci, &aci, &m_image, &m_allocation, nullptr));
 
     VkImageViewCreateInfo vi{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
     vi.image = m_image;
@@ -51,18 +45,17 @@ void Image::swap(Image& o) noexcept {
     std::swap(m_device, o.m_device);
     std::swap(m_image, o.m_image);
     std::swap(m_view, o.m_view);
-    std::swap(m_memory, o.m_memory);
+    std::swap(m_allocation, o.m_allocation);
     std::swap(m_desc, o.m_desc);
 }
 
 void Image::reset() {
     if (m_device) {
-        if (m_view)   vkDestroyImageView(m_device->device(), m_view, nullptr);
-        if (m_image)  vkDestroyImage(m_device->device(), m_image, nullptr);
-        if (m_memory) vkFreeMemory(m_device->device(), m_memory, nullptr);
+        if (m_view)  vkDestroyImageView(m_device->device(), m_view, nullptr);
+        if (m_image) vmaDestroyImage(m_device->allocator(), m_image, m_allocation);
     }
     m_device = nullptr;
-    m_image = VK_NULL_HANDLE; m_view = VK_NULL_HANDLE; m_memory = VK_NULL_HANDLE;
+    m_image = VK_NULL_HANDLE; m_view = VK_NULL_HANDLE; m_allocation = VK_NULL_HANDLE;
     m_desc = {};
 }
 

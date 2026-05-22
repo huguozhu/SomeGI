@@ -12,11 +12,12 @@ add_library(somegi_core STATIC
     buffer.cpp
     image.h
     image.cpp
+    vma_impl.cpp
     shader.h
     shader.cpp
 )
 
-target_include_directories(somegi_core PUBLIC ${CMAKE_SOURCE_DIR}/src)
+target_include_directories(somegi_core PUBLIC ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/external)
 target_link_libraries(somegi_core
     PUBLIC
         Vulkan::Vulkan

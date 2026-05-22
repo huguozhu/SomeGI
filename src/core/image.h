@@ -1,6 +1,9 @@
 #pragma once
 #include "vk_common.h"
 
+struct VmaAllocation_T;
+typedef VmaAllocation_T* VmaAllocation;
+
 namespace somegi {
 class Device;
 
@@ -42,7 +45,7 @@ private:
     Device* m_device = nullptr;
     VkImage m_image = VK_NULL_HANDLE;
     VkImageView m_view = VK_NULL_HANDLE;
-    VkDeviceMemory m_memory = VK_NULL_HANDLE;
+    VmaAllocation m_allocation = VK_NULL_HANDLE;
     ImageDesc m_desc{};
 };
 
