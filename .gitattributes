@@ -1,0 +1,24 @@
+# Auto-detect text files, convert to LF on commit, CRLF on checkout (Windows)
+* text=auto
+
+# C/C++ source — text
+*.cpp text
+*.h text
+
+# Shaders — text, always LF (slangc on all platforms)
+*.slang text eol=lf
+
+# Build system — text
+*.cmake text
+*.txt text
+CMakeLists.txt text
+
+# Documentation — text
+*.md text
+
+# Mark binary formats to avoid line-ending conversion
+*.spv binary
+*.hdr binary
+
+# Shell scripts — LF always
+*.sh text eol=lf
