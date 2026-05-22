@@ -857,19 +857,21 @@ void App::tickBenchmark(float dt) {
         if (m_benchAa >= 4) { m_benchAa = 0; m_benchGi++; }
 
         if (m_benchGi >= 13) {
-            // Done — print matrix
+            // Done — print matrix + write CSV
             m_benchRunning = false;
-            std::printf("\n[bench] === Performance Matrix (fps / gpu ms) ===\n");
-            std::printf("[bench] GI technique               | None     | MSAA     | TAA      | SMAA     |\n");
-            std::printf("[bench] --------------------------- | -------- | -------- | -------- | -------- |\n");
             static const char* kGiNames[] = {
                 "None", "IBL", "SSGI", "RSM", "LPV", "VXGI", "PRT",
                 "DDGI", "GTGI", "SDFGI", "RT GI", "ReSTIR", "Lumen"
             };
+            static const char* kAaNames[] = {"None", "MSAA", "TAA", "SMAA"};
+            static const char* kAoNameCsv[] = {"None", "SSAO", "GTAO"};
+
+            std::printf("\n[bench] === Performance Matrix (fps / gpu ms) ===\n");
+            std::printf("[bench] GI technique               | None     | MSAA     | TAA      | SMAA     |\n");
+            std::printf("[bench] --------------------------- | -------- | -------- | -------- | -------- |\n");
             for (int gi = 0; gi < 13; ++gi) {
                 std::printf("[bench] %-28s |", kGiNames[gi]);
                 for (int aa = 0; aa < 4; ++aa) {
-                    // Average across AO modes
                     float sumFps = 0, sumGpu = 0;
                     int count = 0;
                     for (auto& br : m_benchResults) {
@@ -883,6 +885,45 @@ void App::tickBenchmark(float dt) {
                 std::printf("\n");
             }
             std::printf("[bench] Done.\n");
+
+            // Write detailed CSV (one row per combination)
+            {
+                std::ofstream f("benchmark_results.csv");
+                if (f) {
+                    f << "GI,AA,AO,FPS,GPU_ms\n";
+                    for (auto& br : m_benchResults) {
+                        f << kGiNames[br.gi] << "," << kAaNames[br.aa] << ","
+                          << kAoNameCsv[br.ao] << "," << br.fps << "," << br.gpuMs << "\n";
+                    }
+                    std::printf("[bench] Wrote benchmark_results.csv (%zu rows)\n", m_benchResults.size());
+                }
+            }
+
+            // Write matrix CSV (GI x AA, averaged across AO)
+            {
+                std::ofstream f("benchmark_matrix.csv");
+                if (f) {
+                    f << "GI";
+                    for (int aa = 0; aa < 4; ++aa) f << "," << kAaNames[aa] << "_fps" << "," << kAaNames[aa] << "_gpu";
+                    f << "\n";
+                    for (int gi = 0; gi < 13; ++gi) {
+                        f << kGiNames[gi];
+                        for (int aa = 0; aa < 4; ++aa) {
+                            float sumFps = 0, sumGpu = 0;
+                            int count = 0;
+                            for (auto& br : m_benchResults) {
+                                if (br.gi == gi && br.aa == aa) { sumFps += br.fps; sumGpu += br.gpuMs; count++; }
+                            }
+                            if (count > 0)
+                                f << "," << (sumFps / count) << "," << (sumGpu / count);
+                            else
+                                f << ",,";
+                        }
+                        f << "\n";
+                    }
+                    std::printf("[bench] Wrote benchmark_matrix.csv\n");
+                }
+            }
         } else {
             applyBenchSettings();
         }
