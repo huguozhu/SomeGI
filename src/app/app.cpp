@@ -1562,6 +1562,83 @@ void App::buildUI() {
         ImGui::EndTabItem();
         }
 
+        // ===== Tab 5: Benchmark (only if data available) =====
+        if (!m_benchResults.empty() && ImGui::BeginTabItem("Benchmark")) {
+
+        static const char* kGiNames[] = {
+            "None", "IBL", "SSGI", "RSM", "LPV", "VXGI", "PRT",
+            "DDGI", "GTGI", "SDFGI", "RT GI", "ReSTIR", "Lumen"
+        };
+        static const char* kAaNames[] = {"None", "MSAA", "TAA", "SMAA"};
+
+        // GI comparison: average FPS per GI technique (across AA/AO)
+        ImGui::Text("FPS by GI Technique");
+        {
+            std::vector<float> fpsByGi(13, 0);
+            std::vector<int>   cntByGi(13, 0);
+            float maxFps = 1;
+            for (auto& r : m_benchResults) {
+                fpsByGi[r.gi] += r.fps;
+                cntByGi[r.gi]++;
+            }
+            for (int i = 0; i < 13; ++i) {
+                if (cntByGi[i] > 0) { fpsByGi[i] /= (float)cntByGi[i]; maxFps = std::max(maxFps, fpsByGi[i]); }
+            }
+            for (int i = 0; i < 13; ++i) {
+                if (cntByGi[i] == 0) continue;
+                ImGui::Text("%-8s", kGiNames[i]); ImGui::SameLine(90);
+                ImGui::ProgressBar(fpsByGi[i] / maxFps, ImVec2(120, 0), "");
+                ImGui::SameLine(); ImGui::Text("%.0f", fpsByGi[i]);
+            }
+        }
+        ImGui::Separator();
+
+        // AA comparison: average FPS per AA method (across GI/AO)
+        ImGui::Text("FPS by AA Method");
+        {
+            std::vector<float> fpsByAa(4, 0);
+            std::vector<int>   cntByAa(4, 0);
+            float maxFps = 1;
+            for (auto& r : m_benchResults) {
+                fpsByAa[r.aa] += r.fps;
+                cntByAa[r.aa]++;
+            }
+            for (int i = 0; i < 4; ++i) {
+                if (cntByAa[i] > 0) { fpsByAa[i] /= (float)cntByAa[i]; maxFps = std::max(maxFps, fpsByAa[i]); }
+            }
+            for (int i = 0; i < 4; ++i) {
+                if (cntByAa[i] == 0) continue;
+                ImGui::Text("%-8s", kAaNames[i]); ImGui::SameLine(90);
+                ImGui::ProgressBar(fpsByAa[i] / maxFps, ImVec2(120, 0), "");
+                ImGui::SameLine(); ImGui::Text("%.0f", fpsByAa[i]);
+            }
+        }
+        ImGui::Separator();
+
+        // GPU time by GI (inverted: lower is better)
+        ImGui::Text("GPU Time by GI Technique (ms)");
+        {
+            std::vector<float> gpuByGi(13, 0);
+            std::vector<int>   cntByGi(13, 0);
+            float maxGpu = 1;
+            for (auto& r : m_benchResults) {
+                gpuByGi[r.gi] += r.gpuMs;
+                cntByGi[r.gi]++;
+            }
+            for (int i = 0; i < 13; ++i) {
+                if (cntByGi[i] > 0) { gpuByGi[i] /= (float)cntByGi[i]; maxGpu = std::max(maxGpu, gpuByGi[i]); }
+            }
+            for (int i = 0; i < 13; ++i) {
+                if (cntByGi[i] == 0) continue;
+                ImGui::Text("%-8s", kGiNames[i]); ImGui::SameLine(90);
+                ImGui::ProgressBar(gpuByGi[i] / maxGpu, ImVec2(120, 0), "");
+                ImGui::SameLine(); ImGui::Text("%.2f", gpuByGi[i]);
+            }
+        }
+
+        ImGui::EndTabItem();
+        }
+
         ImGui::EndTabBar();
         }
 
@@ -2985,16 +3062,78 @@ void App::run() {
 
         bool hdrActive = m_swap->hdrEnabled();
 
-        // HDR path: tonemap → swapchain directly (scRGB), no AA, no blit
+        // HDR path: scRGB output via tonemap + optional AA
         if (hdrActive) {
-            transitionImage(cmd, frame.image, VK_IMAGE_ASPECT_COLOR_BIT,
-                VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
-                VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
-                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
-            m_tonemap.bindOutput(*m_device, frame.view, frame.frameInFlight);
-            m_tonemap.record(cmd, m_rt, frame.frameInFlight, true, 1.0f);
-            TS(kTsTonemap);
-            TS(kTsAA);  // no AA in HDR, immediately after tonemap
+            bool aaActive = (m_aaMethod == AAMethod::TAA || m_aaMethod == AAMethod::SMAA);
+            if (aaActive) {
+                m_rt.ensureAaResources(*m_device);
+
+                // Tonemap writes to aaHdr (HDR values)
+                transitionImage(cmd, m_rt.aaHdr.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                    VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
+                    VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
+                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
+                m_tonemap.bindOutput(*m_device, m_rt.aaHdr.view(), frame.frameInFlight);
+                m_tonemap.record(cmd, m_rt, frame.frameInFlight, true, 1.0f);
+                TS(kTsTonemap);
+
+                // Barrier: aaHdr GENERAL → SHADER_READ_ONLY for AA
+                transitionImage(cmd, m_rt.aaHdr.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                    VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
+                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT);
+
+                // AA writes to swapchain directly
+                transitionImage(cmd, frame.image, VK_IMAGE_ASPECT_COLOR_BIT,
+                    VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
+                    VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
+                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
+
+                if (m_aaMethod == AAMethod::TAA) {
+                    m_taa.bindResources(*m_device, m_rt, frame.frameInFlight);
+                    m_taa.bindOutput(*m_device, frame.view, frame.frameInFlight);
+                    m_taa.record(cmd, m_rt, m_jitter, m_prevJitter,
+                                ubo.invViewProj, m_prevViewProj, frame.frameInFlight, m_taaBlendAlpha);
+                    // Copy aaHdr → aaHistory for next frame
+                    transitionImage(cmd, m_rt.aaHdr.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
+                        VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
+                    transitionImage(cmd, m_rt.aaHistory.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                        VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                        VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
+                        VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
+                    VkImageCopy histCopy{};
+                    histCopy.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+                    histCopy.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+                    histCopy.extent = {m_rt.extent.width, m_rt.extent.height, 1};
+                    vkCmdCopyImage(cmd, m_rt.aaHdr.image(), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                                   m_rt.aaHistory.image(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &histCopy);
+                    transitionImage(cmd, m_rt.aaHdr.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                        VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                        VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_READ_BIT,
+                        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+                    transitionImage(cmd, m_rt.aaHistory.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                        VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+                } else {
+                    m_smaa.bindResources(*m_device, m_rt);
+                    m_smaa.bindOutput(*m_device, frame.view);
+                    m_smaa.record(cmd, m_rt);
+                }
+                TS(kTsAA);
+            } else {
+                // No AA: tonemap writes directly to swapchain
+                transitionImage(cmd, frame.image, VK_IMAGE_ASPECT_COLOR_BIT,
+                    VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
+                    VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
+                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
+                m_tonemap.bindOutput(*m_device, frame.view, frame.frameInFlight);
+                m_tonemap.record(cmd, m_rt, frame.frameInFlight, true, 1.0f);
+                TS(kTsTonemap);
+                TS(kTsAA);
+            }
 
             // Transition swapchain to COLOR_ATTACHMENT for ImGui
             transitionImage(cmd, frame.image, VK_IMAGE_ASPECT_COLOR_BIT,

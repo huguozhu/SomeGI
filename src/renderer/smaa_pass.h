@@ -11,6 +11,7 @@ public:
     void init(Device& d, VkExtent2D ext);
     void destroy();
     void bindResources(Device& d, const RenderTargets& rt);
+    void bindOutput(Device& d, VkImageView outView);  // rebind blend output
     void record(VkCommandBuffer cmd, const RenderTargets& rt);
 
 private:

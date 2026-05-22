@@ -11,6 +11,7 @@ public:
     void init(Device& d);
     void destroy();
     void bindResources(Device& d, const RenderTargets& rt, uint32_t frameIdx);
+    void bindOutput(Device& d, VkImageView outView, uint32_t frameIdx);  // rebind output storage image
     void record(VkCommandBuffer cmd, const RenderTargets& rt,
                 const glm::vec2& jitter, const glm::vec2& prevJitter,
                 const glm::mat4& invViewProj, const glm::mat4& prevViewProj,

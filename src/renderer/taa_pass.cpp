@@ -101,6 +101,16 @@ void TaaPass::bindResources(Device& d, const RenderTargets& rt, uint32_t frameId
     vkUpdateDescriptorSets(d.device(), (uint32_t)w.size(), w.data(), 0, nullptr);
 }
 
+void TaaPass::bindOutput(Device& d, VkImageView outView, uint32_t frameIdx) {
+    VkDescriptorImageInfo out{};
+    out.imageView = outView;
+    out.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+    VkWriteDescriptorSet w{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+    w.dstSet = m_sets[frameIdx]; w.dstBinding = 3; w.descriptorCount = 1;
+    w.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE; w.pImageInfo = &out;
+    vkUpdateDescriptorSets(d.device(), 1, &w, 0, nullptr);
+}
+
 void TaaPass::record(VkCommandBuffer cmd, const RenderTargets& rt,
                      const glm::vec2& jitter, const glm::vec2& prevJitter,
                      const glm::mat4& invViewProj, const glm::mat4& prevViewProj,

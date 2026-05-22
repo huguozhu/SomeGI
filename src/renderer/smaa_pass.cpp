@@ -152,6 +152,16 @@ void SmaaPass::bindResources(Device& d, const RenderTargets& rt) {
     }
 }
 
+void SmaaPass::bindOutput(Device& d, VkImageView outView) {
+    VkDescriptorImageInfo out{};
+    out.imageView = outView;
+    out.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+    VkWriteDescriptorSet w{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+    w.dstSet = m_blendSet; w.dstBinding = 2; w.descriptorCount = 1;
+    w.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE; w.pImageInfo = &out;
+    vkUpdateDescriptorSets(d.device(), 1, &w, 0, nullptr);
+}
+
 void SmaaPass::record(VkCommandBuffer cmd, const RenderTargets& rt) {
     uint32_t gx = (rt.extent.width  + 7) / 8;
     uint32_t gy = (rt.extent.height + 7) / 8;
