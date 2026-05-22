@@ -1773,7 +1773,8 @@ void App::run() {
         if (m_timestampValid[frame.frameInFlight]) {
             uint64_t ts[kTimestampSlots] = {};
             VkResult r = vkGetQueryPoolResults(m_device->device(), m_timestampPool,
-                qBase, kTimestampSlots, sizeof(ts), ts, sizeof(uint64_t), VK_QUERY_RESULT_64_BIT);
+                qBase, kTimestampSlots, sizeof(ts), ts, sizeof(uint64_t),
+                VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT);
             if (r == VK_SUCCESS) {
                 float period = m_device->timestampPeriod() * 1e-6f;
                 float total = 0;
@@ -3101,6 +3102,7 @@ void App::run() {
             m_tonemap.bindOutput(*m_device, m_rt.ldrTonemap.view(), frame.frameInFlight);
             m_tonemap.record(cmd, m_rt, frame.frameInFlight);
             TS(kTsTonemap);
+            TS(kTsAA);  // no AA: AA time = 0
 
             // Barrier: ldrTonemap GENERAL → TRANSFER_SRC for blit
             transitionImage(cmd, m_rt.ldrTonemap.image(), VK_IMAGE_ASPECT_COLOR_BIT,
