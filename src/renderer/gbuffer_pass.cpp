@@ -60,6 +60,7 @@ void GBufferPass::init(Device& d,
                         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
 
     buildPipeline();
+    buildVisPipeline();
 }
 
 void GBufferPass::buildPipeline() {
@@ -145,13 +146,88 @@ void GBufferPass::setMsaaSamples(VkSampleCountFlagBits samples) {
     m_msaaSamples = samples;
     destroyPipeline();
     buildPipeline();
+    buildVisPipeline();
+}
+
+void GBufferPass::buildVisPipeline() {
+    auto& d = *m_device;
+
+    // Reuse same pipeline layout (same descriptors + push constants)
+    ShaderModule shader(d, shaderDir() / "gbuffer" / "gbuffer_vis.spv");
+
+    VkPipelineShaderStageCreateInfo stages[2]{};
+    stages[0] = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
+    stages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
+    stages[0].module = shader.handle(); stages[0].pName = "vs_main";
+    stages[1] = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
+    stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+    stages[1].module = shader.handle(); stages[1].pName = "ps_main";
+
+    VkVertexInputBindingDescription vib{0, sizeof(Vertex), VK_VERTEX_INPUT_RATE_VERTEX};
+    std::array<VkVertexInputAttributeDescription, 4> via{};
+    via[0] = {0, 0, VK_FORMAT_R32G32B32_SFLOAT,    offsetof(Vertex,position)};
+    via[1] = {1, 0, VK_FORMAT_R32G32B32_SFLOAT,    offsetof(Vertex,normal)};
+    via[2] = {2, 0, VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(Vertex,tangent)};
+    via[3] = {3, 0, VK_FORMAT_R32G32_SFLOAT,       offsetof(Vertex,uv0)};
+
+    VkPipelineVertexInputStateCreateInfo vi{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
+    vi.vertexBindingDescriptionCount = 1; vi.pVertexBindingDescriptions = &vib;
+    vi.vertexAttributeDescriptionCount = (uint32_t)via.size(); vi.pVertexAttributeDescriptions = via.data();
+
+    VkPipelineInputAssemblyStateCreateInfo ia{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
+    ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+
+    VkPipelineViewportStateCreateInfo vp{VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};
+    vp.viewportCount = 1; vp.scissorCount = 1;
+
+    VkPipelineRasterizationStateCreateInfo rs{VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
+    rs.cullMode = VK_CULL_MODE_NONE;   // vis buffer: no discard needed, just triangleID
+    rs.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+    rs.lineWidth = 1.0f;
+
+    VkPipelineMultisampleStateCreateInfo ms{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
+    ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;   // vis buffer: no MSAA
+
+    VkPipelineDepthStencilStateCreateInfo ds{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
+    ds.depthTestEnable = VK_TRUE; ds.depthWriteEnable = VK_TRUE;
+    ds.depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
+
+    VkPipelineColorBlendAttachmentState ba{};
+    ba.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT;
+    VkPipelineColorBlendStateCreateInfo cb{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
+    cb.attachmentCount = 1; cb.pAttachments = &ba;
+
+    VkDynamicState dyn[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+    VkPipelineDynamicStateCreateInfo dyni{VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};
+    dyni.dynamicStateCount = 2; dyni.pDynamicStates = dyn;
+
+    VkFormat visFmt = VK_FORMAT_R32G32_UINT;
+    VkPipelineRenderingCreateInfo rci{VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO};
+    rci.colorAttachmentCount = 1; rci.pColorAttachmentFormats = &visFmt;
+    rci.depthAttachmentFormat = m_depthFmt;
+
+    VkGraphicsPipelineCreateInfo gpci{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
+    gpci.pNext = &rci;
+    gpci.stageCount = 2; gpci.pStages = stages;
+    gpci.pVertexInputState = &vi;
+    gpci.pInputAssemblyState = &ia;
+    gpci.pViewportState = &vp;
+    gpci.pRasterizationState = &rs;
+    gpci.pMultisampleState = &ms;
+    gpci.pDepthStencilState = &ds;
+    gpci.pColorBlendState = &cb;
+    gpci.pDynamicState = &dyni;
+    gpci.layout = m_pipelineLayout;
+
+    VK_CHECK(vkCreateGraphicsPipelines(d.device(), VK_NULL_HANDLE, 1, &gpci, nullptr, &m_visPipeline));
 }
 
 void GBufferPass::destroyPipeline() {
     if (!m_device) return;
-    if (m_pipeline)       vkDestroyPipeline(m_device->device(), m_pipeline, nullptr);
+    if (m_pipeline)    vkDestroyPipeline(m_device->device(), m_pipeline, nullptr);
+    if (m_visPipeline) vkDestroyPipeline(m_device->device(), m_visPipeline, nullptr);
     if (m_pipelineLayout) vkDestroyPipelineLayout(m_device->device(), m_pipelineLayout, nullptr);
-    m_pipeline = VK_NULL_HANDLE; m_pipelineLayout = VK_NULL_HANDLE;
+    m_pipeline = VK_NULL_HANDLE; m_visPipeline = VK_NULL_HANDLE; m_pipelineLayout = VK_NULL_HANDLE;
 }
 
 void GBufferPass::destroy() {
@@ -278,6 +354,66 @@ void GBufferPass::record(VkCommandBuffer cmd, const RenderTargets& rt,
                 VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
                 0, sizeof(PC), &pc);
             vkCmdDrawIndexed(cmd, p.indexCount, 1, p.firstIndex, p.vertexOffset, 0);
+        }
+    }
+
+    vkCmdEndRendering(cmd);
+}
+
+void GBufferPass::recordVis(VkCommandBuffer cmd, const RenderTargets& rt,
+                            const SceneCpu& cpu, const SceneGpu& gpu) {
+    // Single color attachment: visBuffer (R32G32_UINT)
+    VkRenderingAttachmentInfo visAttach{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
+    visAttach.imageView   = rt.visBuffer.view();
+    visAttach.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    visAttach.loadOp      = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    visAttach.storeOp     = VK_ATTACHMENT_STORE_OP_STORE;
+    visAttach.clearValue.color = {{0, 0, 0, 0}};
+
+    VkRenderingAttachmentInfo depthAttach{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
+    depthAttach.imageView   = rt.depth.view();
+    depthAttach.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+    depthAttach.loadOp      = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    depthAttach.storeOp     = VK_ATTACHMENT_STORE_OP_STORE;
+    depthAttach.clearValue.depthStencil = {1.0f, 0};
+
+    VkRenderingInfo ri{VK_STRUCTURE_TYPE_RENDERING_INFO};
+    ri.renderArea = {{0, 0}, rt.extent};
+    ri.layerCount = 1;
+    ri.colorAttachmentCount = 1;
+    ri.pColorAttachments = &visAttach;
+    ri.pDepthAttachment  = &depthAttach;
+    vkCmdBeginRendering(cmd, &ri);
+
+    VkViewport vp{0, 0, (float)rt.extent.width, (float)rt.extent.height, 0, 1};
+    VkRect2D sc{{0, 0}, rt.extent};
+    vkCmdSetViewport(cmd, 0, 1, &vp);
+    vkCmdSetScissor(cmd, 0, 1, &sc);
+
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_visPipeline);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+        m_pipelineLayout, 0, 1, &m_set, 0, nullptr);
+
+    VkDeviceSize zero = 0;
+    VkBuffer vb = gpu.vertexBuffer.handle();
+    vkCmdBindVertexBuffers(cmd, 0, 1, &vb, &zero);
+    vkCmdBindIndexBuffer(cmd, gpu.indexBuffer.handle(), 0, VK_INDEX_TYPE_UINT32);
+
+    PC pc;
+    uint32_t triBase = 0;
+    for (auto& n : cpu.nodes) {
+        if (n.meshIndex < 0) continue;
+        const Mesh& M = cpu.meshes[n.meshIndex];
+        pc.model = n.worldTransform;
+        for (auto& p : M.primitives) {
+            pc.materialIndex = p.materialIndex >= 0 ? p.materialIndex : 0;
+            pc.p0 = (int)triBase; // primitiveBase
+            pc.p1 = pc.p2 = 0;
+            vkCmdPushConstants(cmd, m_pipelineLayout,
+                VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                0, sizeof(PC), &pc);
+            vkCmdDrawIndexed(cmd, p.indexCount, 1, p.firstIndex, p.vertexOffset, 0);
+            triBase += p.indexCount / 3; // triangles drawn
         }
     }
 

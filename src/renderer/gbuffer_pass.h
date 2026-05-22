@@ -28,10 +28,15 @@ public:
     void record(VkCommandBuffer cmd, const RenderTargets& rt,
                 const SceneCpu& cpu, const SceneGpu& gpu);
 
+    // Nanite Phase 1: visibility-buffer variant
+    void recordVis(VkCommandBuffer cmd, const RenderTargets& rt,
+                   const SceneCpu& cpu, const SceneGpu& gpu);
+
     void setMsaaSamples(VkSampleCountFlagBits samples);
 
 private:
     void buildPipeline();
+    void buildVisPipeline();
     void destroyPipeline();
 
     Device* m_device = nullptr;
@@ -41,12 +46,16 @@ private:
     VkFormat m_depthFmt = VK_FORMAT_UNDEFINED;
     VkSampleCountFlagBits m_msaaSamples = VK_SAMPLE_COUNT_1_BIT;
 
+    // Original GBuffer pipeline
     VkDescriptorSetLayout m_setLayout = VK_NULL_HANDLE;
     VkPipelineLayout m_pipelineLayout = VK_NULL_HANDLE;
     VkPipeline m_pipeline = VK_NULL_HANDLE;
-
     VkDescriptorPool m_pool = VK_NULL_HANDLE;
     VkDescriptorSet m_set = VK_NULL_HANDLE;
+
+    // Visibility-buffer variant pipeline
+    VkPipelineLayout m_visPipelineLayout = VK_NULL_HANDLE;
+    VkPipeline m_visPipeline = VK_NULL_HANDLE;
 
     Buffer m_frameUbo;
     uint32_t m_maxTextures = 0;

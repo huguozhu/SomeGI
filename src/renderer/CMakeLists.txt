@@ -79,6 +79,8 @@ add_library(somegi_renderer STATIC
     lumen_gather_pass.cpp
     lumen_filter_pass.h
     lumen_filter_pass.cpp
+    resolve_pass.h
+    resolve_pass.cpp
 )
 
 target_link_libraries(somegi_renderer

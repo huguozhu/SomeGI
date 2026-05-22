@@ -35,12 +35,22 @@ void RenderTargets::create(Device& d, VkExtent2D ext, VkSampleCountFlagBits msaa
         ImageDesc id{};
         id.format = fmt;
         id.extent = {ext.width, ext.height, 1};
-        id.usage  = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+        id.usage  = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT
+                  | VK_IMAGE_USAGE_STORAGE_BIT;   // needed by vis-buffer resolve pass
         img = Image(d, id);
     };
     mkGBufferRT(VK_FORMAT_R8G8B8A8_UNORM,      gAlbedoMetal);
     mkGBufferRT(VK_FORMAT_R16G16B16A16_SFLOAT, gNormalRough);
     mkGBufferRT(VK_FORMAT_R8G8B8A8_UNORM,      gEmissiveAO);
+
+    // Nanite Phase 1: Visibility buffer (R32G32_UINT)
+    {
+        ImageDesc vb{};
+        vb.format = VK_FORMAT_R32G32_UINT;
+        vb.extent = {ext.width, ext.height, 1};
+        vb.usage  = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+        visBuffer = Image(d, vb);
+    }
 
     auto mkMSAA = [&](VkFormat fmt, VkImageUsageFlags usage, VkImageAspectFlags aspect, Image& img) {
         ImageDesc id{};
@@ -209,6 +219,7 @@ void RenderTargets::destroy() {
     gAlbedoMetal.reset();
     gNormalRough.reset();
     gEmissiveAO.reset();
+    visBuffer.reset();
     gAlbedoMetalMs.reset();
     gNormalRoughMs.reset();
     gEmissiveAOMs.reset();
