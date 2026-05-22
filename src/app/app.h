@@ -182,7 +182,7 @@ private:
     int m_currentSceneIndex = 1;       // 0 = cube, 1 = Sponza (default)
     int m_sceneIndexApplied = -1;      // last scene actually loaded
     std::string m_sceneLoadError;      // popup message when scene load fails
-    int m_currentGiIndex = 0;          // default = None
+    int m_currentGiIndex = 1;           // default = IBL
     int m_giIndexApplied = -1;         // last index actually attached
     VkSampleCountFlagBits m_msaaSamples = VK_SAMPLE_COUNT_4_BIT;
     bool m_useMipmaps = true;
