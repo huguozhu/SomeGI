@@ -22,14 +22,17 @@ void ForwardPass::init(Device& d, VkFormat colorFmt, VkFormat depthFmt, uint32_t
     m_maxTextures = maxTextures;
 
     // === Set=0 layout ===
-    std::array<VkDescriptorSetLayoutBinding, 4> b{};
+    std::array<VkDescriptorSetLayoutBinding, 10> b{};
     b[0] = {0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_VERTEX_BIT|VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
     b[1] = {1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
     b[2] = {2, VK_DESCRIPTOR_TYPE_SAMPLER,         1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
     b[3] = {3, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,   maxTextures, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
+    // NDGI MLP 权重 (bindings 4-9)
+    for (uint32_t i = 4; i < 10; ++i)
+        b[i] = {i, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
 
-    std::array<VkDescriptorBindingFlags, 4> bf{0u, 0u, 0u,
-        VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT};
+    std::array<VkDescriptorBindingFlags, 10> bf{};
+    bf[3] = VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT;
     VkDescriptorSetLayoutBindingFlagsCreateInfo bfci{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO};
     bfci.bindingCount = (uint32_t)bf.size(); bfci.pBindingFlags = bf.data();
 
@@ -41,7 +44,7 @@ void ForwardPass::init(Device& d, VkFormat colorFmt, VkFormat depthFmt, uint32_t
     // === Descriptor pool + Set=0 alloc ===
     std::array<VkDescriptorPoolSize, 4> ps{{
         {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1},
-        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1},
+        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 7},  // +6 NDGI
         {VK_DESCRIPTOR_TYPE_SAMPLER, 1},
         {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, maxTextures},
     }};
@@ -259,6 +262,23 @@ void ForwardPass::record(VkCommandBuffer cmd, const RenderTargets& rt,
     }
 
     vkCmdEndRendering(cmd);
+}
+
+void ForwardPass::setNdgiWeights(Device& d,
+    VkBuffer w1, VkBuffer b1, VkBuffer w2, VkBuffer b2,
+    VkBuffer w3, VkBuffer b3) {
+    if (m_set == VK_NULL_HANDLE) return;
+    VkDescriptorBufferInfo infos[6]{};
+    infos[0] = {w1, 0, VK_WHOLE_SIZE}; infos[1] = {b1, 0, VK_WHOLE_SIZE};
+    infos[2] = {w2, 0, VK_WHOLE_SIZE}; infos[3] = {b2, 0, VK_WHOLE_SIZE};
+    infos[4] = {w3, 0, VK_WHOLE_SIZE}; infos[5] = {b3, 0, VK_WHOLE_SIZE};
+    std::array<VkWriteDescriptorSet, 6> iw{};
+    for (uint32_t i = 0; i < 6; ++i) {
+        iw[i] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+        iw[i].dstSet = m_set; iw[i].dstBinding = 4 + i; iw[i].descriptorCount = 1;
+        iw[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; iw[i].pBufferInfo = &infos[i];
+    }
+    vkUpdateDescriptorSets(d.device(), (uint32_t)iw.size(), iw.data(), 0, nullptr);
 }
 
 }

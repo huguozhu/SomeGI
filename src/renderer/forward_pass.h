@@ -65,6 +65,11 @@ public:
     void record(VkCommandBuffer cmd, const RenderTargets& rt,
                 const SceneCpu& cpu, const SceneGpu& gpu);
 
+    // 更新 set=0 中的 NDGI MLP 权重 binding
+    void setNdgiWeights(Device& d,
+        VkBuffer w1, VkBuffer b1, VkBuffer w2, VkBuffer b2,
+        VkBuffer w3, VkBuffer b3);
+
 private:
     void buildPipeline(const char* variant, VkDescriptorSetLayout giDsl);
     void destroyPipeline();

@@ -287,6 +287,10 @@ App::App() {
         m_ndgi.weights1().handle(), m_ndgi.bias1().handle(),
         m_ndgi.weights2().handle(), m_ndgi.bias2().handle(),
         m_ndgi.weights3().handle(), m_ndgi.bias3().handle());
+    m_forward.setNdgiWeights(*m_device,
+        m_ndgi.weights1().handle(), m_ndgi.bias1().handle(),
+        m_ndgi.weights2().handle(), m_ndgi.bias2().handle(),
+        m_ndgi.weights3().handle(), m_ndgi.bias3().handle());
 
     std::printf("[init] ssao pass...\n");
     m_ssao.init(*m_device);
@@ -1783,7 +1787,7 @@ void App::buildPipelineTable() {
     // === Phase 1.84: DDGI ===
     m_pipeline.setEnabled("DDGI", !fwd && m_ddgiEnabled);
     m_pipeline.setEnabled("DDGI-Bootstrap", !fwd && !m_ddgiEnabled);
-    m_pipeline.setEnabled("NDGI", !fwd && m_ndgiEnabled && m_rtSupported);
+    m_pipeline.setEnabled("NDGI", m_ndgiEnabled && m_rtSupported);
 
     // === Phase 1.845: Lumen-lite ===
     m_pipeline.setEnabled("Lumen-Probe", !fwd && m_lumenEnabled && m_lumenDebugMode != 5);
