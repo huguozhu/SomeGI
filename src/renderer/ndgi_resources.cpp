@@ -22,7 +22,7 @@ void NdgiResources::create(Device& d) {
     m_sampleBuf = Buffer(d, kSampleBufferFloats * sizeof(float), sbuf, dmem);
 
     // 样本计数: atomic counter for probe trace to write, training to read+reset
-    m_sampleCount = Buffer(d, 4, sbuf, hmem);
+    m_sampleCount = Buffer(d, 4, sbuf | VK_BUFFER_USAGE_TRANSFER_DST_BIT, hmem);
 }
 
 void NdgiResources::destroy() {

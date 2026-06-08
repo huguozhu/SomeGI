@@ -32,7 +32,7 @@ void NdgiPass::init(Device& d, bool rtSupported) {
         dsci.bindingCount = (uint32_t)tb.size(); dsci.pBindings = tb.data();
         VK_CHECK(vkCreateDescriptorSetLayout(d.device(), &dsci, nullptr, &m_traceDsl));
 
-        VkPushConstantRange pc{VK_SHADER_STAGE_COMPUTE_BIT, 0, 48}; // ProbeTracePC
+        VkPushConstantRange pc{VK_SHADER_STAGE_COMPUTE_BIT, 0, 64}; // ProbeTracePC
         VkPipelineLayoutCreateInfo plci{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
         plci.setLayoutCount = 1; plci.pSetLayouts = &m_traceDsl;
         plci.pushConstantRangeCount = 1; plci.pPushConstantRanges = &pc;
@@ -47,7 +47,7 @@ void NdgiPass::init(Device& d, bool rtSupported) {
         VK_CHECK(vkCreateComputePipelines(d.device(), VK_NULL_HANDLE, 1, &cpci, nullptr, &m_tracePipeline));
 
         // Descriptor pool + set for trace
-        std::array<VkDescriptorPoolSize, 6> tps{{
+        std::array<VkDescriptorPoolSize, 5> tps{{
             {VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 1},
             {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 6},
             {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 128},
@@ -90,7 +90,7 @@ void NdgiPass::init(Device& d, bool rtSupported) {
         }
         // Training pipeline
         {
-            VkPushConstantRange pc{VK_SHADER_STAGE_COMPUTE_BIT, 0, 32};
+            VkPushConstantRange pc{VK_SHADER_STAGE_COMPUTE_BIT, 0, 64};
             VkPipelineLayoutCreateInfo plci{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
             plci.setLayoutCount = 1; plci.pSetLayouts = &m_initDsl;
             plci.pushConstantRangeCount = 1; plci.pPushConstantRanges = &pc;
@@ -162,7 +162,10 @@ void NdgiPass::bindResources(Device& d, NdgiResources& res, SceneRtAS& rtAS,
     setBuf(2, 2, &vertI);
     setBuf(3, 3, &indI);
     setBuf(4, 4, &matI);
-    setBuf(7, 7, &frameI);
+    // Binding 7 = UniformBuffer (frame UBO), 需要用 VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER
+    w[7] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+    w[7].dstSet = m_traceSet; w[7].dstBinding = 7; w[7].descriptorCount = 1;
+    w[7].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER; w[7].pBufferInfo = &frameI;
     setBuf(8, 8, &sampI);
     setBuf(9, 9, &cntI);
 
