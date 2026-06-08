@@ -412,6 +412,10 @@ App::App() {
     m_smaa.init(*m_device, m_swap->extent());
     std::printf("[init] imgui pass...\n");
     m_imgui.init(*m_device, m_window->handle(), m_swap->format(), kFramesInFlight);
+
+    // 注册所有渲染步骤到管线表
+    registerPipelineSteps();
+
     std::printf("[init] all set up, entering main loop.\n");
     } catch (...) {
         cleanup();
@@ -1672,6 +1676,1389 @@ void App::buildUI() {
     (void)io;
 }
 
+// ============================================================
+// RenderPipeline 辅助方法
+// ============================================================
+
+void App::writeTimestamp(VkCommandBuffer cmd, uint32_t slot) {
+    vkCmdWriteTimestamp2(cmd, VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT,
+                         m_timestampPool,
+                         m_currentFrameInFlight * kTimestampSlots + slot);
+}
+
+void App::buildPipelineTable() {
+    // === Phase 1.5: AO ===
+    m_pipeline.setEnabled("AO-SSAO", m_aoMethod == AOMethod::SSAO);
+    m_pipeline.setEnabled("AO-GTAO", m_aoMethod == AOMethod::GTAO);
+    m_pipeline.setEnabled("AO-Clear", m_aoMethod == AOMethod::None);
+
+    // === Phase 1.6: SSR ===
+    m_pipeline.setEnabled("SSR", m_ssr.enabled);
+    m_pipeline.setEnabled("SSR-Clear", !m_ssr.enabled);
+
+    // === Phase 1.7: ScreenGI (SSGI/GTGI) ===
+    bool screenGiOn = m_ssgi.enabled || m_gtgi.enabled;
+    m_pipeline.setEnabled("ScreenGI", screenGiOn);
+    m_pipeline.setEnabled("ScreenGI-Clear", !screenGiOn);
+
+    // === Phase 1.83: VXGI chain ===
+    bool needVoxelGrid = m_vxgiEnabled || m_ddgiEnabled || m_sdfgiPass.enabled
+                       || m_lumenEnabled || m_restirPass.enabled;
+    m_pipeline.setEnabled("VXGI-Chain", needVoxelGrid);
+    m_pipeline.setEnabled("VXGI-Bootstrap", !needVoxelGrid);
+    m_pipeline.setEnabled("VXGI-Relight", m_vxgiRelightEnabled && needVoxelGrid);
+    m_pipeline.setEnabled("VXGI-6Axis", m_lumenEnabled && m_vxgiSixAxisInited && needVoxelGrid);
+
+    // === Phase 1.835: SDFGI ===
+    m_pipeline.setEnabled("SDFGI", m_sdfgiPass.enabled);
+
+    // === Phase 1.836: RT GI ===
+    m_pipeline.setEnabled("RTGI", m_rtGiBound && m_giIndexApplied == 10);
+    m_pipeline.setEnabled("RTGI-Clear", m_rtGiInited && !(m_rtGiBound && m_giIndexApplied == 10));
+
+    // === Phase 1.837: ReSTIR DI ===
+    m_pipeline.setEnabled("ReSTIR", m_restirPass.enabled);
+    m_pipeline.setEnabled("ReSTIR-Clear", !m_restirPass.enabled);
+
+    // === Phase 1.84: DDGI ===
+    m_pipeline.setEnabled("DDGI", m_ddgiEnabled);
+    m_pipeline.setEnabled("DDGI-Bootstrap", !m_ddgiEnabled);
+
+    // === Phase 1.845: Lumen-lite ===
+    m_pipeline.setEnabled("Lumen-Probe", m_lumenEnabled && m_lumenDebugMode != 5);
+    m_pipeline.setEnabled("Lumen-Filter", m_lumenEnabled && m_lumenDebugMode != 5);
+    m_pipeline.setEnabled("Lumen-Gather", m_lumenEnabled && m_lumenDebugMode != 5);
+    m_pipeline.setEnabled("Lumen-DebugClear", m_lumenEnabled && m_lumenDebugMode == 5);
+    m_pipeline.setEnabled("Lumen-Clear", !m_lumenEnabled);
+
+    // === Phase 1.85: LPV ===
+    m_pipeline.setEnabled("LPV", m_lpvEnabled);
+    m_pipeline.setEnabled("LPV-Bootstrap", !m_lpvEnabled);
+
+    // === Phase 1.8: RSM Sample ===
+    m_pipeline.setEnabled("RSM-Sample", m_rsmSample.enabled);
+    m_pipeline.setEnabled("RSM-Clear", !m_rsmSample.enabled);
+
+    m_pipeline.build();
+}
+
+void App::registerPipelineSteps() {
+    m_pipeline.clear();
+
+    // ============================
+    // Phase 0: RSM 几何（sun-view MRT）
+    // ============================
+    m_pipeline.addStep({
+        .name = "RSM-Geometry",
+        .phase = "PrePass",
+        .record = [this](VkCommandBuffer cmd) {
+            m_rsmGeom.record(cmd, m_scene, m_sceneGpu);
+        }
+    });
+
+    // ============================
+    // Phase 1: GBuffer prepass (graphics MRT with MSAA)
+    // ============================
+    m_pipeline.addStep({
+        .name = "GBuffer",
+        .phase = "PrePass",
+        .timestampSlot = kTsGBuffer,
+        .record = [this](VkCommandBuffer cmd) {
+            // MSAA images → attachment layout
+            auto toColorAttach = [&](VkImage img) {
+                transitionImage(cmd, img, VK_IMAGE_ASPECT_COLOR_BIT,
+                    VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                    VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
+                    VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                    VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
+            };
+            toColorAttach(m_rt.gAlbedoMetalMs.image());
+            toColorAttach(m_rt.gNormalRoughMs.image());
+            toColorAttach(m_rt.gEmissiveAOMs.image());
+            transitionImage(cmd, m_rt.depthMs.image(), VK_IMAGE_ASPECT_DEPTH_BIT,
+                VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
+                VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
+                VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT,
+                VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT);
+
+            // SS resolve targets → attachment layout
+            toColorAttach(m_rt.gAlbedoMetal.image());
+            toColorAttach(m_rt.gNormalRough.image());
+            toColorAttach(m_rt.gEmissiveAO.image());
+            transitionImage(cmd, m_rt.depth.image(), VK_IMAGE_ASPECT_DEPTH_BIT,
+                VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
+                VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
+                VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT,
+                VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT);
+
+            m_gbuffer.record(cmd, m_rt, m_scene, m_sceneGpu);
+
+            // Resolved GBuffer → SHADER_READ_ONLY for downstream compute
+            auto toSampled = [&](VkImage img) {
+                transitionImage(cmd, img, VK_IMAGE_ASPECT_COLOR_BIT,
+                    VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                    VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                    VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                    VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+            };
+            toSampled(m_rt.gAlbedoMetal.image());
+            toSampled(m_rt.gNormalRough.image());
+            toSampled(m_rt.gEmissiveAO.image());
+            transitionImage(cmd, m_rt.depth.image(), VK_IMAGE_ASPECT_DEPTH_BIT,
+                VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
+                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
+                VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+
+            writeTimestamp(cmd, kTsGBuffer);
+        }
+    });
+
+    // ============================
+    // Phase 1.5: AO (SSAO/GTAO/None, 互斥)
+    // ============================
+    m_pipeline.addStep({
+        .name = "AO-SSAO",
+        .phase = "AO",
+        .enabled = false,
+        .record = [this](VkCommandBuffer cmd) {
+            transitionImage(cmd, m_rt.ssao.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
+                VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
+                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
+            m_ssao.record(cmd, m_rt,
+                m_currentProj, glm::inverse(m_currentProj), m_currentView);
+            transitionImage(cmd, m_rt.ssao.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+        }
+    });
+
+    m_pipeline.addStep({
+        .name = "AO-GTAO",
+        .phase = "AO",
+        .enabled = false,
+        .record = [this](VkCommandBuffer cmd) {
+            transitionImage(cmd, m_rt.ssao.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
+                VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
+                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
+            m_gtao.record(cmd, m_rt,
+                m_currentProj, m_currentView);
+            transitionImage(cmd, m_rt.ssao.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+        }
+    });
+
+    m_pipeline.addStep({
+        .name = "AO-Clear",
+        .phase = "AO",
+        .enabled = false,
+        .record = [this](VkCommandBuffer cmd) {
+            transitionImage(cmd, m_rt.ssao.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
+                VK_PIPELINE_STAGE_2_CLEAR_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
+            VkClearColorValue white{};
+            white.float32[0] = 1.0f; white.float32[1] = 1.0f;
+            white.float32[2] = 1.0f; white.float32[3] = 1.0f;
+            VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+            vkCmdClearColorImage(cmd, m_rt.ssao.image(),
+                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &white, 1, &range);
+            transitionImage(cmd, m_rt.ssao.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                VK_PIPELINE_STAGE_2_CLEAR_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+        }
+    });
+
+    // ============================
+    // Phase 1.6: SSR
+    // ============================
+    m_pipeline.addStep({
+        .name = "SSR",
+        .phase = "AO",
+        .enabled = false,
+        .record = [this](VkCommandBuffer cmd) {
+            transitionImage(cmd, m_rt.ssr.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
+                VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
+                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
+            m_ssr.record(cmd, m_rt);
+            transitionImage(cmd, m_rt.ssr.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+        }
+    });
+
+    m_pipeline.addStep({
+        .name = "SSR-Clear",
+        .phase = "AO",
+        .enabled = false,
+        .record = [this](VkCommandBuffer cmd) {
+            transitionImage(cmd, m_rt.ssr.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
+                VK_PIPELINE_STAGE_2_CLEAR_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
+            VkClearColorValue zero{};
+            VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+            vkCmdClearColorImage(cmd, m_rt.ssr.image(),
+                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &zero, 1, &range);
+            transitionImage(cmd, m_rt.ssr.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                VK_PIPELINE_STAGE_2_CLEAR_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+        }
+    });
+
+    // ============================
+    // Phase 1.7: ScreenGI (SSGI/GTGI, 互斥)
+    // ============================
+    m_pipeline.addStep({
+        .name = "ScreenGI",
+        .phase = "AO",
+        .enabled = false,
+        .record = [this](VkCommandBuffer cmd) {
+            // Copy ssgi → ssgiPrev for temporal history
+            transitionImage(cmd, m_rt.ssgi.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
+                VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
+            transitionImage(cmd, m_rt.ssgiPrev.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
+                VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
+
+            VkImageCopy region{};
+            region.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+            region.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+            region.extent = {m_rt.extent.width, m_rt.extent.height, 1};
+            vkCmdCopyImage(cmd,
+                m_rt.ssgi.image(), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                m_rt.ssgiPrev.image(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                1, &region);
+
+            // ssgiPrev → SHADER_READ_ONLY for sampling
+            transitionImage(cmd, m_rt.ssgiPrev.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+            // ssgi → GENERAL for writing new value
+            transitionImage(cmd, m_rt.ssgi.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL,
+                VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_READ_BIT,
+                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
+
+            if (m_ssgi.enabled) m_ssgi.record(cmd, m_rt);
+            else                m_gtgi.record(cmd, m_rt);
+
+            transitionImage(cmd, m_rt.ssgi.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+        }
+    });
+
+    m_pipeline.addStep({
+        .name = "ScreenGI-Clear",
+        .phase = "AO",
+        .enabled = false,
+        .record = [this](VkCommandBuffer cmd) {
+            transitionImage(cmd, m_rt.ssgi.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
+                VK_PIPELINE_STAGE_2_CLEAR_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
+            VkClearColorValue zero{};
+            VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+            vkCmdClearColorImage(cmd, m_rt.ssgi.image(),
+                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &zero, 1, &range);
+            transitionImage(cmd, m_rt.ssgi.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                VK_PIPELINE_STAGE_2_CLEAR_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+        }
+    });
+
+    // === AO/SS 结束 timestamp ===
+    m_pipeline.addStep({
+        .name = "TS-AO",
+        .phase = "AO",
+        .record = [this](VkCommandBuffer cmd) {
+            writeTimestamp(cmd, kTsAO);
+        }
+    });
+
+    // ============================
+    // Phase 1.83: VXGI voxelize → inject → mipmap → aniso → relight → 6axis
+    // ============================
+    m_pipeline.addStep({
+        .name = "VXGI-Chain",
+        .phase = "GI",
+        .enabled = false,
+        .record = [this](VkCommandBuffer cmd) {
+            // 1. Clear entire mip chain to 0
+            auto barrierAllMips = [&](VkImageLayout oldL, VkImageLayout newL,
+                                       VkPipelineStageFlags2 srcStg, VkAccessFlags2 srcAcc,
+                                       VkPipelineStageFlags2 dstStg, VkAccessFlags2 dstAcc) {
+                VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+                b.srcStageMask = srcStg; b.srcAccessMask = srcAcc;
+                b.dstStageMask = dstStg; b.dstAccessMask = dstAcc;
+                b.oldLayout = oldL; b.newLayout = newL;
+                b.image = m_vxgi.image().image();
+                b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT,
+                                      0, m_vxgi.mipLevels(), 0, 1};
+                VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+                di.imageMemoryBarrierCount = 1; di.pImageMemoryBarriers = &b;
+                vkCmdPipelineBarrier2(cmd, &di);
+            };
+            barrierAllMips(VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
+                VK_PIPELINE_STAGE_2_CLEAR_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
+            VkClearColorValue zero{};
+            VkImageSubresourceRange rg{VK_IMAGE_ASPECT_COLOR_BIT,
+                                       0, m_vxgi.mipLevels(), 0, 1};
+            vkCmdClearColorImage(cmd, m_vxgi.image().image(),
+                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &zero, 1, &rg);
+            barrierAllMips(VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL,
+                VK_PIPELINE_STAGE_2_CLEAR_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
+
+            // 2. Voxelize: scatter all primitives to mip 0
+            m_vxgiVoxelize.record(cmd, m_scene, m_sceneGpu,
+                m_vxgiGridMin, m_vxgiCellSize, kVxgiResolution);
+
+            // 3. Inject: RSM flux → voxel mip 0 RGB
+            {
+                VkImageMemoryBarrier2 vbar{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+                vbar.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                vbar.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+                vbar.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                vbar.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT |
+                                     VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+                vbar.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+                vbar.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+                vbar.image = m_vxgi.image().image();
+                vbar.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+                VkDependencyInfo vdi{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+                vdi.imageMemoryBarrierCount = 1; vdi.pImageMemoryBarriers = &vbar;
+                vkCmdPipelineBarrier2(cmd, &vdi);
+            }
+            m_vxgiInject.record(cmd, kVxgiResolution, m_vxgiGridMin, m_vxgiCellSize);
+
+            // 4. Mipmap: iterate src mip i → dst mip i+1
+            m_vxgiMipmap.record(cmd, m_vxgi);
+
+            // 5. Final mip → SHADER_READ_ONLY
+            {
+                VkImageMemoryBarrier2 fb{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+                fb.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                fb.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+                fb.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                fb.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+                fb.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+                fb.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                fb.image = m_vxgi.image().image();
+                fb.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT,
+                                       m_vxgi.mipLevels() - 1, 1, 0, 1};
+                VkDependencyInfo fdi{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+                fdi.imageMemoryBarrierCount = 1; fdi.pImageMemoryBarriers = &fb;
+                vkCmdPipelineBarrier2(cmd, &fdi);
+            }
+
+            // 6. Aniso alpha mipchain: UNDEFINED → SHADER_READ_ONLY
+            {
+                VkImageMemoryBarrier2 ab{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+                ab.srcStageMask = VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
+                ab.srcAccessMask = 0;
+                ab.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                ab.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+                ab.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+                ab.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                ab.image = m_vxgi.aniso().image();
+                ab.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT,
+                                       0, m_vxgi.mipLevels(), 0, 1};
+                VkDependencyInfo adi{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+                adi.imageMemoryBarrierCount = 1; adi.pImageMemoryBarriers = &ab;
+                vkCmdPipelineBarrier2(cmd, &adi);
+            }
+            m_vxgiAniso.record(cmd, m_vxgi);
+        }
+    });
+
+    // VXGI Relight (multi-bounce, within VXGI chain)
+    m_pipeline.addStep({
+        .name = "VXGI-Relight",
+        .phase = "GI",
+        .enabled = false,
+        .record = [this](VkCommandBuffer cmd) {
+            int bounces = m_lumenEnabled ? 3 : 1;
+
+            auto transImg = [&](VkImage img, VkImageLayout oldL, VkImageLayout newL,
+                                VkPipelineStageFlags2 srcS, VkAccessFlags2 srcA,
+                                VkPipelineStageFlags2 dstS, VkAccessFlags2 dstA) {
+                VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+                b.srcStageMask = srcS; b.srcAccessMask = srcA;
+                b.dstStageMask = dstS; b.dstAccessMask = dstA;
+                b.oldLayout = oldL; b.newLayout = newL;
+                b.image = img;
+                b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+                VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+                di.imageMemoryBarrierCount = 1; di.pImageMemoryBarriers = &b;
+                vkCmdPipelineBarrier2(cmd, &di);
+            };
+
+            auto blitScratchToVoxel = [&](VkImage srcImg) {
+                transImg(m_vxgi.image().image(),
+                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                    VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
+                    VK_PIPELINE_STAGE_2_COPY_BIT,
+                    VK_ACCESS_2_TRANSFER_WRITE_BIT);
+                transImg(srcImg,
+                    VK_IMAGE_LAYOUT_GENERAL,
+                    VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                    VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+                    VK_PIPELINE_STAGE_2_COPY_BIT,
+                    VK_ACCESS_2_TRANSFER_READ_BIT);
+                VkImageCopy region{};
+                region.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+                region.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+                region.extent = {kVxgiResolution, kVxgiResolution, kVxgiResolution};
+                vkCmdCopyImage(cmd,
+                    srcImg, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                    m_vxgi.image().image(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                    1, &region);
+                transImg(m_vxgi.image().image(),
+                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                    VK_PIPELINE_STAGE_2_COPY_BIT,
+                    VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                    VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+            };
+
+            // Bounce 1: read voxelGrid → write scratch
+            transImg(m_vxgi.relightScratch().image(),
+                VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
+                VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
+                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
+            m_vxgiRelight.record(cmd, m_vxgiRelight.voxelSet(), kVxgiResolution,
+                m_vxgi.mipLevels(), m_vxgiCellSize, m_vxgiGridMin,
+                m_vxgiRelightStrength);
+
+            if (bounces >= 2) {
+                transImg(m_vxgi.relightScratch().image(),
+                    VK_IMAGE_LAYOUT_GENERAL,
+                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                    VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                    VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+                transImg(m_vxgi.relightScratch2().image(),
+                    VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
+                    VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
+                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                    VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
+                // Bounce 2: read scratch → write scratch2
+                m_vxgiRelight.record(cmd, m_vxgiRelight.pingSet0(), kVxgiResolution,
+                    m_vxgi.mipLevels(), m_vxgiCellSize, m_vxgiGridMin,
+                    m_vxgiRelightStrength);
+
+                if (bounces >= 3) {
+                    transImg(m_vxgi.relightScratch2().image(),
+                        VK_IMAGE_LAYOUT_GENERAL,
+                        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                        VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+                        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                        VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+                    transImg(m_vxgi.relightScratch().image(),
+                        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                        VK_IMAGE_LAYOUT_GENERAL,
+                        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                        VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
+                        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                        VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
+                    // Bounce 3: read scratch2 → write scratch
+                    m_vxgiRelight.record(cmd, m_vxgiRelight.pingSet1(), kVxgiResolution,
+                        m_vxgi.mipLevels(), m_vxgiCellSize, m_vxgiGridMin,
+                        m_vxgiRelightStrength);
+                    blitScratchToVoxel(m_vxgi.relightScratch().image());
+                } else {
+                    blitScratchToVoxel(m_vxgi.relightScratch2().image());
+                }
+            } else {
+                blitScratchToVoxel(m_vxgi.relightScratch().image());
+            }
+        }
+    });
+
+    // VXGI 6-axis resolve (Lumen mode only)
+    m_pipeline.addStep({
+        .name = "VXGI-6Axis",
+        .phase = "GI",
+        .enabled = false,
+        .record = [this](VkCommandBuffer cmd) {
+            VkImageLayout axisOldL = m_lumenAtlasInited
+                ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+                : VK_IMAGE_LAYOUT_UNDEFINED;
+            VkPipelineStageFlags2 axisSrcS = m_lumenAtlasInited
+                ? VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT
+                : VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
+            VkAccessFlags2 axisSrcA = m_lumenAtlasInited
+                ? VK_ACCESS_2_SHADER_SAMPLED_READ_BIT : 0u;
+
+            auto transAxisToGeneral = [&](VkImage img) {
+                VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+                b.srcStageMask = axisSrcS; b.srcAccessMask = axisSrcA;
+                b.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                b.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+                b.oldLayout = axisOldL;
+                b.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+                b.image = img;
+                b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+                VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+                di.imageMemoryBarrierCount = 1; di.pImageMemoryBarriers = &b;
+                vkCmdPipelineBarrier2(cmd, &di);
+            };
+            transAxisToGeneral(m_vxgi.sixAxisX().image());
+            transAxisToGeneral(m_vxgi.sixAxisY().image());
+            transAxisToGeneral(m_vxgi.sixAxisZ().image());
+
+            m_vxgiResolve6Axis.record(cmd, kVxgiResolution, m_vxgi.mipLevels(),
+                m_vxgiCellSize, m_vxgiGridMin, m_vxgiRelightStrength);
+
+            auto transAxisToSRO = [&](VkImage img) {
+                VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+                b.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                b.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+                b.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                b.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+                b.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+                b.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                b.image = img;
+                b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+                VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+                di.imageMemoryBarrierCount = 1; di.pImageMemoryBarriers = &b;
+                vkCmdPipelineBarrier2(cmd, &di);
+            };
+            transAxisToSRO(m_vxgi.sixAxisX().image());
+            transAxisToSRO(m_vxgi.sixAxisY().image());
+            transAxisToSRO(m_vxgi.sixAxisZ().image());
+        }
+    });
+
+    // VXGI bootstrap: when all consumers are off, transition voxel grid to SR_O
+    m_pipeline.addStep({
+        .name = "VXGI-Bootstrap",
+        .phase = "GI",
+        .enabled = false,
+        .record = [this](VkCommandBuffer cmd) {
+            VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+            b.srcStageMask = VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
+            b.srcAccessMask = 0;
+            b.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+            b.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+            b.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+            b.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            b.image = m_vxgi.image().image();
+            b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT,
+                                  0, m_vxgi.mipLevels(), 0, 1};
+            VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+            di.imageMemoryBarrierCount = 1; di.pImageMemoryBarriers = &b;
+            vkCmdPipelineBarrier2(cmd, &di);
+            // aniso too
+            b.image = m_vxgi.aniso().image();
+            vkCmdPipelineBarrier2(cmd, &di);
+        }
+    });
+
+    // ============================
+    // Phase 1.835: SDFGI
+    // ============================
+    m_pipeline.addStep({
+        .name = "SDFGI",
+        .phase = "GI",
+        .enabled = false,
+        .record = [this](VkCommandBuffer cmd) {
+            if (!m_sdfgiBootstrapped) {
+                auto bootstrapToGeneral = [&](VkImage img) {
+                    VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+                    b.srcStageMask = VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
+                    b.srcAccessMask = 0;
+                    b.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                    b.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+                    b.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+                    b.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+                    b.image = img;
+                    b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+                    VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+                    di.imageMemoryBarrierCount = 1; di.pImageMemoryBarriers = &b;
+                    vkCmdPipelineBarrier2(cmd, &di);
+                };
+                bootstrapToGeneral(m_sdfgi.seedA().image());
+                bootstrapToGeneral(m_sdfgi.seedB().image());
+                bootstrapToGeneral(m_sdfgi.udf().image());
+                m_sdfgiBootstrapped = true;
+            }
+            transitionImage(cmd, m_rt.ssgi.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                VK_IMAGE_LAYOUT_GENERAL,
+                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
+                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
+
+            m_sdfgiPass.record(cmd, m_sdfgi, m_rt, m_frameIndex,
+                m_sdfgiPass.seedThreshold, m_sdfgiPass.maxDistCells,
+                (uint32_t)m_sdfgiPass.numRays,
+                (uint32_t)m_sdfgiPass.maxSteps,
+                m_sdfgiPass.rayMaxCells, m_sdfgiPass.hitEpsCells);
+
+            transitionImage(cmd, m_rt.ssgi.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                VK_IMAGE_LAYOUT_GENERAL,
+                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+        }
+    });
+
+    // ============================
+    // Phase 1.836: RT GI
+    // ============================
+    m_pipeline.addStep({
+        .name = "RTGI",
+        .phase = "GI",
+        .enabled = false,
+        .record = [this](VkCommandBuffer cmd) {
+            transitionImage(cmd, m_rt.rtGI.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
+                VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
+                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
+            m_rtGiPass.record(cmd, m_rt);
+            transitionImage(cmd, m_rt.rtGI.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                VK_IMAGE_LAYOUT_GENERAL,
+                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+        }
+    });
+
+    m_pipeline.addStep({
+        .name = "RTGI-Clear",
+        .phase = "GI",
+        .enabled = false,
+        .record = [this](VkCommandBuffer cmd) {
+            transitionImage(cmd, m_rt.rtGI.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
+                VK_PIPELINE_STAGE_2_CLEAR_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
+            VkClearColorValue zero{};
+            VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+            vkCmdClearColorImage(cmd, m_rt.rtGI.image(),
+                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &zero, 1, &range);
+            transitionImage(cmd, m_rt.rtGI.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                VK_PIPELINE_STAGE_2_CLEAR_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+        }
+    });
+
+    // ============================
+    // Phase 1.837: ReSTIR DI
+    // ============================
+    m_pipeline.addStep({
+        .name = "ReSTIR",
+        .phase = "GI",
+        .enabled = false,
+        .record = [this](VkCommandBuffer cmd) {
+            m_restir.updateLights(m_demoLights);
+            if (!m_restirBootstrapped) {
+                auto bootstrapToGeneral = [&](VkImage img) {
+                    VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+                    b.srcStageMask = VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
+                    b.srcAccessMask = 0;
+                    b.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                    b.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+                    b.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+                    b.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+                    b.image = img;
+                    b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+                    VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+                    di.imageMemoryBarrierCount = 1; di.pImageMemoryBarriers = &b;
+                    vkCmdPipelineBarrier2(cmd, &di);
+                };
+                bootstrapToGeneral(m_restir.reservoirA().image());
+                bootstrapToGeneral(m_restir.reservoirB().image());
+                m_restirBootstrapped = true;
+            }
+            VkImageLayout restirOld = m_restirOutInited
+                ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+                : VK_IMAGE_LAYOUT_UNDEFINED;
+            transitionImage(cmd, m_rt.restir.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                restirOld, VK_IMAGE_LAYOUT_GENERAL,
+                m_restirOutInited ? VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT
+                                   : VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT,
+                m_restirOutInited ? VK_ACCESS_2_SHADER_SAMPLED_READ_BIT : 0,
+                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
+            m_restirOutInited = true;
+
+            uint32_t numLights = (uint32_t)m_demoLights.size();
+            bool useRtVis = m_rtSupported && m_rtGiBound;
+            m_restirPass.record(cmd, m_restir, m_rt,
+                numLights,
+                (uint32_t)m_restirPass.numCandidates,
+                (uint32_t)m_restirPass.numNeighbors,
+                m_restirPass.spatialRadius,
+                (uint32_t)m_restirPass.shadowSteps,
+                m_restirPass.intensityScale,
+                m_frameIndex,
+                useRtVis);
+
+            transitionImage(cmd, m_rt.restir.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                VK_IMAGE_LAYOUT_GENERAL,
+                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+        }
+    });
+
+    m_pipeline.addStep({
+        .name = "ReSTIR-Clear",
+        .phase = "GI",
+        .enabled = false,
+        .record = [this](VkCommandBuffer cmd) {
+            VkImageLayout restirOld = m_restirOutInited
+                ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+                : VK_IMAGE_LAYOUT_UNDEFINED;
+            transitionImage(cmd, m_rt.restir.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                restirOld, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                m_restirOutInited ? VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT
+                                   : VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT,
+                m_restirOutInited ? VK_ACCESS_2_SHADER_SAMPLED_READ_BIT : 0,
+                VK_PIPELINE_STAGE_2_CLEAR_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
+            VkClearColorValue zero{};
+            VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+            vkCmdClearColorImage(cmd, m_rt.restir.image(),
+                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &zero, 1, &range);
+            transitionImage(cmd, m_rt.restir.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                VK_PIPELINE_STAGE_2_CLEAR_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+            m_restirOutInited = true;
+        }
+    });
+
+    // ============================
+    // Phase 1.84: DDGI
+    // ============================
+    m_pipeline.addStep({
+        .name = "DDGI",
+        .phase = "GI",
+        .enabled = false,
+        .record = [this](VkCommandBuffer cmd) {
+            auto barrierAtlas = [&](VkImage img,
+                                    VkImageLayout oldL, VkImageLayout newL,
+                                    VkPipelineStageFlags2 srcStg, VkAccessFlags2 srcAcc,
+                                    VkPipelineStageFlags2 dstStg, VkAccessFlags2 dstAcc) {
+                VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+                b.srcStageMask = srcStg; b.srcAccessMask = srcAcc;
+                b.dstStageMask = dstStg; b.dstAccessMask = dstAcc;
+                b.oldLayout = oldL; b.newLayout = newL;
+                b.image = img;
+                b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+                VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+                di.imageMemoryBarrierCount = 1; di.pImageMemoryBarriers = &b;
+                vkCmdPipelineBarrier2(cmd, &di);
+            };
+
+            VkImageLayout oldAtlasL = m_ddgiAtlasInited
+                ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+                : VK_IMAGE_LAYOUT_UNDEFINED;
+            VkAccessFlags2 srcAcc = m_ddgiAtlasInited
+                ? VK_ACCESS_2_SHADER_SAMPLED_READ_BIT : 0;
+            VkPipelineStageFlags2 srcStg = m_ddgiAtlasInited
+                ? VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT
+                : VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
+
+            barrierAtlas(m_ddgi.irradiance().image(),
+                oldAtlasL, VK_IMAGE_LAYOUT_GENERAL,
+                srcStg, srcAcc,
+                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
+            barrierAtlas(m_ddgi.distance().image(),
+                oldAtlasL, VK_IMAGE_LAYOUT_GENERAL,
+                srcStg, srcAcc,
+                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
+
+            float jitterRot = float((m_frameIndex % 360) * 0.0174532925);
+            m_ddgiPass.record(cmd, m_ddgi, m_ddgiOrigin, m_ddgiSpacing,
+                m_vxgiGridMin, m_vxgiCellSize, kVxgiResolution,
+                jitterRot, m_frameIndex);
+
+            barrierAtlas(m_ddgi.irradiance().image(),
+                VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+            barrierAtlas(m_ddgi.distance().image(),
+                VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+            m_ddgiAtlasInited = true;
+        }
+    });
+
+    m_pipeline.addStep({
+        .name = "DDGI-Bootstrap",
+        .phase = "GI",
+        .enabled = false,
+        .record = [this](VkCommandBuffer cmd) {
+            auto barrierAtlas = [&](VkImage img,
+                                    VkImageLayout oldL, VkImageLayout newL,
+                                    VkPipelineStageFlags2 srcStg, VkAccessFlags2 srcAcc,
+                                    VkPipelineStageFlags2 dstStg, VkAccessFlags2 dstAcc) {
+                VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+                b.srcStageMask = srcStg; b.srcAccessMask = srcAcc;
+                b.dstStageMask = dstStg; b.dstAccessMask = dstAcc;
+                b.oldLayout = oldL; b.newLayout = newL;
+                b.image = img;
+                b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+                VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+                di.imageMemoryBarrierCount = 1; di.pImageMemoryBarriers = &b;
+                vkCmdPipelineBarrier2(cmd, &di);
+            };
+            barrierAtlas(m_ddgi.irradiance().image(),
+                VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
+                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+            barrierAtlas(m_ddgi.distance().image(),
+                VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
+                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+            m_ddgiAtlasInited = true;
+        }
+    });
+
+    // ============================
+    // Phase 1.845: Lumen-lite
+    // ============================
+    m_pipeline.addStep({
+        .name = "Lumen-DebugClear",
+        .phase = "GI",
+        .enabled = false,
+        .record = [this](VkCommandBuffer cmd) {
+            VkImageLayout oldL = m_lumenOutInited
+                ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+                : VK_IMAGE_LAYOUT_UNDEFINED;
+            VkPipelineStageFlags2 srcS = m_lumenOutInited
+                ? VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT
+                : VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
+            VkAccessFlags2 srcA = m_lumenOutInited
+                ? VK_ACCESS_2_SHADER_SAMPLED_READ_BIT : 0u;
+            transitionImage(cmd, m_rt.lumenGI.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                oldL, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                srcS, srcA,
+                VK_PIPELINE_STAGE_2_CLEAR_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
+            VkClearColorValue grey{};
+            grey.float32[0] = 0.3f; grey.float32[1] = 0.3f;
+            grey.float32[2] = 0.3f; grey.float32[3] = 1.0f;
+            VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+            vkCmdClearColorImage(cmd, m_rt.lumenGI.image(),
+                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &grey, 1, &range);
+            transitionImage(cmd, m_rt.lumenGI.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                VK_PIPELINE_STAGE_2_CLEAR_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+            m_lumenOutInited = true;
+        }
+    });
+
+    m_pipeline.addStep({
+        .name = "Lumen-Probe",
+        .phase = "GI",
+        .enabled = false,
+        .record = [this](VkCommandBuffer cmd) {
+            if (!m_lumenProbeInited) {
+                m_lumenProbePass.init(*m_device);
+                m_lumenProbePass.bindResources(*m_device, m_lumen, m_rtAS, m_sceneGpu,
+                                                m_vxgi, m_rt, m_gbuffer.frameUboHandle(),
+                                                m_vxgiSixAxisInited);
+                m_lumenProbeInited = true;
+            }
+            // Transition probe + filtered atlas to GENERAL
+            {
+                VkImageLayout oldL = m_lumenAtlasInited
+                    ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+                    : VK_IMAGE_LAYOUT_UNDEFINED;
+                VkPipelineStageFlags2 srcS = m_lumenAtlasInited
+                    ? VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT
+                    : VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
+                VkAccessFlags2 srcA = m_lumenAtlasInited
+                    ? VK_ACCESS_2_SHADER_SAMPLED_READ_BIT : 0u;
+                auto transToGeneral = [&](VkImage img) {
+                    VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+                    b.srcStageMask = srcS; b.srcAccessMask = srcA;
+                    b.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                    b.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+                    b.oldLayout = oldL;
+                    b.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+                    b.image = img;
+                    b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+                    VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+                    di.imageMemoryBarrierCount = 1; di.pImageMemoryBarriers = &b;
+                    vkCmdPipelineBarrier2(cmd, &di);
+                };
+                transToGeneral(m_lumen.probeAtlas().image());
+                transToGeneral(m_lumen.filteredAtlas().image());
+                m_lumenAtlasInited = true;
+            }
+            m_lumenProbePass.record(cmd, m_lumen, m_frameIndex,
+                                     m_lumenDebugMode >= 3 ? (uint32_t)m_lumenDebugMode - 1u
+                                                           : (m_vxgiSixAxisInited ? 1u : 0u));
+
+            // ProbeAtlas GENERAL → SR_O for filter
+            {
+                VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+                b.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                b.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+                b.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                b.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+                b.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+                b.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                b.image = m_lumen.probeAtlas().image();
+                b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+                VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+                di.imageMemoryBarrierCount = 1; di.pImageMemoryBarriers = &b;
+                vkCmdPipelineBarrier2(cmd, &di);
+            }
+        }
+    });
+
+    m_pipeline.addStep({
+        .name = "Lumen-Filter",
+        .phase = "GI",
+        .enabled = false,
+        .record = [this](VkCommandBuffer cmd) {
+            if (!m_lumenFilterInited) {
+                VkImageMemoryBarrier2 pb{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+                pb.srcStageMask = VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
+                pb.srcAccessMask = 0;
+                pb.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                pb.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+                pb.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+                pb.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                pb.image = m_lumen.prevAtlas().image();
+                pb.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+                VkDependencyInfo pdi{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+                pdi.imageMemoryBarrierCount = 1; pdi.pImageMemoryBarriers = &pb;
+                vkCmdPipelineBarrier2(cmd, &pdi);
+
+                m_lumenFilterPass.init(*m_device);
+                m_lumenFilterPass.bindResources(*m_device, m_lumen, m_rt,
+                                                 m_gbuffer.frameUboHandle());
+                m_lumenFilterInited = true;
+            }
+            m_lumenFilterPass.record(cmd, m_lumen, m_rt);
+
+            // Copy filteredAtlas → prevAtlas for next frame
+            auto imgBarrier = [&](VkImage img, VkImageLayout oldL, VkImageLayout newL,
+                                  VkPipelineStageFlags2 srcS, VkAccessFlags2 srcA,
+                                  VkPipelineStageFlags2 dstS, VkAccessFlags2 dstA) {
+                VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+                b.srcStageMask = srcS; b.srcAccessMask = srcA;
+                b.dstStageMask = dstS; b.dstAccessMask = dstA;
+                b.oldLayout = oldL; b.newLayout = newL;
+                b.image = img;
+                b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+                VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+                di.imageMemoryBarrierCount = 1; di.pImageMemoryBarriers = &b;
+                vkCmdPipelineBarrier2(cmd, &di);
+            };
+
+            imgBarrier(m_lumen.filteredAtlas().image(),
+                VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+                VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
+            imgBarrier(m_lumen.prevAtlas().image(),
+                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
+                VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
+
+            VkImageCopy region{};
+            region.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+            region.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+            region.extent = {m_lumen.atlasWidth(), m_lumen.atlasHeight(), 1};
+            vkCmdCopyImage(cmd,
+                m_lumen.filteredAtlas().image(), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                m_lumen.prevAtlas().image(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                1, &region);
+
+            imgBarrier(m_lumen.filteredAtlas().image(),
+                VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_READ_BIT,
+                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+            imgBarrier(m_lumen.prevAtlas().image(),
+                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+        }
+    });
+
+    m_pipeline.addStep({
+        .name = "Lumen-Gather",
+        .phase = "GI",
+        .enabled = false,
+        .record = [this](VkCommandBuffer cmd) {
+            if (!m_lumenGatherInited) {
+                m_lumenGatherPass.init(*m_device);
+                m_lumenGatherPass.bindResources(*m_device, m_lumen, m_rt,
+                                                 m_gbuffer.frameUboHandle(), true);
+                m_lumenGatherInited = true;
+            }
+            {
+                VkImageLayout oldL = m_lumenOutInited
+                    ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+                    : VK_IMAGE_LAYOUT_UNDEFINED;
+                VkAccessFlags2 srcA = m_lumenOutInited
+                    ? VK_ACCESS_2_SHADER_SAMPLED_READ_BIT : 0;
+                VkPipelineStageFlags2 srcS = m_lumenOutInited
+                    ? VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT
+                    : VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
+                VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+                b.srcStageMask = srcS; b.srcAccessMask = srcA;
+                b.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                b.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+                b.oldLayout = oldL;
+                b.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+                b.image = m_rt.lumenGI.image();
+                b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+                VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+                di.imageMemoryBarrierCount = 1; di.pImageMemoryBarriers = &b;
+                vkCmdPipelineBarrier2(cmd, &di);
+            }
+            m_lumenGatherPass.record(cmd, m_lumen, m_rt,
+                                     (uint32_t)m_lumenDebugMode);
+
+            {
+                VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+                b.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                b.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+                b.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                b.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+                b.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+                b.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                b.image = m_rt.lumenGI.image();
+                b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+                VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+                di.imageMemoryBarrierCount = 1; di.pImageMemoryBarriers = &b;
+                vkCmdPipelineBarrier2(cmd, &di);
+            }
+            m_lumenOutInited = true;
+        }
+    });
+
+    m_pipeline.addStep({
+        .name = "Lumen-Clear",
+        .phase = "GI",
+        .enabled = false,
+        .record = [this](VkCommandBuffer cmd) {
+            VkImageLayout oldL = m_lumenOutInited
+                ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+                : VK_IMAGE_LAYOUT_UNDEFINED;
+            VkPipelineStageFlags2 srcS = m_lumenOutInited
+                ? VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT
+                : VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
+            VkAccessFlags2 srcA = m_lumenOutInited
+                ? VK_ACCESS_2_SHADER_SAMPLED_READ_BIT : 0;
+            transitionImage(cmd, m_rt.lumenGI.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                oldL, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                srcS, srcA,
+                VK_PIPELINE_STAGE_2_CLEAR_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
+            VkClearColorValue zero{};
+            VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+            vkCmdClearColorImage(cmd, m_rt.lumenGI.image(),
+                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &zero, 1, &range);
+            transitionImage(cmd, m_rt.lumenGI.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                VK_PIPELINE_STAGE_2_CLEAR_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+            m_lumenOutInited = true;
+        }
+    });
+
+    // ============================
+    // Phase 1.85: LPV inject + propagate
+    // ============================
+    m_pipeline.addStep({
+        .name = "LPV",
+        .phase = "GI",
+        .enabled = false,
+        .record = [this](VkCommandBuffer cmd) {
+            m_lpvInject.record(cmd, kLpvResolution, m_lpvGridMin, m_lpvCellSize);
+
+            transitionImage(cmd, m_lpv.gv().image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+
+            auto barrierLpv = [&](const LpvGrid& g,
+                                  VkImageLayout oldL, VkImageLayout newL,
+                                  VkPipelineStageFlags2 srcStg, VkAccessFlags2 srcAcc,
+                                  VkPipelineStageFlags2 dstStg, VkAccessFlags2 dstAcc) {
+                VkImage imgs[3] = {g.lpvR.image(), g.lpvG.image(), g.lpvB.image()};
+                for (auto img : imgs) {
+                    transitionImage(cmd, img, VK_IMAGE_ASPECT_COLOR_BIT,
+                        oldL, newL, srcStg, srcAcc, dstStg, dstAcc);
+                }
+            };
+
+            int propIter = m_lpvProp.iterations & ~1;
+            for (int it = 0; it < propIter; ++it) {
+                LpvGrid& src = m_lpv.current();
+                LpvGrid& dst = m_lpv.next();
+
+                barrierLpv(src,
+                    VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                    VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                    VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+                barrierLpv(dst,
+                    VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
+                    VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
+                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                    VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
+
+                m_lpvProp.record(cmd, m_lpv.curIdx(),
+                                 kLpvResolution, m_lpvProp.occlusionAmplifier,
+                                 m_lpvProp.gvOcclusionStrength);
+                m_lpv.swap();
+            }
+
+            barrierLpv(m_lpv.current(),
+                VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+        }
+    });
+
+    m_pipeline.addStep({
+        .name = "LPV-Bootstrap",
+        .phase = "GI",
+        .enabled = false,
+        .record = [this](VkCommandBuffer cmd) {
+            VkImage imgs[3] = {m_lpv.current().lpvR.image(),
+                               m_lpv.current().lpvG.image(),
+                               m_lpv.current().lpvB.image()};
+            for (auto img : imgs) {
+                transitionImage(cmd, img, VK_IMAGE_ASPECT_COLOR_BIT,
+                    VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                    VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
+                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                    VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+            }
+        }
+    });
+
+    // ============================
+    // Phase 1.8: RSM sample
+    // ============================
+    m_pipeline.addStep({
+        .name = "RSM-Sample",
+        .phase = "GI",
+        .enabled = false,
+        .record = [this](VkCommandBuffer cmd) {
+            transitionImage(cmd, m_rt.rsmGI.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
+                VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
+                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
+            m_rsmSample.record(cmd, m_rt);
+            transitionImage(cmd, m_rt.rsmGI.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+        }
+    });
+
+    m_pipeline.addStep({
+        .name = "RSM-Clear",
+        .phase = "GI",
+        .enabled = false,
+        .record = [this](VkCommandBuffer cmd) {
+            transitionImage(cmd, m_rt.rsmGI.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
+                VK_PIPELINE_STAGE_2_CLEAR_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
+            VkClearColorValue zero{};
+            VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+            vkCmdClearColorImage(cmd, m_rt.rsmGI.image(),
+                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &zero, 1, &range);
+            transitionImage(cmd, m_rt.rsmGI.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                VK_PIPELINE_STAGE_2_CLEAR_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+        }
+    });
+
+    // === GI 结束 timestamp ===
+    m_pipeline.addStep({
+        .name = "TS-GI",
+        .phase = "GI",
+        .record = [this](VkCommandBuffer cmd) {
+            writeTimestamp(cmd, kTsVoxelGI);
+        }
+    });
+
+    // ============================
+    // Phase 2: Lighting (compute)
+    // ============================
+    m_pipeline.addStep({
+        .name = "Lighting",
+        .phase = "Shading",
+        .timestampSlot = kTsLighting,
+        .record = [this](VkCommandBuffer cmd) {
+            transitionImage(cmd, m_rt.hdrColor.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
+                VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
+                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
+            m_lighting.record(cmd, m_rt);
+            writeTimestamp(cmd, kTsLighting);
+        }
+    });
+
+    // ============================
+    // Phase 3: Skybox (graphics)
+    // ============================
+    m_pipeline.addStep({
+        .name = "Skybox",
+        .phase = "Shading",
+        .record = [this](VkCommandBuffer cmd) {
+            transitionImage(cmd, m_rt.hdrColor.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+                VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT |
+                    VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT);
+            transitionImage(cmd, m_rt.depth.image(), VK_IMAGE_ASPECT_DEPTH_BIT,
+                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
+                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
+                VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT,
+                VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT);
+            m_skybox.record(cmd, m_rt);
+        }
+    });
+
+    // ============================
+    // Phase 3.5: Copy hdrColor → hdrPrev
+    // ============================
+    m_pipeline.addStep({
+        .name = "Copy-hdrPrev",
+        .phase = "Shading",
+        .record = [this](VkCommandBuffer cmd) {
+            transitionImage(cmd, m_rt.hdrColor.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+                VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
+            transitionImage(cmd, m_rt.hdrPrev.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
+                VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
+            VkImageCopy hdrCopy{};
+            hdrCopy.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+            hdrCopy.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+            hdrCopy.extent = {m_rt.extent.width, m_rt.extent.height, 1};
+            vkCmdCopyImage(cmd,
+                m_rt.hdrColor.image(), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                m_rt.hdrPrev.image(),  VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                1, &hdrCopy);
+            transitionImage(cmd, m_rt.hdrPrev.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+
+            writeTimestamp(cmd, kTsSkybox);
+        }
+    });
+}
+
 void App::run() {
     auto last = std::chrono::high_resolution_clock::now();
     float fpsTimer = 0;
@@ -1879,1233 +3266,73 @@ void App::run() {
             }
         }
 
+        // 设置帧相关成员供管线表 lambda 使用
+        m_currentFrameInFlight = frame.frameInFlight;
+        m_currentSwapView = frame.view;
+        m_currentSwapImage = frame.image;
+        m_currentSwapExtent = frame.extent;
+        m_currentProj = ubo.proj;
+        m_currentView = ubo.view;
+        m_currentInvViewProj = ubo.invViewProj;
+
         // Reset + write start timestamp
         vkCmdResetQueryPool(cmd, m_timestampPool, qBase, kTimestampSlots);
         vkCmdWriteTimestamp2(cmd, VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT,
                              m_timestampPool, qBase + kTsStart);
 
-#define TS(slot) vkCmdWriteTimestamp2(cmd, VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT, m_timestampPool, qBase + (slot))
-
-        // === Phase 0: RSM 几何（sun-view MRT） ===
-        // 独立于主 camera，不依赖 GBuffer 也无 GBuffer 依赖；放最前面方
-        // 便 RenderDoc 单独审视。layout 转换由 m_rsmGeom.record 内部完成
-        // （结尾 4 张都到 SHADER_READ_ONLY，给后续 RsmSamplePass 直接用）。
-        m_rsmGeom.record(cmd, m_scene, m_sceneGpu);
-
-        // === Phase 1: GBuffer prepass (graphics, MRT) with MSAA ===
-        // MSAA images + SS resolve targets all go to attachment layout.
-        // resolveImageLayout = COLOR_ATTACHMENT / DEPTH_ATTACHMENT。
-        auto toColorAttach = [&](VkImage img) {
-            transitionImage(cmd, img, VK_IMAGE_ASPECT_COLOR_BIT,
-                VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-                VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
-                VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-                VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
-        };
-        // MSAA render targets
-        toColorAttach(m_rt.gAlbedoMetalMs.image());
-        toColorAttach(m_rt.gNormalRoughMs.image());
-        toColorAttach(m_rt.gEmissiveAOMs.image());
-        transitionImage(cmd, m_rt.depthMs.image(), VK_IMAGE_ASPECT_DEPTH_BIT,
-            VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
-            VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
-            VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT,
-            VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT);
-
-        // SS resolve targets — resolveImageLayout = COLOR_ATTACHMENT / DEPTH_ATTACHMENT
-        toColorAttach(m_rt.gAlbedoMetal.image());
-        toColorAttach(m_rt.gNormalRough.image());
-        toColorAttach(m_rt.gEmissiveAO.image());
-        transitionImage(cmd, m_rt.depth.image(), VK_IMAGE_ASPECT_DEPTH_BIT,
-            VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
-            VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
-            VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT,
-            VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT);
-
-        m_gbuffer.record(cmd, m_rt, m_scene, m_sceneGpu);
-
-        // Resolve 后 SS GBuffer 在 attachment layout，翻到 SHADER_READ_ONLY
-        // 供下游 compute（SSAO / SSR / SSGI / Lighting）采样。
-        auto colorAttachToSampled = [&](VkImage img) {
-            transitionImage(cmd, img, VK_IMAGE_ASPECT_COLOR_BIT,
-                VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-                VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
-                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
-        };
-        colorAttachToSampled(m_rt.gAlbedoMetal.image());
-        colorAttachToSampled(m_rt.gNormalRough.image());
-        colorAttachToSampled(m_rt.gEmissiveAO.image());
-        transitionImage(cmd, m_rt.depth.image(), VK_IMAGE_ASPECT_DEPTH_BIT,
-            VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
-            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-            VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
-            VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
-            VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-            VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
-
-        TS(kTsGBuffer);
-
-        // MSAA images stay in attachment layout (no transition needed);
-        // next frame's VK_IMAGE_LAYOUT_UNDEFINED oldLayout discards them.
-
-        // === Phase 1.5: AO (compute, SSAO/GTAO 二选一或 None) ===
-        // 两种 AO 共享 rt.ssao R8 输出（lighting 端不区分来源）。当 None
-        // 时把 AO 清成 1.0，lighting 读到 1 表示无遮蔽。
-        bool aoOn = (m_aoMethod != AOMethod::None);
-        if (aoOn) {
-            transitionImage(cmd, m_rt.ssao.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-                VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
-                VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
-                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
-            if (m_aoMethod == AOMethod::SSAO) {
-                m_ssao.record(cmd, m_rt, ubo.proj, glm::inverse(ubo.proj), ubo.view);
-            } else {
-                m_gtao.record(cmd, m_rt, ubo.proj, ubo.view);
-            }
-            transitionImage(cmd, m_rt.ssao.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-                VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
-                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
-        } else {
-            transitionImage(cmd, m_rt.ssao.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-                VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
-                VK_PIPELINE_STAGE_2_CLEAR_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
-            VkClearColorValue white{};
-            white.float32[0] = 1.0f; white.float32[1] = 1.0f;
-            white.float32[2] = 1.0f; white.float32[3] = 1.0f;
-            VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-            vkCmdClearColorImage(cmd, m_rt.ssao.image(),
-                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &white, 1, &range);
-            transitionImage(cmd, m_rt.ssao.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                VK_PIPELINE_STAGE_2_CLEAR_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
-                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
-        }
-
-        // === Phase 1.6: SSR (compute, before lighting) ===
-        // Reads gNormalRough/gDepth (already SHADER_READ_ONLY) + hdrPrev
-        // (kept SHADER_READ_ONLY by bootstrap + per-frame copy). Writes
-        // ssr image (rgba16f). When disabled, clear ssr to (0,0,0,0) so
-        // lighting blends iblSpec * (1-0) = iblSpec only.
-        if (m_ssr.enabled) {
-            transitionImage(cmd, m_rt.ssr.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-                VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
-                VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
-                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
-            m_ssr.record(cmd, m_rt);
-            transitionImage(cmd, m_rt.ssr.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-                VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
-                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
-        } else {
-            transitionImage(cmd, m_rt.ssr.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-                VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
-                VK_PIPELINE_STAGE_2_CLEAR_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
-            VkClearColorValue zero{};
-            VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-            vkCmdClearColorImage(cmd, m_rt.ssr.image(),
-                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &zero, 1, &range);
-            transitionImage(cmd, m_rt.ssr.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                VK_PIPELINE_STAGE_2_CLEAR_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
-                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
-        }
-
-        // === Phase 1.7: SSGI / GTGI (compute, before lighting) ===
-        // SSGI / GTGI 共享 rt.ssgi 输出 + ssgiPrev 时序 history，per-frame
-        // 二选一 dispatch；lighting.slang 读 gSsgi 不区分来源。
-        bool screenGiOn = m_ssgi.enabled || m_gtgi.enabled;
-        if (screenGiOn) {
-            // 1. ssgi(SHADER_READ_ONLY) → TRANSFER_SRC, ssgiPrev → TRANSFER_DST
-            transitionImage(cmd, m_rt.ssgi.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
-                VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
-            transitionImage(cmd, m_rt.ssgiPrev.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
-                VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
-
-            // 2. copy
-            VkImageCopy region{};
-            region.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-            region.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-            region.extent = {m_rt.extent.width, m_rt.extent.height, 1};
-            vkCmdCopyImage(cmd,
-                m_rt.ssgi.image(), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                m_rt.ssgiPrev.image(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                1, &region);
-
-            // 3. ssgiPrev → SHADER_READ_ONLY (供 SSGI shader sample)
-            transitionImage(cmd, m_rt.ssgiPrev.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
-                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
-            // 4. ssgi → GENERAL (写新值)
-            transitionImage(cmd, m_rt.ssgi.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-                VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL,
-                VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_READ_BIT,
-                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
-            if (m_ssgi.enabled) m_ssgi.record(cmd, m_rt);
-            else                m_gtgi.record(cmd, m_rt);
-            transitionImage(cmd, m_rt.ssgi.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-                VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
-                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
-        } else {
-            transitionImage(cmd, m_rt.ssgi.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-                VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
-                VK_PIPELINE_STAGE_2_CLEAR_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
-            VkClearColorValue zero{};
-            VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-            vkCmdClearColorImage(cmd, m_rt.ssgi.image(),
-                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &zero, 1, &range);
-            transitionImage(cmd, m_rt.ssgi.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                VK_PIPELINE_STAGE_2_CLEAR_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
-                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
-        }
-
-        // === Phase 1.83: VXGI voxelize → inject → mipmap (compute) ===
-        // M7：voxelize 写 mip 0 → RSM inject 覆写 RGB → mipmap 下采样到全
-        // mipchain → 转 SHADER_READ_ONLY 给 lighting cone trace。
-        // M11 DDGI 也吃 voxel grid 当 ray tracing 替代 → DDGI on 时
-        // 强制走 voxelize+inject+mipmap 这条链。
-        // SDFGI 也需要 voxel grid（trace 直接采 voxel radiance + 用 SDF
-        // 做 sphere-step）。ReSTIR DI shade 阶段也用 voxelGrid alpha 做 visibility。
-        bool needVoxelGrid = m_vxgiEnabled || m_ddgiEnabled || m_sdfgiPass.enabled
-                           || m_lumenEnabled
-                          || m_restirPass.enabled;
-        TS(kTsAO);
-
-        if (needVoxelGrid) {
-            // 1. clear 整张 mip chain 到 0。barrier 必须覆盖所有 mip（验证
-            //    层会检查 vkCmdClearColorImage 的 range 内每一级 mip 都
-            //    在 TRANSFER_DST_OPTIMAL）。helper transitionImage 默认只
-            //    转 mip 0，本里程碑这里手写覆盖 mipLevels()。
-            auto barrierAllMips = [&](VkImageLayout oldL, VkImageLayout newL,
-                                       VkPipelineStageFlags2 srcStg, VkAccessFlags2 srcAcc,
-                                       VkPipelineStageFlags2 dstStg, VkAccessFlags2 dstAcc) {
-                VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
-                b.srcStageMask = srcStg; b.srcAccessMask = srcAcc;
-                b.dstStageMask = dstStg; b.dstAccessMask = dstAcc;
-                b.oldLayout = oldL; b.newLayout = newL;
-                b.image = m_vxgi.image().image();
-                b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT,
-                                      0, m_vxgi.mipLevels(), 0, 1};
-                VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-                di.imageMemoryBarrierCount = 1; di.pImageMemoryBarriers = &b;
-                vkCmdPipelineBarrier2(cmd, &di);
-            };
-            barrierAllMips(VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
-                VK_PIPELINE_STAGE_2_CLEAR_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
-            VkClearColorValue zero{};
-            VkImageSubresourceRange rg{VK_IMAGE_ASPECT_COLOR_BIT,
-                                       0, m_vxgi.mipLevels(), 0, 1};
-            vkCmdClearColorImage(cmd, m_vxgi.image().image(),
-                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &zero, 1, &rg);
-            barrierAllMips(VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL,
-                VK_PIPELINE_STAGE_2_CLEAR_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
-                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
-
-            // 2. voxelize：scatter 所有 primitive 到 mip 0。
-            m_vxgiVoxelize.record(cmd, m_scene, m_sceneGpu,
-                m_vxgiGridMin, m_vxgiCellSize, kVxgiResolution);
-
-            // 3. inject：把 RSM (pos, flux) 覆写 mip 0 的 RGB。先做 barrier
-            //    让 voxelize 的 write 对 inject 的 read-modify-write 可见
-            //    （只对 mip 0；其它 mip 仍是 GENERAL 等 mipmap 写入）。
-            VkImageMemoryBarrier2 vbar{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
-            vbar.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-            vbar.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-            vbar.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-            vbar.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT |
-                                 VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-            vbar.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
-            vbar.newLayout = VK_IMAGE_LAYOUT_GENERAL;
-            vbar.image = m_vxgi.image().image();
-            vbar.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-            VkDependencyInfo vdi{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-            vdi.imageMemoryBarrierCount = 1; vdi.pImageMemoryBarriers = &vbar;
-            vkCmdPipelineBarrier2(cmd, &vdi);
-
-            m_vxgiInject.record(cmd, kVxgiResolution, m_vxgiGridMin, m_vxgiCellSize);
-
-            // 4. mipmap：iterate src mip i → dst mip i+1。pass 内部做 barrier。
-            m_vxgiMipmap.record(cmd, m_vxgi);
-
-            // 5. 把所有 voxel mip 转 SHADER_READ_ONLY（最后一级 GENERAL → SR_O）。
-            VkImageMemoryBarrier2 fb{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
-            fb.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-            fb.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-            fb.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-            fb.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
-            fb.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
-            fb.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-            fb.image = m_vxgi.image().image();
-            fb.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT,
-                                   m_vxgi.mipLevels() - 1, 1, 0, 1};
-            VkDependencyInfo fdi{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-            fdi.imageMemoryBarrierCount = 1; fdi.pImageMemoryBarriers = &fb;
-            vkCmdPipelineBarrier2(cmd, &fdi);
-
-            // 6. B.6：构建 anisotropic alpha mipchain。
-            //    入口：所有 mip UNDEFINED → SHADER_READ_ONLY（discard）。
-            //    aniso pass 内部每 iter 把 dst mip 转 GENERAL 写、再回
-            //    SHADER_READ_ONLY；这样描述符 sampled view 总是 SR_O。
-            VkImageMemoryBarrier2 ab{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
-            ab.srcStageMask = VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
-            ab.srcAccessMask = 0;
-            ab.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-            ab.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
-            ab.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-            ab.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-            ab.image = m_vxgi.aniso().image();
-            ab.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT,
-                                   0, m_vxgi.mipLevels(), 0, 1};
-            VkDependencyInfo adi{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-            adi.imageMemoryBarrierCount = 1; adi.pImageMemoryBarriers = &ab;
-            vkCmdPipelineBarrier2(cmd, &adi);
-
-            m_vxgiAniso.record(cmd, m_vxgi);
-            // pass 结尾所有 mip 已经在 SHADER_READ_ONLY（每 iter 自己转回）。
-
-            // C.2 + L.3a multi-bounce relight：voxel cone-trace 自身 →
-            // scratch/scratch2 ping-pong → copy 最终结果回 voxelGrid mip 0。
-            // Lumen 模式：3 bounce；VXGI 独立 relight：1 bounce。
-            if (m_vxgiRelightEnabled) {
-                int bounces = m_lumenEnabled ? 3 : 1;
-
-                // Helper: transition 3D image mip 0
-                auto transImg = [&](VkImage img, VkImageLayout oldL, VkImageLayout newL,
-                                    VkPipelineStageFlags2 srcS, VkAccessFlags2 srcA,
-                                    VkPipelineStageFlags2 dstS, VkAccessFlags2 dstA) {
-                    VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
-                    b.srcStageMask = srcS; b.srcAccessMask = srcA;
-                    b.dstStageMask = dstS; b.dstAccessMask = dstA;
-                    b.oldLayout = oldL; b.newLayout = newL;
-                    b.image = img;
-                    b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-                    VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-                    di.imageMemoryBarrierCount = 1; di.pImageMemoryBarriers = &b;
-                    vkCmdPipelineBarrier2(cmd, &di);
-                };
-
-                auto blitScratchToVoxel = [&](VkImage srcImg) {
-                    // voxelGrid mip0 SR_O → TRANSFER_DST
-                    transImg(m_vxgi.image().image(),
-                        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                        VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
-                        VK_PIPELINE_STAGE_2_COPY_BIT,
-                        VK_ACCESS_2_TRANSFER_WRITE_BIT);
-                    // src GENERAL → TRANSFER_SRC
-                    transImg(srcImg,
-                        VK_IMAGE_LAYOUT_GENERAL,
-                        VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                        VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
-                        VK_PIPELINE_STAGE_2_COPY_BIT,
-                        VK_ACCESS_2_TRANSFER_READ_BIT);
-                    // copy
-                    VkImageCopy region{};
-                    region.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-                    region.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-                    region.extent = {kVxgiResolution, kVxgiResolution, kVxgiResolution};
-                    vkCmdCopyImage(cmd,
-                        srcImg, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                        m_vxgi.image().image(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                        1, &region);
-                    // voxelGrid mip0 TRANSFER_DST → SR_O
-                    transImg(m_vxgi.image().image(),
-                        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                        VK_PIPELINE_STAGE_2_COPY_BIT,
-                        VK_ACCESS_2_TRANSFER_WRITE_BIT,
-                        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                        VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
-                };
-
-                // Bounce 1: read voxelGrid → write scratch
-                transImg(m_vxgi.relightScratch().image(),
-                    VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
-                    VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
-                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                    VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
-                m_vxgiRelight.record(cmd, m_vxgiRelight.voxelSet(), kVxgiResolution,
-                    m_vxgi.mipLevels(), m_vxgiCellSize, m_vxgiGridMin,
-                    m_vxgiRelightStrength);
-
-                if (bounces >= 2) {
-                    // scratch GENERAL → SR_O, scratch2 UNDEFINED → GENERAL
-                    transImg(m_vxgi.relightScratch().image(),
-                        VK_IMAGE_LAYOUT_GENERAL,
-                        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                        VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
-                        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                        VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
-                    transImg(m_vxgi.relightScratch2().image(),
-                        VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
-                        VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
-                        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                        VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
-
-                    // Bounce 2: read scratch → write scratch2 (pp0)
-                    m_vxgiRelight.record(cmd, m_vxgiRelight.pingSet0(), kVxgiResolution,
-                        m_vxgi.mipLevels(), m_vxgiCellSize, m_vxgiGridMin,
-                        m_vxgiRelightStrength);
-
-                    if (bounces >= 3) {
-                        // scratch2 GENERAL → SR_O, scratch SR_O → GENERAL
-                        transImg(m_vxgi.relightScratch2().image(),
-                            VK_IMAGE_LAYOUT_GENERAL,
-                            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                            VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                            VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
-                            VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                            VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
-                        transImg(m_vxgi.relightScratch().image(),
-                            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                            VK_IMAGE_LAYOUT_GENERAL,
-                            VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                            VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
-                            VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                            VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
-
-                        // Bounce 3: read scratch2 → write scratch (pp1)
-                        m_vxgiRelight.record(cmd, m_vxgiRelight.pingSet1(), kVxgiResolution,
-                            m_vxgi.mipLevels(), m_vxgiCellSize, m_vxgiGridMin,
-                            m_vxgiRelightStrength);
-
-                        // Final result in scratch → copy to voxelGrid
-                        blitScratchToVoxel(m_vxgi.relightScratch().image());
-                    } else {
-                        // 2 bounces: final result in scratch2 → copy to voxelGrid
-                        blitScratchToVoxel(m_vxgi.relightScratch2().image());
-                    }
-                } else {
-                    // 1 bounce: final result in scratch → copy to voxelGrid
-                    blitScratchToVoxel(m_vxgi.relightScratch().image());
-                }
-            }
-
-            // L.3b 6-axis resolve: isotropic voxelGrid → 3-axis radiance
-            if (m_lumenEnabled && m_vxgiSixAxisInited) {
-                // Transition axis images to GENERAL for writing.
-                // First frame: UNDEFINED → GENERAL; later: SR_O → GENERAL
-                VkImageLayout axisOldL = m_lumenAtlasInited
-                    ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
-                    : VK_IMAGE_LAYOUT_UNDEFINED;
-                VkPipelineStageFlags2 axisSrcS = m_lumenAtlasInited
-                    ? VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT
-                    : VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
-                VkAccessFlags2 axisSrcA = m_lumenAtlasInited
-                    ? VK_ACCESS_2_SHADER_SAMPLED_READ_BIT : 0u;
-                auto transAxisToGeneral = [&](VkImage img) {
-                    VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
-                    b.srcStageMask = axisSrcS; b.srcAccessMask = axisSrcA;
-                    b.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-                    b.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-                    b.oldLayout = axisOldL;
-                    b.newLayout = VK_IMAGE_LAYOUT_GENERAL;
-                    b.image = img;
-                    b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-                    VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-                    di.imageMemoryBarrierCount = 1; di.pImageMemoryBarriers = &b;
-                    vkCmdPipelineBarrier2(cmd, &di);
-                };
-                transAxisToGeneral(m_vxgi.sixAxisX().image());
-                transAxisToGeneral(m_vxgi.sixAxisY().image());
-                transAxisToGeneral(m_vxgi.sixAxisZ().image());
-
-                m_vxgiResolve6Axis.record(cmd, kVxgiResolution, m_vxgi.mipLevels(),
-                    m_vxgiCellSize, m_vxgiGridMin, m_vxgiRelightStrength);
-
-                // Axis images GENERAL → SHADER_READ_ONLY for probe pass
-                auto transAxisToSRO = [&](VkImage img) {
-                    VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
-                    b.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-                    b.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-                    b.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-                    b.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
-                    b.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
-                    b.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-                    b.image = img;
-                    b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-                    VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-                    di.imageMemoryBarrierCount = 1; di.pImageMemoryBarriers = &b;
-                    vkCmdPipelineBarrier2(cmd, &di);
-                };
-                transAxisToSRO(m_vxgi.sixAxisX().image());
-                transAxisToSRO(m_vxgi.sixAxisY().image());
-                transAxisToSRO(m_vxgi.sixAxisZ().image());
-            }
-        } else {
-            // VXGI/DDGI 都关：lighting 仍要求 voxelGrid binding 合法。
-            // UNDEFINED→SHADER_READ_ONLY（discard 内容；shader 不会读）。
-            VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
-            b.srcStageMask = VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
-            b.srcAccessMask = 0;
-            b.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-            b.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
-            b.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-            b.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-            b.image = m_vxgi.image().image();
-            b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT,
-                                  0, m_vxgi.mipLevels(), 0, 1};
-            VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-            di.imageMemoryBarrierCount = 1; di.pImageMemoryBarriers = &b;
-            vkCmdPipelineBarrier2(cmd, &di);
-            // B.6 aniso 也要在 SHADER_READ_ONLY（lighting binding 19）。
-            // 走同样的 UNDEFINED→SHADER_READ_ONLY discard。
-            b.image = m_vxgi.aniso().image();
-            vkCmdPipelineBarrier2(cmd, &di);
-        }
-
-        // === Phase 1.835: SDFGI (compute, after VXGI 链) ====================
-        // 进入条件：voxelGrid + aniso 均在 SHADER_READ_ONLY（上面 if/else 都
-        // 已统一）。SDFGI 跑完写 rt.ssgi（lighting 读）。
-        if (m_sdfgiPass.enabled) {
-            // 首次激活：seedA/seedB/udf 是 UNDEFINED → 全转 GENERAL。
-            if (!m_sdfgiBootstrapped) {
-                auto bootstrapToGeneral = [&](VkImage img) {
-                    VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
-                    b.srcStageMask = VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
-                    b.srcAccessMask = 0;
-                    b.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-                    b.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-                    b.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-                    b.newLayout = VK_IMAGE_LAYOUT_GENERAL;
-                    b.image = img;
-                    b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-                    VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-                    di.imageMemoryBarrierCount = 1; di.pImageMemoryBarriers = &b;
-                    vkCmdPipelineBarrier2(cmd, &di);
-                };
-                bootstrapToGeneral(m_sdfgi.seedA().image());
-                bootstrapToGeneral(m_sdfgi.seedB().image());
-                bootstrapToGeneral(m_sdfgi.udf().image());
-                m_sdfgiBootstrapped = true;
-            }
-            // ssgi 当前在 SHADER_READ_ONLY（SSGI/GTGI 关时由"else clear"路径
-            // 转过；SDFGI 与 SSGI/GTGI 互斥）→ 转 GENERAL 供 trace 写。
-            transitionImage(cmd, m_rt.ssgi.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                VK_IMAGE_LAYOUT_GENERAL,
-                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
-                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
-
-            m_sdfgiPass.record(cmd, m_sdfgi, m_rt, m_frameIndex,
-                m_sdfgiPass.seedThreshold, m_sdfgiPass.maxDistCells,
-                (uint32_t)m_sdfgiPass.numRays,
-                (uint32_t)m_sdfgiPass.maxSteps,
-                m_sdfgiPass.rayMaxCells, m_sdfgiPass.hitEpsCells);
-
-            // 写完 ssgi → 转 SHADER_READ_ONLY 供 lighting 读
-            transitionImage(cmd, m_rt.ssgi.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-                VK_IMAGE_LAYOUT_GENERAL,
-                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
-                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
-        }
-
-        // === Phase 1.836: M9 RT GI (compute, HW 光线追踪) ==================
-        if (m_rtGiBound && m_giIndexApplied == 10) {
-            transitionImage(cmd, m_rt.rtGI.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-                VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
-                VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
-                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
-            m_rtGiPass.record(cmd, m_rt);
-            transitionImage(cmd, m_rt.rtGI.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-                VK_IMAGE_LAYOUT_GENERAL,
-                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
-                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
-        } else if (m_rtGiInited) {
-            // RT GI 关闭时仍须保证 rtGI 在 SHADER_READ_ONLY（lighting 读）。
-            // 始终从 UNDEFINED 起：旧内容不必保留——下一步是写全图（clear）
-            // 或已经是 valid 数据但上一帧 lighting 读完我们重新 clear。UNDEFINED
-            // 总是安全的。
-            transitionImage(cmd, m_rt.rtGI.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-                VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
-                VK_PIPELINE_STAGE_2_CLEAR_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
-            VkClearColorValue zero{};
-            VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-            vkCmdClearColorImage(cmd, m_rt.rtGI.image(),
-                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &zero, 1, &range);
-            transitionImage(cmd, m_rt.rtGI.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                VK_PIPELINE_STAGE_2_CLEAR_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
-                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
-        }
-
-        // === Phase 1.837: ReSTIR DI (compute, after VXGI 链) ================
-        // 进入条件：voxelGrid 在 SHADER_READ_ONLY（shade 阶段需 alpha-only
-        // visibility ray march）。lights SSBO 已 mapped；CPU 上传 demo 光源。
-        if (m_restirPass.enabled) {
-            // 每帧上传光源（demo lights，仅 8 个，开销可忽略）
-            m_restir.updateLights(m_demoLights);
-
-            // 首次激活：reservoirA/B UNDEFINED → GENERAL。
-            if (!m_restirBootstrapped) {
-                auto bootstrapToGeneral = [&](VkImage img) {
-                    VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
-                    b.srcStageMask = VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
-                    b.srcAccessMask = 0;
-                    b.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-                    b.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-                    b.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-                    b.newLayout = VK_IMAGE_LAYOUT_GENERAL;
-                    b.image = img;
-                    b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-                    VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-                    di.imageMemoryBarrierCount = 1; di.pImageMemoryBarriers = &b;
-                    vkCmdPipelineBarrier2(cmd, &di);
-                };
-                bootstrapToGeneral(m_restir.reservoirA().image());
-                bootstrapToGeneral(m_restir.reservoirB().image());
-                m_restirBootstrapped = true;
-            }
-            // rt.restir → GENERAL（shade 写）。oldLayout 看是否首次：
-            // 首次 UNDEFINED；之后从上一帧 SR_O。
-            VkImageLayout restirOld = m_restirOutInited
-                ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
-                : VK_IMAGE_LAYOUT_UNDEFINED;
-            transitionImage(cmd, m_rt.restir.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-                restirOld, VK_IMAGE_LAYOUT_GENERAL,
-                m_restirOutInited ? VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT
-                                   : VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT,
-                m_restirOutInited ? VK_ACCESS_2_SHADER_SAMPLED_READ_BIT : 0,
-                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
-            m_restirOutInited = true;
-
-            uint32_t numLights = (uint32_t)m_demoLights.size();
-            bool useRtVis = m_rtSupported && m_rtGiBound;
-            m_restirPass.record(cmd, m_restir, m_rt,
-                numLights,
-                (uint32_t)m_restirPass.numCandidates,
-                (uint32_t)m_restirPass.numNeighbors,
-                m_restirPass.spatialRadius,
-                (uint32_t)m_restirPass.shadowSteps,
-                m_restirPass.intensityScale,
-                m_frameIndex,
-                useRtVis);
-
-            // rt.restir → SHADER_READ_ONLY 给 lighting 读
-            transitionImage(cmd, m_rt.restir.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-                VK_IMAGE_LAYOUT_GENERAL,
-                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
-                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
-        } else {
-            // 关闭：clear rt.restir 到 0（lighting 仍读，但加 0 = 无贡献）。
-            VkImageLayout restirOld = m_restirOutInited
-                ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
-                : VK_IMAGE_LAYOUT_UNDEFINED;
-            transitionImage(cmd, m_rt.restir.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-                restirOld, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                m_restirOutInited ? VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT
-                                   : VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT,
-                m_restirOutInited ? VK_ACCESS_2_SHADER_SAMPLED_READ_BIT : 0,
-                VK_PIPELINE_STAGE_2_CLEAR_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
-            VkClearColorValue zero{};
-            VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-            vkCmdClearColorImage(cmd, m_rt.restir.image(),
-                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &zero, 1, &range);
-            transitionImage(cmd, m_rt.restir.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                VK_PIPELINE_STAGE_2_CLEAR_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
-                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
-            m_restirOutInited = true;
-        }
-
-        // === Phase 1.84: DDGI update + blend (compute) ===
-        // 从 voxel grid 投 ray → 写 ray buffer → blend 到 atlas。
-        // atlas 转 GENERAL（供 blend 写）→ 转 SHADER_READ_ONLY（供 lighting 读）。
-        // 关闭 DDGI 时也得保证 atlas 在 SHADER_READ_ONLY，避免 lighting binding 失效。
-        auto barrierAtlas = [&](VkImage img,
-                                VkImageLayout oldL, VkImageLayout newL,
-                                VkPipelineStageFlags2 srcStg, VkAccessFlags2 srcAcc,
-                                VkPipelineStageFlags2 dstStg, VkAccessFlags2 dstAcc) {
-            VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
-            b.srcStageMask = srcStg; b.srcAccessMask = srcAcc;
-            b.dstStageMask = dstStg; b.dstAccessMask = dstAcc;
-            b.oldLayout = oldL; b.newLayout = newL;
-            b.image = img;
-            b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-            VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-            di.imageMemoryBarrierCount = 1; di.pImageMemoryBarriers = &b;
-            vkCmdPipelineBarrier2(cmd, &di);
-        };
-        if (m_ddgiEnabled) {
-            // 1. atlas → GENERAL（首次 UNDEFINED；后续帧 SHADER_READ_ONLY）
-            VkImageLayout oldAtlasL = m_ddgiAtlasInited
-                ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
-                : VK_IMAGE_LAYOUT_UNDEFINED;
-            VkAccessFlags2 srcAcc = m_ddgiAtlasInited
-                ? VK_ACCESS_2_SHADER_SAMPLED_READ_BIT : 0;
-            VkPipelineStageFlags2 srcStg = m_ddgiAtlasInited
-                ? VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT
-                : VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
-            barrierAtlas(m_ddgi.irradiance().image(),
-                oldAtlasL, VK_IMAGE_LAYOUT_GENERAL,
-                srcStg, srcAcc,
-                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
-            barrierAtlas(m_ddgi.distance().image(),
-                oldAtlasL, VK_IMAGE_LAYOUT_GENERAL,
-                srcStg, srcAcc,
-                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
-
-            // 2. ddgi update + blend（pass 内部已有 ray buf 写后 read 的 mem barrier）
-            float jitterRot = float((m_frameIndex % 360) * 0.0174532925);
-            m_ddgiPass.record(cmd, m_ddgi, m_ddgiOrigin, m_ddgiSpacing,
-                m_vxgiGridMin, m_vxgiCellSize, kVxgiResolution,
-                jitterRot, m_frameIndex);
-
-            // 3. atlas → SHADER_READ_ONLY for lighting
-            barrierAtlas(m_ddgi.irradiance().image(),
-                VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
-                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
-            barrierAtlas(m_ddgi.distance().image(),
-                VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
-                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
-            m_ddgiAtlasInited = true;
-        } else if (!m_ddgiAtlasInited) {
-            // DDGI 从未跑过 → atlas 还在 UNDEFINED。lighting binding 16/17
-            // 要求 SHADER_READ_ONLY，做一次 discard transition。
-            barrierAtlas(m_ddgi.irradiance().image(),
-                VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
-                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
-            barrierAtlas(m_ddgi.distance().image(),
-                VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
-                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
-            m_ddgiAtlasInited = true;
-        }
-        ++m_frameIndex;
-
-        // === Phase 1.845: Lumen-lite screen probe + gather (compute) ======
-        // Debug mode 5: bypass all Lumen passes, just clear lumenGI to grey
-        if (m_lumenEnabled && m_lumenDebugMode == 5) {
-            VkImageLayout oldL = m_lumenOutInited
-                ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
-                : VK_IMAGE_LAYOUT_UNDEFINED;
-            VkPipelineStageFlags2 srcS = m_lumenOutInited
-                ? VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT
-                : VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
-            VkAccessFlags2 srcA = m_lumenOutInited
-                ? VK_ACCESS_2_SHADER_SAMPLED_READ_BIT : 0u;
-            transitionImage(cmd, m_rt.lumenGI.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-                oldL, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                srcS, srcA,
-                VK_PIPELINE_STAGE_2_CLEAR_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
-            VkClearColorValue grey{};
-            grey.float32[0] = 0.3f; grey.float32[1] = 0.3f;
-            grey.float32[2] = 0.3f; grey.float32[3] = 1.0f;
-            VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-            vkCmdClearColorImage(cmd, m_rt.lumenGI.image(),
-                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &grey, 1, &range);
-            transitionImage(cmd, m_rt.lumenGI.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                VK_PIPELINE_STAGE_2_CLEAR_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
-                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
-            m_lumenOutInited = true;
-        } else if (m_lumenEnabled) {
-            // -- Probe pass bootstrap --
-            if (!m_lumenProbeInited) {
-                m_lumenProbePass.init(*m_device);
-                m_lumenProbePass.bindResources(*m_device, m_lumen, m_rtAS, m_sceneGpu,
-                                                m_vxgi, m_rt, m_gbuffer.frameUboHandle(),
-                                                m_vxgiSixAxisInited);
-                m_lumenProbeInited = true;
-            }
-
-            // Transition probe + filtered atlas to GENERAL each frame before
-            // probe/filter writes (src layout: SR_O from previous frame's barriers,
-            // or UNDEFINED on first frame).
-            {
-                VkImageLayout oldL = m_lumenAtlasInited
-                    ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
-                    : VK_IMAGE_LAYOUT_UNDEFINED;
-                VkPipelineStageFlags2 srcS = m_lumenAtlasInited
-                    ? VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT
-                    : VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
-                VkAccessFlags2 srcA = m_lumenAtlasInited
-                    ? VK_ACCESS_2_SHADER_SAMPLED_READ_BIT : 0u;
-                auto transToGeneral = [&](VkImage img) {
-                    VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
-                    b.srcStageMask = srcS; b.srcAccessMask = srcA;
-                    b.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-                    b.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-                    b.oldLayout = oldL;
-                    b.newLayout = VK_IMAGE_LAYOUT_GENERAL;
-                    b.image = img;
-                    b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-                    VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-                    di.imageMemoryBarrierCount = 1; di.pImageMemoryBarriers = &b;
-                    vkCmdPipelineBarrier2(cmd, &di);
-                };
-                transToGeneral(m_lumen.probeAtlas().image());
-                transToGeneral(m_lumen.filteredAtlas().image());
-                m_lumenAtlasInited = true;
-            }
-
-            // 1. Probe pass: TLAS RayQuery → voxelGrid → SH9 probe atlas
-            m_lumenProbePass.record(cmd, m_lumen, m_frameIndex,
-                                     m_lumenDebugMode >= 3 ? (uint32_t)m_lumenDebugMode - 1u : (m_vxgiSixAxisInited ? 1u : 0u));
-
-            // Barrier: probeAtlas GENERAL → SHADER_READ_ONLY for filter pass
-            {
-                VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
-                b.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-                b.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-                b.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-                b.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
-                b.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
-                b.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-                b.image = m_lumen.probeAtlas().image();
-                b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-                VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-                di.imageMemoryBarrierCount = 1; di.pImageMemoryBarriers = &b;
-                vkCmdPipelineBarrier2(cmd, &di);
-            }
-
-            // 2a. L.4 Filter pass: spatial + temporal → filteredAtlas
-            // First frame: transition prevAtlas UNDEFINED → SR_O for filter read
-            if (!m_lumenFilterInited) {
-                VkImageMemoryBarrier2 pb{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
-                pb.srcStageMask = VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
-                pb.srcAccessMask = 0;
-                pb.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-                pb.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
-                pb.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-                pb.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-                pb.image = m_lumen.prevAtlas().image();
-                pb.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-                VkDependencyInfo pdi{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-                pdi.imageMemoryBarrierCount = 1; pdi.pImageMemoryBarriers = &pb;
-                vkCmdPipelineBarrier2(cmd, &pdi);
-
-                m_lumenFilterPass.init(*m_device);
-                m_lumenFilterPass.bindResources(*m_device, m_lumen, m_rt,
-                                                 m_gbuffer.frameUboHandle());
-                m_lumenFilterInited = true;
-            }
-            m_lumenFilterPass.record(cmd, m_lumen, m_rt);
-
-            // After filter: copy filteredAtlas → prevAtlas for next frame
-            {
-                auto imgBarrier = [&](VkImage img, VkImageLayout oldL, VkImageLayout newL,
-                                      VkPipelineStageFlags2 srcS, VkAccessFlags2 srcA,
-                                      VkPipelineStageFlags2 dstS, VkAccessFlags2 dstA) {
-                    VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
-                    b.srcStageMask = srcS; b.srcAccessMask = srcA;
-                    b.dstStageMask = dstS; b.dstAccessMask = dstA;
-                    b.oldLayout = oldL; b.newLayout = newL;
-                    b.image = img;
-                    b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-                    VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-                    di.imageMemoryBarrierCount = 1; di.pImageMemoryBarriers = &b;
-                    vkCmdPipelineBarrier2(cmd, &di);
-                };
-
-                // filteredAtlas: GENERAL → TRANSFER_SRC
-                imgBarrier(m_lumen.filteredAtlas().image(),
-                    VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
-                    VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
-                // prevAtlas: SR_O → TRANSFER_DST
-                imgBarrier(m_lumen.prevAtlas().image(),
-                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
-                    VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
-
-                VkImageCopy region{};
-                region.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-                region.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-                region.extent = {m_lumen.atlasWidth(), m_lumen.atlasHeight(), 1};
-                vkCmdCopyImage(cmd,
-                    m_lumen.filteredAtlas().image(), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                    m_lumen.prevAtlas().image(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                    1, &region);
-
-                // filteredAtlas: TRANSFER_SRC → SR_O (for gather)
-                imgBarrier(m_lumen.filteredAtlas().image(),
-                    VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                    VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_READ_BIT,
-                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
-                // prevAtlas: TRANSFER_DST → SR_O (for next frame)
-                imgBarrier(m_lumen.prevAtlas().image(),
-                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                    VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
-                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
-            }
-
-            // 2b. Gather pass: filteredAtlas → SH9 irradiance → lumenGI
-            if (!m_lumenGatherInited) {
-                m_lumenGatherPass.init(*m_device);
-                m_lumenGatherPass.bindResources(*m_device, m_lumen, m_rt,
-                                                 m_gbuffer.frameUboHandle(), true);
-                m_lumenGatherInited = true;
-            }
-            // Transition lumenGI to GENERAL
-            {
-                VkImageLayout oldL = m_lumenOutInited
-                    ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
-                    : VK_IMAGE_LAYOUT_UNDEFINED;
-                VkAccessFlags2 srcA = m_lumenOutInited
-                    ? VK_ACCESS_2_SHADER_SAMPLED_READ_BIT : 0;
-                VkPipelineStageFlags2 srcS = m_lumenOutInited
-                    ? VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT
-                    : VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
-                VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
-                b.srcStageMask = srcS; b.srcAccessMask = srcA;
-                b.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-                b.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-                b.oldLayout = oldL;
-                b.newLayout = VK_IMAGE_LAYOUT_GENERAL;
-                b.image = m_rt.lumenGI.image();
-                b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-                VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-                di.imageMemoryBarrierCount = 1; di.pImageMemoryBarriers = &b;
-                vkCmdPipelineBarrier2(cmd, &di);
-            }
-            m_lumenGatherPass.record(cmd, m_lumen, m_rt,
-                                     (uint32_t)m_lumenDebugMode);
-
-            // Transition lumenGI GENERAL → SHADER_READ_ONLY for lighting
-            {
-                VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
-                b.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-                b.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-                b.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-                b.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
-                b.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
-                b.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-                b.image = m_rt.lumenGI.image();
-                b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-                VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-                di.imageMemoryBarrierCount = 1; di.pImageMemoryBarriers = &b;
-                vkCmdPipelineBarrier2(cmd, &di);
-            }
-            m_lumenOutInited = true;
-        }
-        // When Lumen off: atlas images already end each frame in SR_O from
-        // the filter/gather barriers; no explicit transition needed here.
-        // When Lumen off, ensure lumenGI is in SHADER_READ_ONLY for lighting.
-        // First frame: UNDEFINED → TRANSFER_DST, later: SHADER_READ_ONLY → TRANSFER_DST.
-        if (!m_lumenEnabled) {
-            VkImageLayout oldL = m_lumenOutInited
-                ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
-                : VK_IMAGE_LAYOUT_UNDEFINED;
-            VkPipelineStageFlags2 srcS = m_lumenOutInited
-                ? VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT
-                : VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
-            VkAccessFlags2 srcA = m_lumenOutInited
-                ? VK_ACCESS_2_SHADER_SAMPLED_READ_BIT : 0;
-            transitionImage(cmd, m_rt.lumenGI.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-                oldL, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                srcS, srcA,
-                VK_PIPELINE_STAGE_2_CLEAR_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
-            VkClearColorValue zero{};
-            VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-            vkCmdClearColorImage(cmd, m_rt.lumenGI.image(),
-                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &zero, 1, &range);
-            transitionImage(cmd, m_rt.lumenGI.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                VK_PIPELINE_STAGE_2_CLEAR_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
-                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
-            m_lumenOutInited = true;
-        }
-
-        // === Phase 1.85: LPV inject + propagate (compute) ===
-        // M6.0+M6.1：先把 RSM VPL 注入到 grid[0]（inject 内部已 clear），
-        // 再 ping-pong 跑 N 次 propagate。每次迭代前后做 src/dst 的
-        // GENERAL ↔ SHADER_READ_ONLY 切换。最后一次 propagate 写完，把
-        // m_lpv.current() 转 SHADER_READ_ONLY 给 lighting 用。
-        if (m_lpvEnabled) {
-            // 1. inject 写 grid[curIdx=0] + GV，结尾 layout = GENERAL + pending write。
-            m_lpvInject.record(cmd, kLpvResolution, m_lpvGridMin, m_lpvCellSize);
-
-            // B.8：GV 从 GENERAL（inject 写完）转 SHADER_READ_ONLY 给
-            // propagate sample。每 propagate iter 内 GV 都保持 SR_O。
-            transitionImage(cmd, m_lpv.gv().image(), VK_IMAGE_ASPECT_COLOR_BIT,
-                VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
-                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
-
-            auto barrierLpv = [&](const LpvGrid& g,
-                                  VkImageLayout oldL, VkImageLayout newL,
-                                  VkPipelineStageFlags2 srcStg, VkAccessFlags2 srcAcc,
-                                  VkPipelineStageFlags2 dstStg, VkAccessFlags2 dstAcc) {
-                VkImage imgs[3] = {g.lpvR.image(), g.lpvG.image(), g.lpvB.image()};
-                for (auto img : imgs) {
-                    transitionImage(cmd, img, VK_IMAGE_ASPECT_COLOR_BIT,
-                        oldL, newL, srcStg, srcAcc, dstStg, dstAcc);
-                }
-            };
-
-            // 2. ping-pong propagate。inject 之后 grid[curIdx=0] 是 src。
-            //    iter 强制偶数：每 2 次完整 ping-pong curIdx 回到 0。这样
-            //    lighting 始终从 grid[0] 读最终结果，描述符可以一次绑定。
-            int propIter = m_lpvProp.iterations & ~1;
-            for (int it = 0; it < propIter; ++it) {
-                LpvGrid& src = m_lpv.current();
-                LpvGrid& dst = m_lpv.next();
-
-                // src：GENERAL（写后） → SHADER_READ_ONLY（读）。
-                barrierLpv(src,
-                    VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                    VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
-                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                    VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
-
-                // dst：UNDEFINED → GENERAL。第一帧 grid[1] 是 UNDEFINED；
-                // 后续帧 dst 是上轮的 src（SHADER_READ_ONLY），都用
-                // UNDEFINED 起始 discard —— 因为 propagate 全 cell 覆盖写。
-                barrierLpv(dst,
-                    VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
-                    VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
-                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                    VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
-
-                m_lpvProp.record(cmd, m_lpv.curIdx(),
-                                 kLpvResolution, m_lpvProp.occlusionAmplifier,
-                                 m_lpvProp.gvOcclusionStrength);
-                m_lpv.swap();
-            }
-
-            // 3. 最后一次 propagate 写完后，curIdx 已经回到 0；grid[0] 在
-            //    GENERAL + pending write。给 lighting 用要再转 SHADER_READ_ONLY。
-            //    特殊情况：iter=0（用户调成 0）时连一次 propagate 都没跑，
-            //    grid[0] 还是 inject 写完的 GENERAL —— 同样要转 SHADER_READ_ONLY。
-            barrierLpv(m_lpv.current(),
-                VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
-                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
-        } else {
-            // LPV 关闭：grid 永远不会被 inject/propagate 写。lighting 的
-            // 描述符仍绑着 grid[0]，shader 端 lpvCounts.y=0 已经把读跳掉，
-            // 但描述符必须是合法 layout。第一帧之前 grid 是 UNDEFINED，
-            // 把它一次转成 SHADER_READ_ONLY（用 oneShot 不便，这里每帧
-            // 做也 OK，因为 oldLayout=UNDEFINED 会 discard 内容；shader
-            // 实际不读）。
-            VkImage imgs[3] = {m_lpv.current().lpvR.image(),
-                               m_lpv.current().lpvG.image(),
-                               m_lpv.current().lpvB.image()};
-            for (auto img : imgs) {
-                transitionImage(cmd, img, VK_IMAGE_ASPECT_COLOR_BIT,
-                    VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                    VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
-                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                    VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
-            }
-        }
-
-        // === Phase 1.8: RSM gather (compute) ===
-        // RSM 几何已在 Phase 0 收尾时转 SHADER_READ_ONLY，可直接采样。
-        // 关闭 RSM 时仍要把 rsmGI 抹成 0 + 转 SHADER_READ_ONLY —— 因为
-        // LightingPass 的描述符 binding 9 = rsmGI，每帧必须是合法 layout
-        // 且内容确定（counts.w=0 时 lerp 已被 gate 掉，但读纹理本身不能
-        // 出错）。模式同 SSGI 的 disable-clear。
-        if (m_rsmSample.enabled) {
-            transitionImage(cmd, m_rt.rsmGI.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-                VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
-                VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
-                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
-            m_rsmSample.record(cmd, m_rt);
-            transitionImage(cmd, m_rt.rsmGI.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-                VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
-                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
-        } else {
-            transitionImage(cmd, m_rt.rsmGI.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-                VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
-                VK_PIPELINE_STAGE_2_CLEAR_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
-            VkClearColorValue zero{};
-            VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-            vkCmdClearColorImage(cmd, m_rt.rsmGI.image(),
-                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &zero, 1, &range);
-            transitionImage(cmd, m_rt.rsmGI.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                VK_PIPELINE_STAGE_2_CLEAR_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
-                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
-        }
-
-        // === Phase 2: Lighting (compute) ===
-        TS(kTsVoxelGI);
-        transitionImage(cmd, m_rt.hdrColor.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-            VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
-            VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
-            VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-            VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
-
-        m_lighting.record(cmd, m_rt);
-        TS(kTsLighting);
-
-        // === Phase 3: Skybox (graphics) ===
-        // hdrColor: GENERAL → COLOR_ATTACHMENT (test depth, fill where depth==1).
-        // depth:    SHADER_READ_ONLY → DEPTH_ATTACHMENT (read-only test).
-        transitionImage(cmd, m_rt.hdrColor.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-            VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-            VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-            VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
-            VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-            VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT |
-                VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT);
-        transitionImage(cmd, m_rt.depth.image(), VK_IMAGE_ASPECT_DEPTH_BIT,
-            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-            VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
-            VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-            VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
-            VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT,
-            VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT);
-        m_skybox.record(cmd, m_rt);
-
-        // === Phase 3.5: copy hdrColor → hdrPrev (for next frame's SSR) ===
-        transitionImage(cmd, m_rt.hdrColor.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-            VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-            VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-            VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-            VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
-            VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
-        transitionImage(cmd, m_rt.hdrPrev.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-            VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-            VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
-            VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
-        VkImageCopy hdrCopy{};
-        hdrCopy.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-        hdrCopy.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-        hdrCopy.extent = {m_rt.extent.width, m_rt.extent.height, 1};
-        vkCmdCopyImage(cmd,
-            m_rt.hdrColor.image(), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-            m_rt.hdrPrev.image(),  VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-            1, &hdrCopy);
-        transitionImage(cmd, m_rt.hdrPrev.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-            VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
-            VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-            VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
-
-        TS(kTsSkybox);
-
-        // === Phase 4: Tonemap (compute) + optional AA ===
-        // hdrColor finishes phase 3.5 in TRANSFER_SRC, so transition from there.
+        // ============================================================
+        // 构建管线表并执行所有内部渲染 Pass
+        // ============================================================
+        buildPipelineTable();
+        m_pipeline.execute(cmd);
+
+        // ============================================================
+        // Phase 4: Post-processing (tonemap + AA + blit) + ImGui
+        // 这些步骤需要直接操作 swapchain image，保留在 run() 中处理
+        // ============================================================
+
+        // hdrColor: hdrPrev copy 结束后在 TRANSFER_SRC → SHADER_READ_ONLY for tonemap
         transitionImage(cmd, m_rt.hdrColor.image(), VK_IMAGE_ASPECT_COLOR_BIT,
             VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
             VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_READ_BIT,
             VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT);
+        // ============================================================
+        // Phase 4: Tonemap + AA + Blit to swapchain
+        // 管线表已完成所有内部渲染 (RSM → hdrPrev copy)，
+        // 此处处理需要直接操作 swapchain image 的最终阶段。
+        // ============================================================
 
         bool hdrActive = m_swap->hdrEnabled();
+        bool aaActive = (m_aaMethod == AAMethod::TAA || m_aaMethod == AAMethod::SMAA);
 
-        // HDR path: scRGB output via tonemap + optional AA
         if (hdrActive) {
-            bool aaActive = (m_aaMethod == AAMethod::TAA || m_aaMethod == AAMethod::SMAA);
+            // === HDR path ===
             if (aaActive) {
                 m_rt.ensureAaResources(*m_device);
-
-                // Tonemap writes to aaHdr (HDR values)
                 transitionImage(cmd, m_rt.aaHdr.image(), VK_IMAGE_ASPECT_COLOR_BIT,
                     VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
                     VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
                     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
-                m_tonemap.bindOutput(*m_device, m_rt.aaHdr.view(), frame.frameInFlight);
-                m_tonemap.record(cmd, m_rt, frame.frameInFlight, true, 1.0f);
-                TS(kTsTonemap);
+                m_tonemap.bindOutput(*m_device, m_rt.aaHdr.view(), m_currentFrameInFlight);
+                m_tonemap.record(cmd, m_rt, m_currentFrameInFlight, true, 1.0f);
+                writeTimestamp(cmd, kTsTonemap);
 
-                // Barrier: aaHdr GENERAL → SHADER_READ_ONLY for AA
                 transitionImage(cmd, m_rt.aaHdr.image(), VK_IMAGE_ASPECT_COLOR_BIT,
                     VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
                     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT);
 
-                // AA writes to swapchain directly
-                transitionImage(cmd, frame.image, VK_IMAGE_ASPECT_COLOR_BIT,
+                transitionImage(cmd, m_currentSwapImage, VK_IMAGE_ASPECT_COLOR_BIT,
                     VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
                     VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
                     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
 
                 if (m_aaMethod == AAMethod::TAA) {
-                    m_taa.bindResources(*m_device, m_rt, frame.frameInFlight);
-                    m_taa.bindOutput(*m_device, frame.view, frame.frameInFlight);
+                    m_taa.bindResources(*m_device, m_rt, m_currentFrameInFlight);
+                    m_taa.bindOutput(*m_device, m_currentSwapView, m_currentFrameInFlight);
                     m_taa.record(cmd, m_rt, m_jitter, m_prevJitter,
-                                ubo.invViewProj, m_prevViewProj, frame.frameInFlight, m_taaBlendAlpha);
+                                m_currentInvViewProj, m_prevViewProj, m_currentFrameInFlight, m_taaBlendAlpha);
                     // Copy aaHdr → aaHistory for next frame
                     transitionImage(cmd, m_rt.aaHdr.image(), VK_IMAGE_ASPECT_COLOR_BIT,
                         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
@@ -3131,171 +3358,160 @@ void App::run() {
                         VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
                 } else {
                     m_smaa.bindResources(*m_device, m_rt);
-                    m_smaa.bindOutput(*m_device, frame.view);
+                    m_smaa.bindOutput(*m_device, m_currentSwapView);
                     m_smaa.record(cmd, m_rt);
                 }
-                TS(kTsAA);
+                writeTimestamp(cmd, kTsAA);
             } else {
                 // No AA: tonemap writes directly to swapchain
-                transitionImage(cmd, frame.image, VK_IMAGE_ASPECT_COLOR_BIT,
+                transitionImage(cmd, m_currentSwapImage, VK_IMAGE_ASPECT_COLOR_BIT,
                     VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
                     VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
                     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
-                m_tonemap.bindOutput(*m_device, frame.view, frame.frameInFlight);
-                m_tonemap.record(cmd, m_rt, frame.frameInFlight, true, 1.0f);
-                TS(kTsTonemap);
-                TS(kTsAA);
+                m_tonemap.bindOutput(*m_device, m_currentSwapView, m_currentFrameInFlight);
+                m_tonemap.record(cmd, m_rt, m_currentFrameInFlight, true, 1.0f);
+                writeTimestamp(cmd, kTsTonemap);
+                writeTimestamp(cmd, kTsAA);
             }
 
             // Transition swapchain to COLOR_ATTACHMENT for ImGui
-            transitionImage(cmd, frame.image, VK_IMAGE_ASPECT_COLOR_BIT,
+            transitionImage(cmd, m_currentSwapImage, VK_IMAGE_ASPECT_COLOR_BIT,
                 VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                 VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
                 VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
         } else {
+            // === SDR path ===
+            if (aaActive) {
+                m_rt.ensureAaResources(*m_device);
 
-        bool aaActive = (m_aaMethod == AAMethod::TAA || m_aaMethod == AAMethod::SMAA);
-        if (aaActive) {
-            m_rt.ensureAaResources(*m_device);
-
-            // Tonemap writes to aaHdr
-            transitionImage(cmd, m_rt.aaHdr.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-                VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
-                VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
-                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
-            m_tonemap.bindOutput(*m_device, m_rt.aaHdr.view(), frame.frameInFlight);
-            m_tonemap.record(cmd, m_rt, frame.frameInFlight);
-            TS(kTsTonemap);
-
-            // Barrier: aaHdr GENERAL → SHADER_READ_ONLY for AA pass
-            transitionImage(cmd, m_rt.aaHdr.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-                VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
-                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT);
-
-            // AA write target: ldrTonemap
-            transitionImage(cmd, m_rt.ldrTonemap.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-                VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
-                VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
-                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
-
-            if (m_aaMethod == AAMethod::TAA) {
-                // aaHistory may be UNDEFINED after ensureAaResources
-                if (m_aaHistoryNeedsInit) {
-                    transitionImage(cmd, m_rt.aaHistory.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-                        VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                        VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
-                        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
-                    m_aaHistoryNeedsInit = false;
-                }
-
-                // Depth is in DEPTH_ATTACHMENT_OPTIMAL after skybox; TAA reads it as sampled
-                transitionImage(cmd, m_rt.depth.image(), VK_IMAGE_ASPECT_DEPTH_BIT,
-                    VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
-                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                    VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
-                    VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT,
-                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                    VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
-
-                m_taa.bindResources(*m_device, m_rt, frame.frameInFlight);
-                m_taa.record(cmd, m_rt, m_jitter, m_prevJitter,
-                            ubo.invViewProj, m_prevViewProj, frame.frameInFlight, m_taaBlendAlpha);
-
-                // Copy aaHdr → aaHistory for next frame
+                // Tonemap writes to aaHdr
                 transitionImage(cmd, m_rt.aaHdr.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                    VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                    VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
-                    VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
-                transitionImage(cmd, m_rt.aaHistory.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-                    VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                    VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
                     VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
-                    VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
-                VkImageCopy histCopy{};
-                histCopy.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-                histCopy.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-                histCopy.extent = {m_rt.extent.width, m_rt.extent.height, 1};
-                vkCmdCopyImage(cmd,
-                    m_rt.aaHdr.image(), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                    m_rt.aaHistory.image(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                    1, &histCopy);
+                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
+                m_tonemap.bindOutput(*m_device, m_rt.aaHdr.view(), m_currentFrameInFlight);
+                m_tonemap.record(cmd, m_rt, m_currentFrameInFlight);
+                writeTimestamp(cmd, kTsTonemap);
+
                 transitionImage(cmd, m_rt.aaHdr.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-                    VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                    VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_READ_BIT,
-                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                    VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
-                transitionImage(cmd, m_rt.aaHistory.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                    VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
-                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                    VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+                    VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
+                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT);
+
+                transitionImage(cmd, m_rt.ldrTonemap.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                    VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
+                    VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
+                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
+
+                if (m_aaMethod == AAMethod::TAA) {
+                    if (m_aaHistoryNeedsInit) {
+                        transitionImage(cmd, m_rt.aaHistory.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                            VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                            VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
+                            VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+                        m_aaHistoryNeedsInit = false;
+                    }
+                    transitionImage(cmd, m_rt.depth.image(), VK_IMAGE_ASPECT_DEPTH_BIT,
+                        VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
+                        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                        VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
+                        VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT,
+                        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                        VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+                    m_taa.bindResources(*m_device, m_rt, m_currentFrameInFlight);
+                    m_taa.record(cmd, m_rt, m_jitter, m_prevJitter,
+                                m_currentInvViewProj, m_prevViewProj, m_currentFrameInFlight, m_taaBlendAlpha);
+
+                    // Copy aaHdr → aaHistory for next frame
+                    transitionImage(cmd, m_rt.aaHdr.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
+                        VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
+                    transitionImage(cmd, m_rt.aaHistory.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                        VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                        VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
+                        VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
+                    VkImageCopy histCopy{};
+                    histCopy.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+                    histCopy.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+                    histCopy.extent = {m_rt.extent.width, m_rt.extent.height, 1};
+                    vkCmdCopyImage(cmd,
+                        m_rt.aaHdr.image(), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                        m_rt.aaHistory.image(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                        1, &histCopy);
+                    transitionImage(cmd, m_rt.aaHdr.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                        VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                        VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_READ_BIT,
+                        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+                    transitionImage(cmd, m_rt.aaHistory.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                        VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+                } else {
+                    m_smaa.bindResources(*m_device, m_rt);
+                    m_smaa.record(cmd, m_rt);
+                }
+                writeTimestamp(cmd, kTsAA);
+
+                // Barrier: ldrTonemap GENERAL → TRANSFER_SRC for blit
+                transitionImage(cmd, m_rt.ldrTonemap.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                    VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
+                    VK_PIPELINE_STAGE_2_BLIT_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
             } else {
-                m_smaa.bindResources(*m_device, m_rt);
-                m_smaa.record(cmd, m_rt);
+                // No AA: tonemap writes directly to ldrTonemap
+                transitionImage(cmd, m_rt.ldrTonemap.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                    VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
+                    VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
+                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
+                m_tonemap.bindOutput(*m_device, m_rt.ldrTonemap.view(), m_currentFrameInFlight);
+                m_tonemap.record(cmd, m_rt, m_currentFrameInFlight);
+                writeTimestamp(cmd, kTsTonemap);
+                writeTimestamp(cmd, kTsAA);
+
+                // Barrier: ldrTonemap GENERAL → TRANSFER_SRC for blit
+                transitionImage(cmd, m_rt.ldrTonemap.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                    VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
+                    VK_PIPELINE_STAGE_2_BLIT_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
             }
-            TS(kTsAA);
 
-            // Barrier: ldrTonemap GENERAL → TRANSFER_SRC for blit
-            transitionImage(cmd, m_rt.ldrTonemap.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-                VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
-                VK_PIPELINE_STAGE_2_BLIT_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
-        } else {
-            // No AA: tonemap writes directly to ldrTonemap
-            transitionImage(cmd, m_rt.ldrTonemap.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-                VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
+            // SDR blit: ldrTonemap → swapchain
+            transitionImage(cmd, m_currentSwapImage, VK_IMAGE_ASPECT_COLOR_BIT,
+                VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                 VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
-                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
-            m_tonemap.bindOutput(*m_device, m_rt.ldrTonemap.view(), frame.frameInFlight);
-            m_tonemap.record(cmd, m_rt, frame.frameInFlight);
-            TS(kTsTonemap);
-            TS(kTsAA);  // no AA: AA time = 0
+                VK_PIPELINE_STAGE_2_BLIT_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
 
-            // Barrier: ldrTonemap GENERAL → TRANSFER_SRC for blit
-            transitionImage(cmd, m_rt.ldrTonemap.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-                VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
-                VK_PIPELINE_STAGE_2_BLIT_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
-        }
-        transitionImage(cmd, frame.image, VK_IMAGE_ASPECT_COLOR_BIT,
-            VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-            VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
-            VK_PIPELINE_STAGE_2_BLIT_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
+            VkImageBlit blit{};
+            blit.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+            blit.srcOffsets[1] = {(int32_t)m_rt.extent.width, (int32_t)m_rt.extent.height, 1};
+            blit.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+            blit.dstOffsets[1] = {(int32_t)m_currentSwapExtent.width, (int32_t)m_currentSwapExtent.height, 1};
+            vkCmdBlitImage(cmd,
+                m_rt.ldrTonemap.image(), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                m_currentSwapImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                1, &blit, VK_FILTER_LINEAR);
 
-        VkImageBlit blit{};
-        blit.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-        blit.srcOffsets[1] = {(int32_t)m_rt.extent.width, (int32_t)m_rt.extent.height, 1};
-        blit.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-        blit.dstOffsets[1] = {(int32_t)frame.extent.width, (int32_t)frame.extent.height, 1};
-        vkCmdBlitImage(cmd,
-            m_rt.ldrTonemap.image(), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-            frame.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-            1, &blit, VK_FILTER_LINEAR);
-
-        // SDR: transition swapchain to COLOR_ATTACHMENT for ImGui
-        transitionImage(cmd, frame.image, VK_IMAGE_ASPECT_COLOR_BIT,
-            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-            VK_PIPELINE_STAGE_2_BLIT_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
-            VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
+            // SDR: transition swapchain to COLOR_ATTACHMENT for ImGui
+            transitionImage(cmd, m_currentSwapImage, VK_IMAGE_ASPECT_COLOR_BIT,
+                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                VK_PIPELINE_STAGE_2_BLIT_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
 
         } // end SDR path
 
-        // Phase 4: ImGui on top of swapchain image
+        // Phase 5: ImGui overlay + present transition
 
-        TS(kTsEnd);
+        writeTimestamp(cmd, kTsEnd);
 
-        m_imgui.render(cmd, frame.view, frame.extent);
+        m_imgui.render(cmd, m_currentSwapView, m_currentSwapExtent);
 
-        transitionImage(cmd, frame.image, VK_IMAGE_ASPECT_COLOR_BIT,
+        transitionImage(cmd, m_currentSwapImage, VK_IMAGE_ASPECT_COLOR_BIT,
             VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
             VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
             VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT, 0);
 
-        m_timestampValid[frame.frameInFlight] = true;
+        m_timestampValid[m_currentFrameInFlight] = true;
 
         VK_CHECK(vkEndCommandBuffer(cmd));
 

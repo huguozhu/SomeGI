@@ -3,6 +3,8 @@ add_library(somegi_renderer STATIC
     render_targets.cpp
     barrier_manager.h
     barrier_manager.cpp
+    render_pipeline.h
+    render_pipeline.cpp
     forward_pass.h
     forward_pass.cpp
     gbuffer_pass.h

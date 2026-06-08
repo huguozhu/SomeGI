@@ -44,6 +44,7 @@
 #include "renderer/lumen_gather_pass.h"
 #include "renderer/lumen_filter_pass.h"
 #include "renderer/barrier_manager.h"
+#include "renderer/render_pipeline.h"
 #include <map>
 #include <memory>
 #include <filesystem>
@@ -177,6 +178,12 @@ private:
     bool m_aaHistoryNeedsInit = false;   // aaHistory needs UNDEFINED→SHADER_READ_ONLY transition
     ImGuiPass m_imgui;
 
+    // 渲染管线表：将所有 Pass 包装为 RenderStep，注册→建表→执行
+    RenderPipeline m_pipeline;
+    void registerPipelineSteps();   // 初始化时注册所有 Pass
+    void buildPipelineTable();      // 每帧根据运行状态更新 enabled 并建表
+    void writeTimestamp(VkCommandBuffer cmd, uint32_t slot);  // GPU timestamp 辅助
+
     // Pre-baked env from skybox.hdr — owned by App, lives across GI changes.
     // Used by SkyboxPass and (when active) borrowed by IBLTechnique.
     IblResources m_envIbl;
@@ -232,6 +239,13 @@ private:
     glm::vec3 m_ddgiOrigin{0};
     glm::vec3 m_ddgiSpacing{1};
     uint32_t  m_frameIndex = 0;
+    uint32_t  m_currentFrameInFlight = 0;  // 当前帧的 in-flight index（供 pipeline steps 中 timestamp 用）
+    VkImageView m_currentSwapView = VK_NULL_HANDLE;  // 当前 swapchain image view
+    VkImage     m_currentSwapImage = VK_NULL_HANDLE;  // 当前 swapchain image
+    VkExtent2D  m_currentSwapExtent{};               // 当前 swapchain extent
+    glm::mat4   m_currentProj{1.0f};                 // 当前帧 proj matrix（供 pipeline AO steps 用）
+    glm::mat4   m_currentView{1.0f};                 // 当前帧 view matrix（供 pipeline AO steps 用）
+    glm::mat4   m_currentInvViewProj{1.0f};          // 当前帧 invViewProj（供 pipeline TAA steps 用）
 
     // M9 RT GI：硬件支持标志 + 初始化完成标志
     bool m_rtSupported = false;
