@@ -1,0 +1,10 @@
+0. Render Graph
+1. GPU Driven Rendering
+2. Mesh Shader Rendering
+3. 神经动态全局光照 (NDGI)
+4. 多分辨率网格渲染：UE5的Nanite技术
+5. 光线追踪:
+	a. 将Ray Tracing用于反射、阴影、AO等效果
+	b. 自适应光线追踪：根据图像方差或几何重要性动态调整每像素光线数量
+	c. 降噪
+6. 神经网络渲染管线（Differentiable Rendering）
