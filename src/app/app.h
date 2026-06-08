@@ -162,6 +162,10 @@ private:
     // AA 方法选择
     enum class AAMethod : int { None = 0, MSAA = 1, TAA = 2, SMAA = 3 };
     AAMethod m_aaMethod = AAMethod::MSAA;
+
+    // 渲染管线模式
+    enum class RenderingMode : int { Deferred = 0, Forward = 1 };
+    RenderingMode m_renderingMode = RenderingMode::Deferred;
     glm::vec2 m_jitter{};       // current frame TAA jitter in NDC
     glm::vec2 m_prevJitter{};   // previous frame TAA jitter
     float m_taaBlendAlpha = 0.92f;

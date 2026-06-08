@@ -1687,57 +1687,66 @@ void App::writeTimestamp(VkCommandBuffer cmd, uint32_t slot) {
 }
 
 void App::buildPipelineTable() {
+    bool fwd = (m_renderingMode == RenderingMode::Forward);
+
+    // 前向/延迟核心路径切换
+    m_pipeline.setEnabled("GBuffer",  !fwd);
+    m_pipeline.setEnabled("Lighting", !fwd);
+    m_pipeline.setEnabled("Forward",  fwd);
+    m_pipeline.setEnabled("Skybox",   !fwd);
+    m_pipeline.setEnabled("Copy-hdrPrev", !fwd);
+
     // === Phase 1.5: AO ===
-    m_pipeline.setEnabled("AO-SSAO", m_aoMethod == AOMethod::SSAO);
-    m_pipeline.setEnabled("AO-GTAO", m_aoMethod == AOMethod::GTAO);
-    m_pipeline.setEnabled("AO-Clear", m_aoMethod == AOMethod::None);
+    m_pipeline.setEnabled("AO-SSAO", !fwd && m_aoMethod == AOMethod::SSAO);
+    m_pipeline.setEnabled("AO-GTAO", !fwd && m_aoMethod == AOMethod::GTAO);
+    m_pipeline.setEnabled("AO-Clear", !fwd && m_aoMethod == AOMethod::None);
 
     // === Phase 1.6: SSR ===
-    m_pipeline.setEnabled("SSR", m_ssr.enabled);
-    m_pipeline.setEnabled("SSR-Clear", !m_ssr.enabled);
+    m_pipeline.setEnabled("SSR", !fwd && m_ssr.enabled);
+    m_pipeline.setEnabled("SSR-Clear", !fwd && !m_ssr.enabled);
 
     // === Phase 1.7: ScreenGI (SSGI/GTGI) ===
-    bool screenGiOn = m_ssgi.enabled || m_gtgi.enabled;
+    bool screenGiOn = !fwd && (m_ssgi.enabled || m_gtgi.enabled);
     m_pipeline.setEnabled("ScreenGI", screenGiOn);
     m_pipeline.setEnabled("ScreenGI-Clear", !screenGiOn);
 
     // === Phase 1.83: VXGI chain ===
-    bool needVoxelGrid = m_vxgiEnabled || m_ddgiEnabled || m_sdfgiPass.enabled
-                       || m_lumenEnabled || m_restirPass.enabled;
+    bool needVoxelGrid = !fwd && (m_vxgiEnabled || m_ddgiEnabled || m_sdfgiPass.enabled
+                       || m_lumenEnabled || m_restirPass.enabled);
     m_pipeline.setEnabled("VXGI-Chain", needVoxelGrid);
     m_pipeline.setEnabled("VXGI-Bootstrap", !needVoxelGrid);
     m_pipeline.setEnabled("VXGI-Relight", m_vxgiRelightEnabled && needVoxelGrid);
     m_pipeline.setEnabled("VXGI-6Axis", m_lumenEnabled && m_vxgiSixAxisInited && needVoxelGrid);
 
     // === Phase 1.835: SDFGI ===
-    m_pipeline.setEnabled("SDFGI", m_sdfgiPass.enabled);
+    m_pipeline.setEnabled("SDFGI", !fwd && m_sdfgiPass.enabled);
 
     // === Phase 1.836: RT GI ===
-    m_pipeline.setEnabled("RTGI", m_rtGiBound && m_giIndexApplied == 10);
-    m_pipeline.setEnabled("RTGI-Clear", m_rtGiInited && !(m_rtGiBound && m_giIndexApplied == 10));
+    m_pipeline.setEnabled("RTGI", !fwd && m_rtGiBound && m_giIndexApplied == 10);
+    m_pipeline.setEnabled("RTGI-Clear", !fwd && m_rtGiInited && !(m_rtGiBound && m_giIndexApplied == 10));
 
     // === Phase 1.837: ReSTIR DI ===
-    m_pipeline.setEnabled("ReSTIR", m_restirPass.enabled);
-    m_pipeline.setEnabled("ReSTIR-Clear", !m_restirPass.enabled);
+    m_pipeline.setEnabled("ReSTIR", !fwd && m_restirPass.enabled);
+    m_pipeline.setEnabled("ReSTIR-Clear", !fwd && !m_restirPass.enabled);
 
     // === Phase 1.84: DDGI ===
-    m_pipeline.setEnabled("DDGI", m_ddgiEnabled);
-    m_pipeline.setEnabled("DDGI-Bootstrap", !m_ddgiEnabled);
+    m_pipeline.setEnabled("DDGI", !fwd && m_ddgiEnabled);
+    m_pipeline.setEnabled("DDGI-Bootstrap", !fwd && !m_ddgiEnabled);
 
     // === Phase 1.845: Lumen-lite ===
-    m_pipeline.setEnabled("Lumen-Probe", m_lumenEnabled && m_lumenDebugMode != 5);
-    m_pipeline.setEnabled("Lumen-Filter", m_lumenEnabled && m_lumenDebugMode != 5);
-    m_pipeline.setEnabled("Lumen-Gather", m_lumenEnabled && m_lumenDebugMode != 5);
-    m_pipeline.setEnabled("Lumen-DebugClear", m_lumenEnabled && m_lumenDebugMode == 5);
-    m_pipeline.setEnabled("Lumen-Clear", !m_lumenEnabled);
+    m_pipeline.setEnabled("Lumen-Probe", !fwd && m_lumenEnabled && m_lumenDebugMode != 5);
+    m_pipeline.setEnabled("Lumen-Filter", !fwd && m_lumenEnabled && m_lumenDebugMode != 5);
+    m_pipeline.setEnabled("Lumen-Gather", !fwd && m_lumenEnabled && m_lumenDebugMode != 5);
+    m_pipeline.setEnabled("Lumen-DebugClear", !fwd && m_lumenEnabled && m_lumenDebugMode == 5);
+    m_pipeline.setEnabled("Lumen-Clear", !fwd && !m_lumenEnabled);
 
     // === Phase 1.85: LPV ===
-    m_pipeline.setEnabled("LPV", m_lpvEnabled);
-    m_pipeline.setEnabled("LPV-Bootstrap", !m_lpvEnabled);
+    m_pipeline.setEnabled("LPV", !fwd && m_lpvEnabled);
+    m_pipeline.setEnabled("LPV-Bootstrap", !fwd && !m_lpvEnabled);
 
     // === Phase 1.8: RSM Sample ===
-    m_pipeline.setEnabled("RSM-Sample", m_rsmSample.enabled);
-    m_pipeline.setEnabled("RSM-Clear", !m_rsmSample.enabled);
+    m_pipeline.setEnabled("RSM-Sample", !fwd && m_rsmSample.enabled);
+    m_pipeline.setEnabled("RSM-Clear", !fwd && !m_rsmSample.enabled);
 
     m_pipeline.build();
 }
@@ -1753,6 +1762,51 @@ void App::registerPipelineSteps() {
         .phase = "PrePass",
         .record = [this](VkCommandBuffer cmd) {
             m_rsmGeom.record(cmd, m_scene, m_sceneGpu);
+        }
+    });
+
+    // ============================
+    // Step 1 诊断：用 transfer clear 替代 vkCmdBeginRendering 写 hdrColor+depth
+    // ============================
+    m_pipeline.addStep({
+        .name = "Forward",
+        .phase = "PrePass",
+        .enabled = false,
+        .timestampSlot = kTsGBuffer,
+        .record = [this](VkCommandBuffer cmd) {
+            // hdrColor: UNDEFINED → TRANSFER_DST, clear to gray, → SR_O
+            VkClearColorValue gray{};
+            gray.float32[0] = 0.2f; gray.float32[1] = 0.2f;
+            gray.float32[2] = 0.3f; gray.float32[3] = 1.0f;
+            VkImageSubresourceRange cr{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+            transitionImage(cmd, m_rt.hdrColor.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
+                VK_PIPELINE_STAGE_2_CLEAR_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
+            vkCmdClearColorImage(cmd, m_rt.hdrColor.image(),
+                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &gray, 1, &cr);
+            transitionImage(cmd, m_rt.hdrColor.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                VK_PIPELINE_STAGE_2_CLEAR_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+
+            // depth: UNDEFINED → TRANSFER_DST, clear to 1.0, → SR_O
+            VkClearDepthStencilValue ds{1.0f, 0};
+            VkImageSubresourceRange dr{VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1};
+            transitionImage(cmd, m_rt.depth.image(), VK_IMAGE_ASPECT_DEPTH_BIT,
+                VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
+                VK_PIPELINE_STAGE_2_CLEAR_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
+            vkCmdClearDepthStencilImage(cmd, m_rt.depth.image(),
+                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &ds, 1, &dr);
+            transitionImage(cmd, m_rt.depth.image(), VK_IMAGE_ASPECT_DEPTH_BIT,
+                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                VK_PIPELINE_STAGE_2_CLEAR_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+
+            writeTimestamp(cmd, kTsGBuffer);
         }
     });
 
@@ -3291,12 +3345,16 @@ void App::run() {
         // 这些步骤需要直接操作 swapchain image，保留在 run() 中处理
         // ============================================================
 
-        // hdrColor: hdrPrev copy 结束后在 TRANSFER_SRC → SHADER_READ_ONLY for tonemap
-        transitionImage(cmd, m_rt.hdrColor.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-            VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-            VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_READ_BIT,
-            VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT);
+        // hdrColor → SHADER_READ_ONLY for tonemap
+        if (m_renderingMode == RenderingMode::Deferred) {
+            // Deferred: Copy-hdrPrev leaves hdrColor in TRANSFER_SRC
+            transitionImage(cmd, m_rt.hdrColor.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_READ_BIT,
+                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT);
+        }
+        // Forward: hdrColor is already SR_O from Forward step (transfer clear)
         // ============================================================
         // Phase 4: Tonemap + AA + Blit to swapchain
         // 管线表已完成所有内部渲染 (RSM → hdrPrev copy)，
