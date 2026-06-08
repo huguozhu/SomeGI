@@ -51,7 +51,7 @@ void LightingPass::init(Device& d) {
     // 22/23: gPrtTransferD/E (sampled 3D image, RGBA16F) — B.10 SH16
     // 24: gRestir         (sampled 2D image, RGBA16F) — C.4 ReSTIR DI
     // 25: gRtGI           (sampled 2D image, RGBA16F) — M9 RT GI
-    std::array<VkDescriptorSetLayoutBinding, 27> b{};
+    std::array<VkDescriptorSetLayoutBinding, 33> b{};
     b[0]  = {0,  VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
     b[1]  = {1,  VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,  1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
     b[2]  = {2,  VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,  1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
@@ -79,6 +79,12 @@ void LightingPass::init(Device& d) {
     b[24] = {24, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,  1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
     b[25] = {25, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,  1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
     b[26] = {26, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,  1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
+    b[27] = {27, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}; // NDGI W1
+    b[28] = {28, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}; // NDGI B1
+    b[29] = {29, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}; // NDGI W2
+    b[30] = {30, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}; // NDGI B2
+    b[31] = {31, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}; // NDGI W3
+    b[32] = {32, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}; // NDGI B3
 
     VkDescriptorSetLayoutCreateInfo li{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
     li.bindingCount = (uint32_t)b.size(); li.pBindings = b.data();
@@ -86,10 +92,10 @@ void LightingPass::init(Device& d) {
 
     std::array<VkDescriptorPoolSize, 5> ps{{
         {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1},
-        {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 23},   // +1 lumenGI
+        {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 23},
         {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,  1},
         {VK_DESCRIPTOR_TYPE_SAMPLER,        1},
-        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1},
+        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 7},  // +6 NDGI weights
     }};
     VkDescriptorPoolCreateInfo pci{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
     pci.maxSets = 1; pci.poolSizeCount = (uint32_t)ps.size(); pci.pPoolSizes = ps.data();
@@ -98,6 +104,12 @@ void LightingPass::init(Device& d) {
     VkDescriptorSetAllocateInfo dai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
     dai.descriptorPool = m_pool; dai.descriptorSetCount = 1; dai.pSetLayouts = &m_setLayout;
     VK_CHECK(vkAllocateDescriptorSets(d.device(), &dai, &m_set));
+
+    // NDGI 权重 binding 27-32 初始占位 buffer（4-byte 零值）
+    m_dummyBuf = Buffer(d, 4,
+        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    *static_cast<float*>(m_dummyBuf.mapped()) = 0.0f;
 
     // LPV trilinear sampler：clamp-to-edge 防 grid 边外 wrap 出问题。
     VkSamplerCreateInfo si{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
@@ -162,6 +174,7 @@ void LightingPass::destroy() {
     if (m_lpvSampler) vkDestroySampler(dev, m_lpvSampler, nullptr);
     m_pool = VK_NULL_HANDLE; m_setLayout = VK_NULL_HANDLE;
     m_lpvSampler = VK_NULL_HANDLE;
+    m_dummyBuf.reset();
     m_device = nullptr;
 }
 
@@ -207,7 +220,7 @@ void LightingPass::bindFrame(Device& d, const RenderTargets& rt, VkBuffer frameU
     hd.imageView = rt.hdrColor.view();
     hd.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
 
-    std::array<VkWriteDescriptorSet, 27> w{};
+    std::array<VkWriteDescriptorSet, 33> w{};
     // ... (w[0] through w[24] are set as before)
     w[0] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
     w[0].dstSet = m_set; w[0].dstBinding = 0; w[0].descriptorCount = 1;
@@ -246,6 +259,31 @@ void LightingPass::bindFrame(Device& d, const RenderTargets& rt, VkBuffer frameU
     setImg(w[25], 25, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, &rtG);   // M9 RT GI
     setImg(w[26], 26, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, &lum);  // L.5 Lumen-lite
 
+    // NDGI weights (bindings 27-32): 初始指向 dummy zero buffer
+    VkDescriptorBufferInfo dummyInfo{m_dummyBuf.handle(), 0, VK_WHOLE_SIZE};
+    for (uint32_t i = 27; i <= 32; ++i) {
+        w[i] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+        w[i].dstSet = m_set; w[i].dstBinding = i; w[i].descriptorCount = 1;
+        w[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; w[i].pBufferInfo = &dummyInfo;
+    }
+
+    vkUpdateDescriptorSets(d.device(), (uint32_t)w.size(), w.data(), 0, nullptr);
+}
+
+void LightingPass::setNdgiWeights(Device& d,
+    VkBuffer w1, VkBuffer b1, VkBuffer w2, VkBuffer b2,
+    VkBuffer w3, VkBuffer b3) {
+    VkDescriptorBufferInfo infos[6]{};
+    infos[0] = {w1, 0, VK_WHOLE_SIZE}; infos[1] = {b1, 0, VK_WHOLE_SIZE};
+    infos[2] = {w2, 0, VK_WHOLE_SIZE}; infos[3] = {b2, 0, VK_WHOLE_SIZE};
+    infos[4] = {w3, 0, VK_WHOLE_SIZE}; infos[5] = {b3, 0, VK_WHOLE_SIZE};
+
+    std::array<VkWriteDescriptorSet, 6> w{};
+    for (uint32_t i = 0; i < 6; ++i) {
+        w[i] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+        w[i].dstSet = m_set; w[i].dstBinding = 27 + i; w[i].descriptorCount = 1;
+        w[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; w[i].pBufferInfo = &infos[i];
+    }
     vkUpdateDescriptorSets(d.device(), (uint32_t)w.size(), w.data(), 0, nullptr);
 }
 

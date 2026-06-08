@@ -25,6 +25,7 @@ import pbr;
 import sh;              // M6 LPV：一阶 SH cosineLobeSh / evalSh
 import octahedral;      // M11 DDGI：dir ↔ oct UV
 import ibl_eval;        // set=1 IBL bindings + evalIBLDiffuse / Specular / applyIBL*BRDF
+import gi.ndgi.ndgi_infer; // NDGI: neural irradiance cache
 
 // set=0：GBuffer + depth + 屏幕空间 buffer + 输出 hdrColor。
 [[vk::binding(0, 0)]] ConstantBuffer<FrameUniforms> gFrame;
@@ -54,6 +55,7 @@ import ibl_eval;        // set=1 IBL bindings + evalIBLDiffuse / Specular / appl
 [[vk::binding(24, 0)]] Texture2D<float4> gRestir;                // C.4 ReSTIR DI：rgb=直接光累加，a=valid
 [[vk::binding(25, 0)]] Texture2D<float4> gRtGI;                  // M9 RT GI：rgb=入射 radiance，a=hit?1:0
 [[vk::binding(26, 0)]] Texture2D<float4> gLumenGI;              // L.5 Lumen-lite gather 输出
+// NDGI: MLP 权重 bindings 27-32 由 import ndgi_infer 提供
 
 struct LightingPC {
     uint2  outSize;
@@ -266,6 +268,12 @@ void cs_main(uint3 dt : SV_DispatchThreadID) {
 
             float3 vxgiDiff = vxgiAccum * albedo * (1.0 - metallic);
             diffuse = lerp(diffuse, vxgiDiff, saturate(vxgiCov));
+        }
+
+        // NDGI (Neural Dynamic GI)：使用 MLP 推理替代 DDGI 的探针三线性插值
+        if (gFrame.ddgiCounts.w == 2) {
+            float3 ndgiIrr = ndgiSampleIrradiance(worldPos, N);
+            diffuse = ndgiIrr * albedo * (1.0 - metallic) / 3.14159265;
         }
 
         // M11 DDGI：找 worldPos 周围 8 个 probe，每个：

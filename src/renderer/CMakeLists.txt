@@ -83,6 +83,10 @@ add_library(somegi_renderer STATIC
     lumen_gather_pass.cpp
     lumen_filter_pass.h
     lumen_filter_pass.cpp
+    ndgi_resources.h
+    ndgi_resources.cpp
+    ndgi_pass.h
+    ndgi_pass.cpp
 )
 
 target_link_libraries(somegi_renderer

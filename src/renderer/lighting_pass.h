@@ -1,4 +1,5 @@
 #pragma once
+#include "core/buffer.h"
 #include "render_targets.h"
 #include "lpv_grid.h"
 #include "vxgi_resources.h"
@@ -45,6 +46,12 @@ public:
                    const PrtResources& prt, const DdgiResources& ddgi,
                    VkBuffer ddgiProbeStatesBuf);
 
+    // 更新 set=0 中的 NDGI MLP 权重 binding (27-32)。
+    // 权重 buffer 生命周期由 NdgiResources 管理。
+    void setNdgiWeights(Device& d,
+        VkBuffer w1, VkBuffer b1, VkBuffer w2, VkBuffer b2,
+        VkBuffer w3, VkBuffer b3);
+
     // 录制 dispatch：bindPipeline → bind 两个 set → push constant
     // (outSize/invOutSize) → dispatch (W+7)/8 × (H+7)/8。
     void record(VkCommandBuffer cmd, const RenderTargets& rt);
@@ -62,6 +69,7 @@ private:
     VkDescriptorPool m_pool = VK_NULL_HANDLE;
     VkDescriptorSet m_set = VK_NULL_HANDLE;
     VkSampler m_lpvSampler = VK_NULL_HANDLE;   // 给 LPV trilinear 用
+    Buffer m_dummyBuf;                          // NDGI weights fallback (zero buffer)
 
     IGITechnique* m_tech = nullptr;
 };

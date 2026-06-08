@@ -29,6 +29,7 @@ function(compile_slang TARGET_NAME)
             COMMAND ${SLANGC_EXE}
                 ${SRC}
                 -I ${CMAKE_SOURCE_DIR}/shaders/common
+                -I ${CMAKE_SOURCE_DIR}/shaders
                 -target spirv
                 -profile spirv_1_5
                 -o ${_out}

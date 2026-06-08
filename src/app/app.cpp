@@ -272,11 +272,21 @@ App::App() {
     });
     m_ddgiPass.init(*m_device);
     m_ddgiPass.bindResources(*m_device, m_ddgi, m_vxgi);
+    std::printf("[init] ndgi resources + pass...\n");
+    m_ndgi.create(*m_device);
+    m_ndgiPass.init(*m_device, m_rtSupported);
+    m_ndgiInited = false;  // 延迟到第一帧 pipeline 中初始化权重
+    // 将 NDGI 权重 buffer 绑定到 lighting pass set=0
     std::printf("[init] lighting pass...\n");
     m_lighting.init(*m_device);
     m_lighting.bindFrame(*m_device, m_rt, m_gbuffer.frameUboHandle(),
                          m_lpv.current(), m_vxgi, m_prt, m_ddgi,
                          m_ddgi.probeStates().handle());
+    // 必须在 init+bindFrame 之后调用（m_set 此时已分配并写入）
+    m_lighting.setNdgiWeights(*m_device,
+        m_ndgi.weights1().handle(), m_ndgi.bias1().handle(),
+        m_ndgi.weights2().handle(), m_ndgi.bias2().handle(),
+        m_ndgi.weights3().handle(), m_ndgi.bias3().handle());
 
     std::printf("[init] ssao pass...\n");
     m_ssao.init(*m_device);
@@ -526,6 +536,13 @@ void App::applySceneSelection() {
             m_restirPass.bindResourcesRt(*m_device, m_restir, m_rt,
                 m_gbuffer.frameUboHandle(), m_rtAS.tlas());
         }
+        m_ndgiPass.bindResources(*m_device, m_ndgi, m_rtAS, m_sceneGpu, m_rt,
+            m_gbuffer.frameUboHandle());
+        // 如果 MLP 已经初始化过（从之前的场景），重新 init
+        if (!m_ndgiInited) {
+            m_ndgiInited = true;
+            // initWeights 需要在 command buffer 中执行，延迟到下一帧 pipeline
+        }
     }
 
     m_gbuffer.bindScene(*m_device, m_sceneGpu, (uint32_t)m_sceneGpu.images.size());
@@ -724,6 +741,8 @@ void App::cleanup() {
     m_lighting.destroy();   // pipeline references IBL DSL — must die before GI tech
     m_ddgiPass.destroy();
     m_ddgi.destroy();
+    m_ndgiPass.destroy();
+    m_ndgi.destroy();
     m_prtBake.destroy();
     m_prt.destroy();
     m_vxgiMipmap.destroy();
@@ -1537,6 +1556,9 @@ void App::buildUI() {
 
         ImGui::Text("DDGI (Dynamic Diffuse GI)");
         ImGui::Checkbox("DDGI enabled", &m_ddgiEnabled);
+        if (m_rtSupported) {
+            ImGui::Checkbox("NDGI enabled (neural GI)", &m_ndgiEnabled);
+        }
         ImGui::Text("spacing=(%.1f %.1f %.1f) origin=(%.1f %.1f %.1f)",
                     m_ddgiSpacing.x, m_ddgiSpacing.y, m_ddgiSpacing.z,
                     m_ddgiOrigin.x, m_ddgiOrigin.y, m_ddgiOrigin.z);
@@ -1761,6 +1783,7 @@ void App::buildPipelineTable() {
     // === Phase 1.84: DDGI ===
     m_pipeline.setEnabled("DDGI", !fwd && m_ddgiEnabled);
     m_pipeline.setEnabled("DDGI-Bootstrap", !fwd && !m_ddgiEnabled);
+    m_pipeline.setEnabled("NDGI", !fwd && m_ndgiEnabled && m_rtSupported);
 
     // === Phase 1.845: Lumen-lite ===
     m_pipeline.setEnabled("Lumen-Probe", !fwd && m_lumenEnabled && m_lumenDebugMode != 5);
@@ -3053,6 +3076,25 @@ void App::registerPipelineSteps() {
         }
     });
 
+    // ============================
+    // NDGI (Neural Dynamic GI) —— 探针光线追踪收集训练样本
+    // ============================
+    m_pipeline.addStep({
+        .name = "NDGI",
+        .phase = "GI",
+        .enabled = false,
+        .record = [this](VkCommandBuffer cmd) {
+            // 延迟到第一帧：此时 bindResources 已执行，descriptor 已就绪
+            if (!m_ndgiInited) {
+                m_ndgiPass.initWeights(cmd);
+                m_ndgiInited = true;
+            }
+            m_ndgiPass.record(cmd, m_ndgi, m_frameIndex,
+                m_ddgiOrigin, m_ddgiSpacing);
+            m_ndgiPass.recordTraining(cmd, m_ndgi, m_frameIndex);
+        }
+    });
+
     // === GI 结束 timestamp ===
     m_pipeline.addStep({
         .name = "TS-GI",
@@ -3303,7 +3345,7 @@ void App::run() {
         ubo.ddgiCounts = glm::ivec4((int)DdgiResources::kProbesX,
                                      (int)DdgiResources::kProbesY,
                                      (int)DdgiResources::kProbesZ,
-                                     m_ddgiEnabled ? 1 : 0);
+                                     m_ndgiEnabled ? 2 : (m_ddgiEnabled ? 1 : 0));
         ubo.ddgiOrigin = glm::vec4(m_ddgiOrigin, 0);
         ubo.ddgiSpacing = glm::vec4(m_ddgiSpacing, 0);
         ubo.ddgiOctaSizes = glm::ivec4((int)DdgiResources::kOctaIrr,

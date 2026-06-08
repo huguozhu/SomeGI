@@ -45,6 +45,8 @@
 #include "renderer/lumen_filter_pass.h"
 #include "renderer/barrier_manager.h"
 #include "renderer/render_pipeline.h"
+#include "renderer/ndgi_resources.h"
+#include "renderer/ndgi_pass.h"
 #include <map>
 #include <memory>
 #include <filesystem>
@@ -151,6 +153,10 @@ private:
     PrtBakePass m_prtBake;           // M8.1: 一次性烘焙
     DdgiResources m_ddgi;            // M11: 8×4×8 probe atlas + ray buffer
     DdgiPass m_ddgiPass;             // M11: per-frame update + blend
+    NdgiResources m_ndgi;            // NDGI: neural probe GI (MLP weights + samples)
+    NdgiPass m_ndgiPass;             // NDGI: probe trace + training compute pipe
+    bool m_ndgiInited = false;       // NDGI weights initialized?
+    bool m_ndgiEnabled = false;      // NDGI enabled in UI
     LightingPass m_lighting;   // M4: deferred direct + IBL (compute)
     SsaoPass m_ssao;           // M4.1: AO compute, modulates IBL diffuse
     GtaoPass m_gtao;           // B.1: GTAO 替代版（与 SSAO 共用 rt.ssao 输出）
