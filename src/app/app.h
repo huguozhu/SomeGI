@@ -114,6 +114,7 @@ private:
 
     RenderTargets m_rt;
     GBufferPass m_gbuffer;     // M4: writes albedo/normal/roughness/etc.
+    ForwardPass m_forward;     // M1: forward single-pass rendering
     RsmGeometryPass m_rsmGeom; // M5.0: sun-view 4-RT (pos/normal/flux/depth) for RSM
     RsmSamplePass m_rsmSample; // M5.1: per-pixel disk gather over RSM → rsmGI
     LpvResources m_lpv;        // M6: 32³ ping-pong SH grid (R/G/B 各 4 系数)

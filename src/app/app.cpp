@@ -239,6 +239,11 @@ App::App() {
                    VK_FORMAT_D32_SFLOAT,
                    kMaxTextures,
                    m_msaaSamples);
+    std::printf("[init] forward pass...\n");
+    m_forward.init(*m_device,
+                   VK_FORMAT_R16G16B16A16_SFLOAT,
+                   VK_FORMAT_D32_SFLOAT,
+                   kMaxTextures);
     // M5.0：RSM 几何 pass（sun-view 4-RT）。本里程碑只跑 record，下游
     // 暂不消费（RsmSamplePass 在 M5.1 接入）。
     std::printf("[init] rsm geometry pass...\n");
@@ -524,6 +529,8 @@ void App::applySceneSelection() {
     }
 
     m_gbuffer.bindScene(*m_device, m_sceneGpu, (uint32_t)m_sceneGpu.images.size());
+    m_forward.bindScene(*m_device, m_sceneGpu, (uint32_t)m_sceneGpu.images.size());
+    m_forward.setTechnique(m_giTech.get());
     m_rsmGeom.bindScene(*m_device, m_sceneGpu, (uint32_t)m_sceneGpu.images.size());
     m_vxgiVoxelize.bindScene(*m_device, m_sceneGpu, (uint32_t)m_sceneGpu.images.size(), m_vxgi);
     if (m_sceneIndexApplied >= 0) {
@@ -708,6 +715,7 @@ void App::cleanup() {
     m_rtGiPass.destroy();
     m_rtAS.destroy();
     m_skybox.destroy();
+    m_forward.destroy();
     m_ssgi.destroy();
     m_gtgi.destroy();
     m_ssr.destroy();
@@ -767,6 +775,7 @@ void App::applyGiSelection() {
         gctx.iblBaked = &m_envIbl;
         m_giTech->onAttach(gctx);
         m_lighting.setTechnique(m_giTech.get());
+        m_forward.setTechnique(m_giTech.get());
         std::printf("[GI] IBLTechnique attached (set=1 bound)\n");
     }
 
@@ -1406,6 +1415,25 @@ void App::buildUI() {
             ImGui::DragFloat("GTAO falloff", &m_gtao.falloff, 0.1f, 0.5f, 50.0f);
         }
 
+        ImGui::Separator();
+        {
+            const char* modeLabels[] = {"Deferred", "Forward"};
+            int modeIdx = (int)m_renderingMode;
+            if (ImGui::BeginCombo("Rendering", modeLabels[modeIdx])) {
+                for (int i = 0; i < 2; ++i) {
+                    bool sel = (modeIdx == i);
+                    if (ImGui::Selectable(modeLabels[i], sel)) {
+                        if ((RenderingMode)i != m_renderingMode) {
+                            m_device->waitIdle();
+                            m_renderingMode = (RenderingMode)i;
+                        }
+                    }
+                    if (sel) ImGui::SetItemDefaultFocus();
+                }
+                ImGui::EndCombo();
+            }
+        }
+
         ImGui::EndTabItem();
         }
 
@@ -1690,11 +1718,12 @@ void App::buildPipelineTable() {
     bool fwd = (m_renderingMode == RenderingMode::Forward);
 
     // 前向/延迟核心路径切换
+    m_pipeline.setEnabled("RSM-Geometry", true);
     m_pipeline.setEnabled("GBuffer",  !fwd);
     m_pipeline.setEnabled("Lighting", !fwd);
     m_pipeline.setEnabled("Forward",  fwd);
-    m_pipeline.setEnabled("Skybox",   !fwd);
-    m_pipeline.setEnabled("Copy-hdrPrev", !fwd);
+    m_pipeline.setEnabled("Skybox",   true);
+    m_pipeline.setEnabled("Copy-hdrPrev", true);
 
     // === Phase 1.5: AO ===
     m_pipeline.setEnabled("AO-SSAO", !fwd && m_aoMethod == AOMethod::SSAO);
@@ -1774,39 +1803,41 @@ void App::registerPipelineSteps() {
         .enabled = false,
         .timestampSlot = kTsGBuffer,
         .record = [this](VkCommandBuffer cmd) {
-            // hdrColor: UNDEFINED → TRANSFER_DST, clear to gray, → SR_O
-            VkClearColorValue gray{};
-            gray.float32[0] = 0.2f; gray.float32[1] = 0.2f;
-            gray.float32[2] = 0.3f; gray.float32[3] = 1.0f;
-            VkImageSubresourceRange cr{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+            // hdrColor → COLOR_ATTACHMENT, depth → DEPTH_ATTACHMENT
             transitionImage(cmd, m_rt.hdrColor.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-                VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                 VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
-                VK_PIPELINE_STAGE_2_CLEAR_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
-            vkCmdClearColorImage(cmd, m_rt.hdrColor.image(),
-                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &gray, 1, &cr);
-            transitionImage(cmd, m_rt.hdrColor.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                VK_PIPELINE_STAGE_2_CLEAR_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
-                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+                VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
+            transitionImage(cmd, m_rt.depth.image(), VK_IMAGE_ASPECT_DEPTH_BIT,
+                VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
+                VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
+                VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT,
+                VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT);
 
-            // depth: UNDEFINED → TRANSFER_DST, clear to 1.0, → SR_O
-            VkClearDepthStencilValue ds{1.0f, 0};
-            VkImageSubresourceRange dr{VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1};
+            m_forward.record(cmd, m_rt, m_scene, m_sceneGpu);
+
+            // hdrColor COLOR_ATTACHMENT → GENERAL（匹配延迟 Lighting 输出）
+            transitionImage(cmd, m_rt.hdrColor.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL,
+                VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
+            // depth DEPTH_ATTACHMENT → SR_O（匹配延迟 GBuffer 输出，供 Skybox 使用）
             transitionImage(cmd, m_rt.depth.image(), VK_IMAGE_ASPECT_DEPTH_BIT,
-                VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
-                VK_PIPELINE_STAGE_2_CLEAR_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
-            vkCmdClearDepthStencilImage(cmd, m_rt.depth.image(),
-                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &ds, 1, &dr);
-            transitionImage(cmd, m_rt.depth.image(), VK_IMAGE_ASPECT_DEPTH_BIT,
-                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
                 VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                VK_PIPELINE_STAGE_2_CLEAR_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
-                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+                VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
+                VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
 
             writeTimestamp(cmd, kTsGBuffer);
+            writeTimestamp(cmd, kTsAO);
+            writeTimestamp(cmd, kTsVoxelGI);
+            writeTimestamp(cmd, kTsLighting);
+            writeTimestamp(cmd, kTsSkybox);
         }
     });
 
@@ -3279,6 +3310,7 @@ void App::run() {
                                         (int)DdgiResources::kOctaDist, 0, 0);
         ubo.lumenCounts   = glm::ivec4(m_lumenEnabled ? 1 : 0, 0, 0, 0);
         m_gbuffer.updateFrame(ubo);
+        m_forward.updateFrame(ubo);
         m_skybox.updateFrame(ubo.invViewProj, m_camera.position);
         // M5.0：每帧把当前 sun + AABB 喂给 RsmGeometryPass。sunDir 的约定
         // 跟主 FrameUBO 一致 —— 光传播方向（normalize 后），updateLight 内
@@ -3345,16 +3377,12 @@ void App::run() {
         // 这些步骤需要直接操作 swapchain image，保留在 run() 中处理
         // ============================================================
 
-        // hdrColor → SHADER_READ_ONLY for tonemap
-        if (m_renderingMode == RenderingMode::Deferred) {
-            // Deferred: Copy-hdrPrev leaves hdrColor in TRANSFER_SRC
-            transitionImage(cmd, m_rt.hdrColor.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-                VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_READ_BIT,
-                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT);
-        }
-        // Forward: hdrColor is already SR_O from Forward step (transfer clear)
+        // hdrColor: hdrPrev copy 结束后在 TRANSFER_SRC → SHADER_READ_ONLY for tonemap
+        transitionImage(cmd, m_rt.hdrColor.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+            VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+            VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_READ_BIT,
+            VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT);
         // ============================================================
         // Phase 4: Tonemap + AA + Blit to swapchain
         // 管线表已完成所有内部渲染 (RSM → hdrPrev copy)，
