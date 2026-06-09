@@ -47,6 +47,7 @@
 #include "renderer/render_pipeline.h"
 #include "renderer/ndgi_resources.h"
 #include "renderer/ndgi_pass.h"
+#include "renderer/frame_renderer.h"
 #include <map>
 #include <memory>
 #include <filesystem>
@@ -114,6 +115,10 @@ private:
     Camera m_camera;
     FlyController m_flyer;
 
+    // GPU-driven rendering — owns all pass objects, render targets, barriers.
+    FrameRenderer m_renderer;
+
+    // Legacy members (kept for compatibility during migration; will be removed)
     RenderTargets m_rt;
     GBufferPass m_gbuffer;     // M4: writes albedo/normal/roughness/etc.
     ForwardPass m_forward;     // M1: forward single-pass rendering

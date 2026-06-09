@@ -1,6 +1,8 @@
 add_library(somegi_renderer STATIC
     render_targets.h
     render_targets.cpp
+    frame_renderer.h
+    frame_renderer.cpp
     barrier_manager.h
     barrier_manager.cpp
     render_pipeline.h
