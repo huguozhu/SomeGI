@@ -3044,11 +3044,414 @@ void App::registerPipelineSteps() {
     });
 }
 
+// ============================================================
+// Frame loop helpers extracted from run()
+// ============================================================
+
+void App::buildFrameUBO(FrameUBO& ubo) {
+    ubo.view = m_camera.view();
+    ubo.proj = m_camera.proj((float)m_renderer.rt().extent.width / (float)m_renderer.rt().extent.height);
+    // Apply jitter to projection
+    ubo.proj[2][0] += m_jitter.x;
+    ubo.proj[2][1] += m_jitter.y;
+    ubo.viewProj = ubo.proj * ubo.view;
+    ubo.invViewProj = glm::inverse(ubo.viewProj);
+    ubo.prevViewProj = m_prevViewProj;
+    ubo.cameraPos = glm::vec4(m_camera.position, 0);
+    ubo.sunDir = glm::vec4(glm::normalize(m_sunDir), 0);
+    ubo.sunColor_intensity = glm::vec4(1.0f, 0.95f, 0.85f, m_sunIntensity);
+    ubo.ambient = glm::vec4(m_ambient, 0);
+
+    int specMips = 0;
+    if (auto* ibl = dynamic_cast<IBLTechnique*>(m_renderer.giTech().get())) {
+        specMips = (int)ibl->specularMipCount();
+    }
+    int indirectEnabled = (m_giIndexApplied >= 1) ? 1 : 0;
+    int rsmEnabled = m_renderer.rsmSample().enabled ? 1 : 0;
+    ubo.counts = glm::ivec4((int)m_scene.materials.size(), specMips, indirectEnabled, rsmEnabled);
+
+    // LPV grid params
+    ubo.lpvCounts = glm::ivec4((int)m_renderer.kLpvResolution, m_renderer.lpvEnabled() ? 1 : 0, 0, 0);
+    ubo.lpvGridMinCell = glm::vec4(m_renderer.lpvGridMin(), m_renderer.lpvCellSize());
+
+    // VXGI grid params
+    ubo.vxgiCounts = glm::ivec4((int)m_renderer.kVxgiResolution, m_renderer.vxgiEnabled() ? 1 : 0,
+                                 (int)m_renderer.vxgi().mipLevels(), 0);
+    ubo.vxgiGridMinCell = glm::vec4(m_renderer.vxgiGridMin(), m_renderer.vxgiCellSize());
+
+    // PRT params
+    ubo.prtCounts = glm::ivec4((int)m_renderer.kPrtResolution,
+                                (m_renderer.prtEnabled() && m_renderer.prtBaked()) ? 1 : 0,
+                                m_renderer.prtShOrder(), 0);
+    ubo.prtGridMinCell = glm::vec4(m_renderer.prtGridMin(), m_renderer.prtCellSize());
+
+    // SH projection of sun direction
+    {
+        glm::vec3 dToSun = -glm::normalize(m_sunDir);
+        float x = dToSun.x, y = dToSun.y, z = dToSun.z;
+        // l=0,1
+        float Y0   = 0.282094792f;
+        float Y1n1 = 0.488602512f * y;
+        float Y10  = 0.488602512f * z;
+        float Y11  = 0.488602512f * x;
+        // l=2
+        float Y2n2 = 1.092548431f * x * y;
+        float Y2n1 = 1.092548431f * y * z;
+        float Y20  = 0.315391565f * (3.0f * z * z - 1.0f);
+        float Y21  = 1.092548431f * z * x;
+        float Y22  = 0.546274215f * (x * x - y * y);
+        // l=3
+        float Y3n3 = 0.590043589f * y * (3.0f * x * x - y * y);
+        float Y3n2 = 2.890611442f * x * y * z;
+        float Y3n1 = 0.457045799f * y * (5.0f * z * z - 1.0f);
+        float Y30  = 0.373176333f * z * (5.0f * z * z - 3.0f);
+        float Y31  = 0.457045799f * x * (5.0f * z * z - 1.0f);
+        float Y32  = 1.445305721f * z * (x * x - y * y);
+        float Y33  = 0.590043589f * x * (x * x - 3.0f * y * y);
+        glm::vec3 sunC{1.0f, 0.95f, 0.85f};
+        float I = m_sunIntensity;
+        // SH4
+        ubo.prtLightSH_R = glm::vec4(I*sunC.r*Y0, I*sunC.r*Y1n1, I*sunC.r*Y10, I*sunC.r*Y11);
+        ubo.prtLightSH_G = glm::vec4(I*sunC.g*Y0, I*sunC.g*Y1n1, I*sunC.g*Y10, I*sunC.g*Y11);
+        ubo.prtLightSH_B = glm::vec4(I*sunC.b*Y0, I*sunC.b*Y1n1, I*sunC.b*Y10, I*sunC.b*Y11);
+        // SH9
+        ubo.prtLightSH9_R0 = glm::vec4(I*sunC.r*Y2n2, I*sunC.r*Y2n1, I*sunC.r*Y20, I*sunC.r*Y21);
+        ubo.prtLightSH9_R1 = glm::vec4(I*sunC.r*Y22,  0, 0, 0);
+        ubo.prtLightSH9_G0 = glm::vec4(I*sunC.g*Y2n2, I*sunC.g*Y2n1, I*sunC.g*Y20, I*sunC.g*Y21);
+        ubo.prtLightSH9_G1 = glm::vec4(I*sunC.g*Y22,  0, 0, 0);
+        ubo.prtLightSH9_B0 = glm::vec4(I*sunC.b*Y2n2, I*sunC.b*Y2n1, I*sunC.b*Y20, I*sunC.b*Y21);
+        ubo.prtLightSH9_B1 = glm::vec4(I*sunC.b*Y22,  0, 0, 0);
+        // SH16
+        ubo.prtLightSH16_R0 = glm::vec4(I*sunC.r*Y3n3, I*sunC.r*Y3n2, I*sunC.r*Y3n1, I*sunC.r*Y30);
+        ubo.prtLightSH16_R1 = glm::vec4(I*sunC.r*Y31,  I*sunC.r*Y32,  I*sunC.r*Y33,  0);
+        ubo.prtLightSH16_G0 = glm::vec4(I*sunC.g*Y3n3, I*sunC.g*Y3n2, I*sunC.g*Y3n1, I*sunC.g*Y30);
+        ubo.prtLightSH16_G1 = glm::vec4(I*sunC.g*Y31,  I*sunC.g*Y32,  I*sunC.g*Y33,  0);
+        ubo.prtLightSH16_B0 = glm::vec4(I*sunC.b*Y3n3, I*sunC.b*Y3n2, I*sunC.b*Y3n1, I*sunC.b*Y30);
+        ubo.prtLightSH16_B1 = glm::vec4(I*sunC.b*Y31,  I*sunC.b*Y32,  I*sunC.b*Y33,  0);
+    }
+
+    // DDGI probe params
+    ubo.ddgiCounts = glm::ivec4((int)DdgiResources::kProbesX,
+                                 (int)DdgiResources::kProbesY,
+                                 (int)DdgiResources::kProbesZ,
+                                 m_renderer.ndgiEnabled() ? 2 : (m_renderer.ddgiEnabled() ? 1 : 0));
+    ubo.ddgiOrigin = glm::vec4(m_renderer.ddgiOrigin(), 0);
+    ubo.ddgiSpacing = glm::vec4(m_renderer.ddgiSpacing(), 0);
+    ubo.ddgiOctaSizes = glm::ivec4((int)DdgiResources::kOctaIrr,
+                                    (int)DdgiResources::kOctaDist, 0, 0);
+    ubo.lumenCounts = glm::ivec4(m_renderer.lumenEnabled() ? 1 : 0, 0, 0, 0);
+
+    // Push to GPU buffers
+    m_renderer.gbuffer().updateFrame(ubo);
+    m_renderer.forward().updateFrame(ubo);
+    m_renderer.skybox().updateFrame(ubo.invViewProj, m_camera.position);
+    m_renderer.rsmGeom().updateLight(m_scene.aabbMin, m_scene.aabbMax,
+                          glm::normalize(m_sunDir),
+                          glm::vec3(1.0f, 0.95f, 0.85f),
+                          m_sunIntensity);
+}
+
+void App::recordIndirectDraws(VkCommandBuffer cmd, uint32_t frameInFlight, const glm::mat4& viewProj) {
+    if (m_drawCount == 0) return;
+
+    if (m_useGpuCulling) {
+        // Build Hi-Z from previous frame's depth (only if occlusion enabled)
+        if (m_useHiZOcclusion) m_renderer.hizPass().record(cmd, m_renderer.rt());
+
+        // GPU frustum culling (+ Hi-Z occlusion if enabled)
+        if (m_useHiZOcclusion) {
+            m_renderer.cullPass().record(cmd, m_sceneGpu.drawDataBuffer.handle(),
+                m_drawCount, m_indirectBuf.handle(), m_countBuf.handle(), viewProj,
+                m_renderer.rt().extent, frameInFlight,
+                m_renderer.hizPass().mip1View(), m_renderer.hizPass().mip2View(),
+                m_renderer.hizPass().mip3View(), m_renderer.hizPass().mip4View());
+        } else {
+            m_renderer.cullPass().record(cmd, m_sceneGpu.drawDataBuffer.handle(),
+                m_drawCount, m_indirectBuf.handle(), m_countBuf.handle(), viewProj,
+                m_renderer.rt().extent, frameInFlight);
+        }
+        m_culledDrawCount = m_drawCount;  // conservative; GPU cull reduces this
+
+        // Barrier: compute write → indirect draw
+        VkBufferMemoryBarrier2 b{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2};
+        b.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+        b.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+        b.dstStageMask = VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT;
+        b.dstAccessMask = VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT;
+        b.buffer = m_indirectBuf.handle(); b.size = VK_WHOLE_SIZE;
+        VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+        di.bufferMemoryBarrierCount = 1; di.pBufferMemoryBarriers = &b;
+        vkCmdPipelineBarrier2(cmd, &di);
+
+        // Sun-view uses full unfiltered list
+        auto* sunCmds = (VkDrawIndexedIndirectCommand*)m_indirectBufSun.mapped();
+        for (uint32_t i = 0; i < m_drawCount; ++i) {
+            const auto& e = m_drawEntries[i];
+            sunCmds[i] = {e.indexCount, 1, e.firstIndex, e.vertexOffset, i};
+        }
+    } else {
+        // CPU fill (no culling)
+        m_culledDrawCount = m_drawCount;
+        auto* icmds = (VkDrawIndexedIndirectCommand*)m_indirectBuf.mapped();
+        for (uint32_t i = 0; i < m_drawCount; ++i) {
+            const auto& e = m_drawEntries[i];
+            icmds[i] = {e.indexCount, 1, e.firstIndex, e.vertexOffset, i};
+        }
+        std::memcpy(m_indirectBufSun.mapped(), icmds, m_drawCount * sizeof(VkDrawIndexedIndirectCommand));
+    }
+}
+
+void App::recordPostProcessing(VkCommandBuffer cmd) {
+    // hdrColor: hdrPrev copy 结束后在 TRANSFER_SRC → SHADER_READ_ONLY for tonemap
+    transitionImage(cmd, m_renderer.rt().hdrColor.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+        VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+        VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_READ_BIT,
+        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT);
+
+    bool hdrActive = m_swap->hdrEnabled();
+    bool aaActive = (m_aaMethod == AAMethod::TAA || m_aaMethod == AAMethod::SMAA);
+
+    if (hdrActive) {
+        // === HDR path ===
+        if (aaActive) {
+            m_renderer.rt().ensureAaResources(*m_device);
+            transitionImage(cmd, m_renderer.rt().aaHdr.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
+                VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
+                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
+            m_renderer.tonemap().bindOutput(*m_device, m_renderer.rt().aaHdr.view(), m_currentFrameInFlight);
+            m_renderer.tonemap().record(cmd, m_renderer.rt(), m_currentFrameInFlight, true, 1.0f);
+            writeTimestamp(cmd, m_renderer.kTsTonemap);
+
+            transitionImage(cmd, m_renderer.rt().aaHdr.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
+                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT);
+
+            transitionImage(cmd, m_currentSwapImage, VK_IMAGE_ASPECT_COLOR_BIT,
+                VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
+                VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
+                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
+
+            if (m_aaMethod == AAMethod::TAA) {
+                m_renderer.taa().bindResources(*m_device, m_renderer.rt(), m_currentFrameInFlight);
+                m_renderer.taa().bindOutput(*m_device, m_currentSwapView, m_currentFrameInFlight);
+                m_renderer.taa().record(cmd, m_renderer.rt(), m_jitter, m_prevJitter,
+                            m_currentInvViewProj, m_prevViewProj, m_currentFrameInFlight, m_taaBlendAlpha);
+                // Copy aaHdr → aaHistory for next frame
+                transitionImage(cmd, m_renderer.rt().aaHdr.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
+                    VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
+                transitionImage(cmd, m_renderer.rt().aaHistory.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                    VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                    VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
+                    VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
+                VkImageCopy histCopy{};
+                histCopy.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+                histCopy.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+                histCopy.extent = {m_renderer.rt().extent.width, m_renderer.rt().extent.height, 1};
+                vkCmdCopyImage(cmd, m_renderer.rt().aaHdr.image(), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                               m_renderer.rt().aaHistory.image(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &histCopy);
+                transitionImage(cmd, m_renderer.rt().aaHdr.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                    VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                    VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_READ_BIT,
+                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+                transitionImage(cmd, m_renderer.rt().aaHistory.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                    VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+            } else {
+                m_renderer.smaa().bindResources(*m_device, m_renderer.rt());
+                m_renderer.smaa().bindOutput(*m_device, m_currentSwapView);
+                m_renderer.smaa().record(cmd, m_renderer.rt());
+            }
+            writeTimestamp(cmd, m_renderer.kTsAA);
+        } else {
+            // No AA: tonemap writes directly to swapchain
+            transitionImage(cmd, m_currentSwapImage, VK_IMAGE_ASPECT_COLOR_BIT,
+                VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
+                VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
+                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
+            m_renderer.tonemap().bindOutput(*m_device, m_currentSwapView, m_currentFrameInFlight);
+            m_renderer.tonemap().record(cmd, m_renderer.rt(), m_currentFrameInFlight, true, 1.0f);
+            writeTimestamp(cmd, m_renderer.kTsTonemap);
+            writeTimestamp(cmd, m_renderer.kTsAA);
+        }
+
+        // Transition swapchain to COLOR_ATTACHMENT for ImGui
+        transitionImage(cmd, m_currentSwapImage, VK_IMAGE_ASPECT_COLOR_BIT,
+            VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+            VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
+            VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
+    } else {
+        // === SDR path ===
+        if (aaActive) {
+            m_renderer.rt().ensureAaResources(*m_device);
+
+            // Tonemap writes to aaHdr
+            transitionImage(cmd, m_renderer.rt().aaHdr.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
+                VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
+                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
+            m_renderer.tonemap().bindOutput(*m_device, m_renderer.rt().aaHdr.view(), m_currentFrameInFlight);
+            m_renderer.tonemap().record(cmd, m_renderer.rt(), m_currentFrameInFlight);
+            writeTimestamp(cmd, m_renderer.kTsTonemap);
+
+            transitionImage(cmd, m_renderer.rt().aaHdr.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
+                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT);
+
+            transitionImage(cmd, m_renderer.rt().ldrTonemap.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
+                VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
+                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
+
+            if (m_aaMethod == AAMethod::TAA) {
+                if (m_renderer.aaHistoryNeedsInit()) {
+                    transitionImage(cmd, m_renderer.rt().aaHistory.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                        VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                        VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
+                        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+                    m_renderer.aaHistoryNeedsInit() = false;
+                }
+                transitionImage(cmd, m_renderer.rt().depth.image(), VK_IMAGE_ASPECT_DEPTH_BIT,
+                    VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
+                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                    VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
+                    VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT,
+                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                    VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+                m_renderer.taa().bindResources(*m_device, m_renderer.rt(), m_currentFrameInFlight);
+                m_renderer.taa().record(cmd, m_renderer.rt(), m_jitter, m_prevJitter,
+                            m_currentInvViewProj, m_prevViewProj, m_currentFrameInFlight, m_taaBlendAlpha);
+
+                // Copy aaHdr → aaHistory for next frame
+                transitionImage(cmd, m_renderer.rt().aaHdr.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
+                    VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
+                transitionImage(cmd, m_renderer.rt().aaHistory.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                    VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                    VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
+                    VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
+                VkImageCopy histCopy{};
+                histCopy.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+                histCopy.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+                histCopy.extent = {m_renderer.rt().extent.width, m_renderer.rt().extent.height, 1};
+                vkCmdCopyImage(cmd,
+                    m_renderer.rt().aaHdr.image(), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                    m_renderer.rt().aaHistory.image(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                    1, &histCopy);
+                transitionImage(cmd, m_renderer.rt().aaHdr.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                    VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                    VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_READ_BIT,
+                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+                transitionImage(cmd, m_renderer.rt().aaHistory.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                    VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+            } else {
+                m_renderer.smaa().bindResources(*m_device, m_renderer.rt());
+                m_renderer.smaa().record(cmd, m_renderer.rt());
+            }
+            writeTimestamp(cmd, m_renderer.kTsAA);
+
+            // Barrier: ldrTonemap GENERAL → TRANSFER_SRC for blit
+            transitionImage(cmd, m_renderer.rt().ldrTonemap.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
+                VK_PIPELINE_STAGE_2_BLIT_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
+        } else {
+            // No AA: tonemap writes directly to ldrTonemap
+            transitionImage(cmd, m_renderer.rt().ldrTonemap.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
+                VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
+                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
+            m_renderer.tonemap().bindOutput(*m_device, m_renderer.rt().ldrTonemap.view(), m_currentFrameInFlight);
+            m_renderer.tonemap().record(cmd, m_renderer.rt(), m_currentFrameInFlight);
+            writeTimestamp(cmd, m_renderer.kTsTonemap);
+            writeTimestamp(cmd, m_renderer.kTsAA);
+
+            // Barrier: ldrTonemap GENERAL → TRANSFER_SRC for blit
+            transitionImage(cmd, m_renderer.rt().ldrTonemap.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
+                VK_PIPELINE_STAGE_2_BLIT_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
+        }
+
+        // SDR blit: ldrTonemap → swapchain
+        transitionImage(cmd, m_currentSwapImage, VK_IMAGE_ASPECT_COLOR_BIT,
+            VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
+            VK_PIPELINE_STAGE_2_BLIT_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
+
+        VkImageBlit blit{};
+        blit.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+        blit.srcOffsets[1] = {(int32_t)m_renderer.rt().extent.width, (int32_t)m_renderer.rt().extent.height, 1};
+        blit.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+        blit.dstOffsets[1] = {(int32_t)m_currentSwapExtent.width, (int32_t)m_currentSwapExtent.height, 1};
+        vkCmdBlitImage(cmd,
+            m_renderer.rt().ldrTonemap.image(), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+            m_currentSwapImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            1, &blit, VK_FILTER_LINEAR);
+
+        // SDR: transition swapchain to COLOR_ATTACHMENT for ImGui
+        transitionImage(cmd, m_currentSwapImage, VK_IMAGE_ASPECT_COLOR_BIT,
+            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+            VK_PIPELINE_STAGE_2_BLIT_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+            VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
+    }
+
+    // Final timestamp + transition to present
+    writeTimestamp(cmd, m_renderer.kTsEnd);
+    transitionImage(cmd, m_currentSwapImage, VK_IMAGE_ASPECT_COLOR_BIT,
+        VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+        VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+        VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT, 0);
+}
+
+void App::renderDebugWindow() {
+    if (m_imguiWin->shouldClose()) {
+        m_device->waitIdle();
+        m_renderer.imgui().destroy();
+        m_imguiSwap.reset();
+        m_imguiWin.reset();
+        WindowDesc iwd; iwd.title = "SomeGI Debug"; iwd.width = 600; iwd.height = 900;
+        m_imguiWin = std::make_unique<Window>(iwd);
+        m_imguiSwap = std::make_unique<Swapchain>(*m_device, *m_imguiWin);
+        m_renderer.imgui().init(*m_device, m_imguiWin->handle(), m_imguiSwap->format(), kFramesInFlight);
+        return;
+    }
+    auto f = m_imguiSwap->acquireNextFrame();
+    if (f.needsResize) { m_imguiSwap->recreate(); return; }
+
+    VkCommandBuffer c = m_imguiCmds[f.frameInFlight];
+    vkResetCommandBuffer(c, 0);
+    VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO, nullptr, VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT};
+    VK_CHECK(vkBeginCommandBuffer(c, &bi));
+    transitionImage(c, f.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
+    m_renderer.imgui().render(c, f.view, f.extent);
+    transitionImage(c, f.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT, 0);
+    VK_CHECK(vkEndCommandBuffer(c));
+    VkCommandBufferSubmitInfo cs{VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO, nullptr, c};
+    VkSemaphoreSubmitInfo ws{VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO, nullptr, f.sync->imageAvailable, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT};
+    VkSemaphoreSubmitInfo ss{VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO, nullptr, f.renderFinished, VK_PIPELINE_STAGE_2_ALL_GRAPHICS_BIT};
+    VkSubmitInfo2 si{VK_STRUCTURE_TYPE_SUBMIT_INFO_2};
+    si.waitSemaphoreInfoCount = 1; si.pWaitSemaphoreInfos = &ws;
+    si.commandBufferInfoCount = 1; si.pCommandBufferInfos = &cs;
+    si.signalSemaphoreInfoCount = 1; si.pSignalSemaphoreInfos = &ss;
+    VK_CHECK(vkQueueSubmit2(m_device->graphicsQueue(), 1, &si, f.sync->inFlight));
+    m_imguiSwap->present(f);
+}
 void App::run() {
     auto last = std::chrono::high_resolution_clock::now();
     float fpsTimer = 0;
     int fpsFrames = 0;
     while (!m_window->shouldClose()) {
+        // ---- Timing & input ----
         m_window->pollEvents();
         m_imguiWin->pollEvents();
         auto now = std::chrono::high_resolution_clock::now();
@@ -3059,12 +3462,10 @@ void App::run() {
         if (fpsTimer >= 0.5f) {
             m_fpsAvg = fpsFrames / fpsTimer;
             fpsTimer = 0; fpsFrames = 0;
-            // A.2 console echo —— sweep 时拿来汇总各模式 ms。
             std::printf("[profile] fps=%.0f cpu=%.2fms gpu=%.2fms gi=%d\n",
                         m_fpsAvg, m_dtMs, m_renderer.gpuMs(), m_giIndexApplied);
         }
 
-        // 不要在 ImGui 想要键盘/鼠标时给相机
         m_renderer.imgui().newFrame();
         bool wantMouse = ImGui::GetIO().WantCaptureMouse;
         bool wantKbd   = ImGui::GetIO().WantCaptureKeyboard;
@@ -3072,34 +3473,29 @@ void App::run() {
             m_flyer.update(m_camera, dt, m_window->handle());
         }
         buildUI();
-        applySceneSelection();  // user-driven scene switch from UI dropdown
+        applySceneSelection();
 
-        // F2: start benchmark
         if (!wantKbd && ImGui::IsKeyPressed(ImGuiKey_F2)) {
             startBenchmark();
         }
-
         if (m_renderer.benchRunning()) {
             tickBenchmark(dt);
         } else {
-            applyGiSelection();     // user-driven GI switch from UI dropdown
+            applyGiSelection();
         }
-
-        // M8 PRT 一次性 bake：scene 切换 / 第一帧时执行；oneShot 内部
-        // waitIdle 不会让 main loop 卡顿，但这一帧会有明显停顿（visible
-        // 给用户的预期：PRT 模式或场景切换时短暂等待）。
         if (!m_renderer.prtBaked()) {
             bakePrt();
             m_renderer.prtBaked() = true;
         }
 
+        // ---- Swapchain acquire ----
         auto frame = m_swap->acquireNextFrame();
         if (frame.needsResize) { m_swap->recreate(); onSwapchainResized(); continue; }
         if (frame.extent.width != m_renderer.rt().extent.width || frame.extent.height != m_renderer.rt().extent.height) {
             onSwapchainResized();
         }
 
-        // TAA jitter: Halton(2,3) sequence
+        // ---- TAA jitter ----
         m_prevJitter = m_jitter;
         if (m_aaMethod == AAMethod::TAA) {
             auto halton = [](int idx, int base) -> float {
@@ -3115,124 +3511,19 @@ void App::run() {
             m_jitter = glm::vec2(0.0f);
         }
 
-        // Update FrameUBO
+        // ---- Build FrameUBO ----
         FrameUBO ubo{};
-        ubo.view = m_camera.view();
-        ubo.proj = m_camera.proj((float)m_renderer.rt().extent.width / (float)m_renderer.rt().extent.height);
-        // Apply jitter to projection
-        ubo.proj[2][0] += m_jitter.x;
-        ubo.proj[2][1] += m_jitter.y;
-        ubo.viewProj = ubo.proj * ubo.view;
-        ubo.invViewProj = glm::inverse(ubo.viewProj);
-        ubo.prevViewProj = m_prevViewProj;   // B.4 SSGI 时序 reproject 用
-        ubo.cameraPos = glm::vec4(m_camera.position, 0);
-        ubo.sunDir = glm::vec4(glm::normalize(m_sunDir), 0);
-        ubo.sunColor_intensity = glm::vec4(1.0f, 0.95f, 0.85f, m_sunIntensity);
-        ubo.ambient = glm::vec4(m_ambient, 0);
-        int specMips = 0;
-        if (auto* ibl = dynamic_cast<IBLTechnique*>(m_renderer.giTech().get())) {
-            specMips = (int)ibl->specularMipCount();
-        }
-        // counts.z = "indirect lighting enabled" (IBL/SSGI/RSM/LPV 都算).
-        // 0 = None → lighting.slang takes hemispheric-ambient fallback.
-        // 1 = IBL（含 SSGI/RSM/LPV 的 lerp 叠加） → 走 evalIBLDiffuse + 各路混合。
-        //     SSGI 通过 ssgi.a 自门控；RSM 通过 counts.w；LPV 通过 lpvCounts.y。
-        // counts.w = RSM 启用闸门（0 / 1）。
-        int indirectEnabled = (m_giIndexApplied >= 1) ? 1 : 0;
-        int rsmEnabled = m_renderer.rsmSample().enabled ? 1 : 0;
-        ubo.counts = glm::ivec4((int)m_scene.materials.size(), specMips, indirectEnabled, rsmEnabled);
-        // M6 LPV：lpvCounts.x=gridResolution, .y=lpvEnabled。
-        // lpvGridMinCell.xyz=gridMin, .w=cellSize（在 applySceneSelection
-        // 里按 AABB 重算）。lighting.slang 用这两个把 worldPos → grid UV。
-        ubo.lpvCounts = glm::ivec4((int)m_renderer.kLpvResolution, m_renderer.lpvEnabled() ? 1 : 0, 0, 0);
-        ubo.lpvGridMinCell = glm::vec4(m_renderer.lpvGridMin(), m_renderer.lpvCellSize());
-        // M7 VXGI：vxgiCounts.x=gridResolution, .y=enabled, .z=mipLevels。
-        ubo.vxgiCounts = glm::ivec4((int)m_renderer.kVxgiResolution, m_renderer.vxgiEnabled() ? 1 : 0,
-                                     (int)m_renderer.vxgi().mipLevels(), 0);
-        ubo.vxgiGridMinCell = glm::vec4(m_renderer.vxgiGridMin(), m_renderer.vxgiCellSize());
-        // M8 PRT：把 sun 投到 SH order-1。lightSH[k] = I·color · Y_k(d_sun)。
-        // d_sun 取"从 surface 到 sun"的方向 = -sunDirNormalized（与
-        // lighting.slang 一致）。
-        ubo.prtCounts = glm::ivec4((int)m_renderer.kPrtResolution,
-                                    (m_renderer.prtEnabled() && m_renderer.prtBaked()) ? 1 : 0,
-                                    m_renderer.prtShOrder(), 0);
-        ubo.prtGridMinCell = glm::vec4(m_renderer.prtGridMin(), m_renderer.prtCellSize());
-        {
-            glm::vec3 dToSun = -glm::normalize(m_sunDir);
-            float x = dToSun.x, y = dToSun.y, z = dToSun.z;
-            // l=0,1
-            float Y0   = 0.282094792f;
-            float Y1n1 = 0.488602512f * y;
-            float Y10  = 0.488602512f * z;
-            float Y11  = 0.488602512f * x;
-            // l=2
-            float Y2n2 = 1.092548431f * x * y;
-            float Y2n1 = 1.092548431f * y * z;
-            float Y20  = 0.315391565f * (3.0f * z * z - 1.0f);
-            float Y21  = 1.092548431f * z * x;
-            float Y22  = 0.546274215f * (x * x - y * y);
-            // l=3 (B.10)
-            float Y3n3 = 0.590043589f * y * (3.0f * x * x - y * y);
-            float Y3n2 = 2.890611442f * x * y * z;
-            float Y3n1 = 0.457045799f * y * (5.0f * z * z - 1.0f);
-            float Y30  = 0.373176333f * z * (5.0f * z * z - 3.0f);
-            float Y31  = 0.457045799f * x * (5.0f * z * z - 1.0f);
-            float Y32  = 1.445305721f * z * (x * x - y * y);
-            float Y33  = 0.590043589f * x * (x * x - 3.0f * y * y);
-            glm::vec3 sunC{1.0f, 0.95f, 0.85f};
-            float I = m_sunIntensity;
-            // SH4
-            ubo.prtLightSH_R = glm::vec4(I*sunC.r*Y0, I*sunC.r*Y1n1, I*sunC.r*Y10, I*sunC.r*Y11);
-            ubo.prtLightSH_G = glm::vec4(I*sunC.g*Y0, I*sunC.g*Y1n1, I*sunC.g*Y10, I*sunC.g*Y11);
-            ubo.prtLightSH_B = glm::vec4(I*sunC.b*Y0, I*sunC.b*Y1n1, I*sunC.b*Y10, I*sunC.b*Y11);
-            // SH9
-            ubo.prtLightSH9_R0 = glm::vec4(I*sunC.r*Y2n2, I*sunC.r*Y2n1, I*sunC.r*Y20, I*sunC.r*Y21);
-            ubo.prtLightSH9_R1 = glm::vec4(I*sunC.r*Y22,  0, 0, 0);
-            ubo.prtLightSH9_G0 = glm::vec4(I*sunC.g*Y2n2, I*sunC.g*Y2n1, I*sunC.g*Y20, I*sunC.g*Y21);
-            ubo.prtLightSH9_G1 = glm::vec4(I*sunC.g*Y22,  0, 0, 0);
-            ubo.prtLightSH9_B0 = glm::vec4(I*sunC.b*Y2n2, I*sunC.b*Y2n1, I*sunC.b*Y20, I*sunC.b*Y21);
-            ubo.prtLightSH9_B1 = glm::vec4(I*sunC.b*Y22,  0, 0, 0);
-            // SH16 (B.10) —— 投影完整，但 lighting 端 A_3=0 → diffuse 不贡献
-            ubo.prtLightSH16_R0 = glm::vec4(I*sunC.r*Y3n3, I*sunC.r*Y3n2, I*sunC.r*Y3n1, I*sunC.r*Y30);
-            ubo.prtLightSH16_R1 = glm::vec4(I*sunC.r*Y31,  I*sunC.r*Y32,  I*sunC.r*Y33,  0);
-            ubo.prtLightSH16_G0 = glm::vec4(I*sunC.g*Y3n3, I*sunC.g*Y3n2, I*sunC.g*Y3n1, I*sunC.g*Y30);
-            ubo.prtLightSH16_G1 = glm::vec4(I*sunC.g*Y31,  I*sunC.g*Y32,  I*sunC.g*Y33,  0);
-            ubo.prtLightSH16_B0 = glm::vec4(I*sunC.b*Y3n3, I*sunC.b*Y3n2, I*sunC.b*Y3n1, I*sunC.b*Y30);
-            ubo.prtLightSH16_B1 = glm::vec4(I*sunC.b*Y31,  I*sunC.b*Y32,  I*sunC.b*Y33,  0);
-        }
-        // M11 DDGI：probe 几何 + 启用闸门
-        ubo.ddgiCounts = glm::ivec4((int)DdgiResources::kProbesX,
-                                     (int)DdgiResources::kProbesY,
-                                     (int)DdgiResources::kProbesZ,
-                                     m_renderer.ndgiEnabled() ? 2 : (m_renderer.ddgiEnabled() ? 1 : 0));
-        ubo.ddgiOrigin = glm::vec4(m_renderer.ddgiOrigin(), 0);
-        ubo.ddgiSpacing = glm::vec4(m_renderer.ddgiSpacing(), 0);
-        ubo.ddgiOctaSizes = glm::ivec4((int)DdgiResources::kOctaIrr,
-                                        (int)DdgiResources::kOctaDist, 0, 0);
-        ubo.lumenCounts   = glm::ivec4(m_renderer.lumenEnabled() ? 1 : 0, 0, 0, 0);
-        m_renderer.gbuffer().updateFrame(ubo);
-        m_renderer.forward().updateFrame(ubo);
-        m_renderer.skybox().updateFrame(ubo.invViewProj, m_camera.position);
-        // M5.0：每帧把当前 sun + AABB 喂给 RsmGeometryPass。sunDir 的约定
-        // 跟主 FrameUBO 一致 —— 光传播方向（normalize 后），updateLight 内
-        // 部自己取反算 toSun 用于摆 sun camera。
-        m_renderer.rsmGeom().updateLight(m_scene.aabbMin, m_scene.aabbMax,
-                              glm::normalize(m_sunDir),
-                              glm::vec3(1.0f, 0.95f, 0.85f),
-                              m_sunIntensity);
+        buildFrameUBO(ubo);
 
+        // ---- Begin command buffer ----
         VkCommandBuffer cmd = m_cmds[frame.frameInFlight];
         vkResetCommandBuffer(cmd, 0);
-
         VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
         bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
         VK_CHECK(vkBeginCommandBuffer(cmd, &bi));
 
-        // A.2：先读上次这个 in-flight 的结果（acquireNextFrame 已经
-        // wait-fence，老 query 安全），再 reset 写新 query。
+        // ---- Timestamp readback from previous frame ----
         uint32_t qBase = frame.frameInFlight * m_renderer.kTimestampSlots;
-
-        // Read back previous frame's per-pass timestamps
         if (m_renderer.timestampValid(frame.frameInFlight)) {
             uint64_t ts[m_renderer.kTimestampSlots] = {};
             VkResult r = vkGetQueryPoolResults(m_device->device(), m_renderer.timestampPool(),
@@ -3252,14 +3543,12 @@ void App::run() {
                 if (total > 0) m_renderer.gpuMs() = m_renderer.gpuMs() * 0.9f + total * 0.1f;
             }
         }
-
-        // Read back GPU culling count from previous frame
         if (m_useGpuCulling && m_countBuf.handle() != VK_NULL_HANDLE && m_drawCount > 0) {
             uint32_t culled = *(uint32_t*)m_countBuf.mapped();
             if (culled > 0 && culled <= m_drawCount) m_culledDrawCount = culled;
         }
 
-        // 设置帧相关成员供管线表 lambda 使用
+        // ---- Set frame context for pipeline lambda captures ----
         m_currentFrameInFlight = frame.frameInFlight;
         m_currentSwapView = frame.view;
         m_currentSwapImage = frame.image;
@@ -3268,294 +3557,24 @@ void App::run() {
         m_currentView = ubo.view;
         m_currentInvViewProj = ubo.invViewProj;
 
-        // Reset + write start timestamp
+        // ---- Reset timestamp pool + write start ----
         vkCmdResetQueryPool(cmd, m_renderer.timestampPool(), qBase, m_renderer.kTimestampSlots);
         vkCmdWriteTimestamp2(cmd, VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT,
                              m_renderer.timestampPool(), qBase + m_renderer.kTsStart);
 
-        // ============================================================
-        // 构建管线表并执行所有内部渲染 Pass
-        // ============================================================
-        // GPU-driven: fill indirect buffer (CPU or GPU culling)
-        if (m_drawCount > 0) {
-            if (m_useGpuCulling) {
-                // Build Hi-Z from previous frame's depth (only if occlusion enabled)
-                if (m_useHiZOcclusion) m_renderer.hizPass().record(cmd, m_renderer.rt());
-                // GPU frustum culling (+ Hi-Z occlusion if enabled)
-                glm::mat4 vp = ubo.viewProj;
-                if (m_useHiZOcclusion) {
-                    m_renderer.cullPass().record(cmd, m_sceneGpu.drawDataBuffer.handle(),
-                        m_drawCount, m_indirectBuf.handle(), m_countBuf.handle(), vp,
-                        m_renderer.rt().extent, frame.frameInFlight,
-                        m_renderer.hizPass().mip1View(), m_renderer.hizPass().mip2View(),
-                        m_renderer.hizPass().mip3View(), m_renderer.hizPass().mip4View());
-                } else {
-                    m_renderer.cullPass().record(cmd, m_sceneGpu.drawDataBuffer.handle(),
-                        m_drawCount, m_indirectBuf.handle(), m_countBuf.handle(), vp,
-                        m_renderer.rt().extent, frame.frameInFlight);
-                }
-                m_culledDrawCount = m_drawCount;  // conservative; GPU cull reduces this
-                // Barrier: compute write → indirect draw
-                VkBufferMemoryBarrier2 b{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2};
-                b.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-                b.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-                b.dstStageMask = VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT;
-                b.dstAccessMask = VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT;
-                b.buffer = m_indirectBuf.handle(); b.size = VK_WHOLE_SIZE;
-                VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-                di.bufferMemoryBarrierCount = 1; di.pBufferMemoryBarriers = &b;
-                vkCmdPipelineBarrier2(cmd, &di);
-                // Sun-view uses full unfiltered list
-                auto* sunCmds = (VkDrawIndexedIndirectCommand*)m_indirectBufSun.mapped();
-                for (uint32_t i = 0; i < m_drawCount; ++i) {
-                    const auto& e = m_drawEntries[i];
-                    sunCmds[i] = {e.indexCount, 1, e.firstIndex, e.vertexOffset, i};
-                }
-            } else {
-                // CPU fill (no culling)
-                m_culledDrawCount = m_drawCount;
-                auto* icmds = (VkDrawIndexedIndirectCommand*)m_indirectBuf.mapped();
-                for (uint32_t i = 0; i < m_drawCount; ++i) {
-                    const auto& e = m_drawEntries[i];
-                    icmds[i] = {e.indexCount, 1, e.firstIndex, e.vertexOffset, i};
-                }
-                std::memcpy(m_indirectBufSun.mapped(), icmds, m_drawCount * sizeof(VkDrawIndexedIndirectCommand));
-            }
-        }
+        // ---- GPU-driven indirect draws ----
+        recordIndirectDraws(cmd, frame.frameInFlight, ubo.viewProj);
 
+        // ---- Execute render pipeline ----
         buildPipelineTable();
         m_renderer.pipeline().execute(cmd);
-
-        // Increment frame index
         ++m_renderer.frameIndex();
 
-        // ============================================================
-        // Phase 4: Post-processing (tonemap + AA + blit) + ImGui
-        // 这些步骤需要直接操作 swapchain image，保留在 run() 中处理
-        // ============================================================
+        // ---- Post-processing (tonemap + AA + blit) ----
+        recordPostProcessing(cmd);
 
-        // hdrColor: hdrPrev copy 结束后在 TRANSFER_SRC → SHADER_READ_ONLY for tonemap
-        transitionImage(cmd, m_renderer.rt().hdrColor.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-            VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-            VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_READ_BIT,
-            VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT);
-        // ============================================================
-        // Phase 4: Tonemap + AA + Blit to swapchain
-        // 管线表已完成所有内部渲染 (RSM → hdrPrev copy)，
-        // 此处处理需要直接操作 swapchain image 的最终阶段。
-        // ============================================================
-
-        bool hdrActive = m_swap->hdrEnabled();
-        bool aaActive = (m_aaMethod == AAMethod::TAA || m_aaMethod == AAMethod::SMAA);
-
-        if (hdrActive) {
-            // === HDR path ===
-            if (aaActive) {
-                m_renderer.rt().ensureAaResources(*m_device);
-                transitionImage(cmd, m_renderer.rt().aaHdr.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-                    VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
-                    VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
-                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
-                m_renderer.tonemap().bindOutput(*m_device, m_renderer.rt().aaHdr.view(), m_currentFrameInFlight);
-                m_renderer.tonemap().record(cmd, m_renderer.rt(), m_currentFrameInFlight, true, 1.0f);
-                writeTimestamp(cmd, m_renderer.kTsTonemap);
-
-                transitionImage(cmd, m_renderer.rt().aaHdr.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-                    VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
-                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT);
-
-                transitionImage(cmd, m_currentSwapImage, VK_IMAGE_ASPECT_COLOR_BIT,
-                    VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
-                    VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
-                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
-
-                if (m_aaMethod == AAMethod::TAA) {
-                    m_renderer.taa().bindResources(*m_device, m_renderer.rt(), m_currentFrameInFlight);
-                    m_renderer.taa().bindOutput(*m_device, m_currentSwapView, m_currentFrameInFlight);
-                    m_renderer.taa().record(cmd, m_renderer.rt(), m_jitter, m_prevJitter,
-                                m_currentInvViewProj, m_prevViewProj, m_currentFrameInFlight, m_taaBlendAlpha);
-                    // Copy aaHdr → aaHistory for next frame
-                    transitionImage(cmd, m_renderer.rt().aaHdr.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-                        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
-                        VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
-                    transitionImage(cmd, m_renderer.rt().aaHistory.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-                        VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                        VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
-                        VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
-                    VkImageCopy histCopy{};
-                    histCopy.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-                    histCopy.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-                    histCopy.extent = {m_renderer.rt().extent.width, m_renderer.rt().extent.height, 1};
-                    vkCmdCopyImage(cmd, m_renderer.rt().aaHdr.image(), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                                   m_renderer.rt().aaHistory.image(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &histCopy);
-                    transitionImage(cmd, m_renderer.rt().aaHdr.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-                        VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                        VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_READ_BIT,
-                        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
-                    transitionImage(cmd, m_renderer.rt().aaHistory.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-                        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                        VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
-                        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
-                } else {
-                    m_renderer.smaa().bindResources(*m_device, m_renderer.rt());
-                    m_renderer.smaa().bindOutput(*m_device, m_currentSwapView);
-                    m_renderer.smaa().record(cmd, m_renderer.rt());
-                }
-                writeTimestamp(cmd, m_renderer.kTsAA);
-            } else {
-                // No AA: tonemap writes directly to swapchain
-                transitionImage(cmd, m_currentSwapImage, VK_IMAGE_ASPECT_COLOR_BIT,
-                    VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
-                    VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
-                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
-                m_renderer.tonemap().bindOutput(*m_device, m_currentSwapView, m_currentFrameInFlight);
-                m_renderer.tonemap().record(cmd, m_renderer.rt(), m_currentFrameInFlight, true, 1.0f);
-                writeTimestamp(cmd, m_renderer.kTsTonemap);
-                writeTimestamp(cmd, m_renderer.kTsAA);
-            }
-
-            // Transition swapchain to COLOR_ATTACHMENT for ImGui
-            transitionImage(cmd, m_currentSwapImage, VK_IMAGE_ASPECT_COLOR_BIT,
-                VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
-                VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
-        } else {
-            // === SDR path ===
-            if (aaActive) {
-                m_renderer.rt().ensureAaResources(*m_device);
-
-                // Tonemap writes to aaHdr
-                transitionImage(cmd, m_renderer.rt().aaHdr.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-                    VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
-                    VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
-                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
-                m_renderer.tonemap().bindOutput(*m_device, m_renderer.rt().aaHdr.view(), m_currentFrameInFlight);
-                m_renderer.tonemap().record(cmd, m_renderer.rt(), m_currentFrameInFlight);
-                writeTimestamp(cmd, m_renderer.kTsTonemap);
-
-                transitionImage(cmd, m_renderer.rt().aaHdr.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-                    VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
-                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT);
-
-                transitionImage(cmd, m_renderer.rt().ldrTonemap.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-                    VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
-                    VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
-                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
-
-                if (m_aaMethod == AAMethod::TAA) {
-                    if (m_renderer.aaHistoryNeedsInit()) {
-                        transitionImage(cmd, m_renderer.rt().aaHistory.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-                            VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                            VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
-                            VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
-                        m_renderer.aaHistoryNeedsInit() = false;
-                    }
-                    transitionImage(cmd, m_renderer.rt().depth.image(), VK_IMAGE_ASPECT_DEPTH_BIT,
-                        VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
-                        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                        VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
-                        VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT,
-                        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                        VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
-                    m_renderer.taa().bindResources(*m_device, m_renderer.rt(), m_currentFrameInFlight);
-                    m_renderer.taa().record(cmd, m_renderer.rt(), m_jitter, m_prevJitter,
-                                m_currentInvViewProj, m_prevViewProj, m_currentFrameInFlight, m_taaBlendAlpha);
-
-                    // Copy aaHdr → aaHistory for next frame
-                    transitionImage(cmd, m_renderer.rt().aaHdr.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-                        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
-                        VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
-                    transitionImage(cmd, m_renderer.rt().aaHistory.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-                        VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                        VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
-                        VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
-                    VkImageCopy histCopy{};
-                    histCopy.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-                    histCopy.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-                    histCopy.extent = {m_renderer.rt().extent.width, m_renderer.rt().extent.height, 1};
-                    vkCmdCopyImage(cmd,
-                        m_renderer.rt().aaHdr.image(), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                        m_renderer.rt().aaHistory.image(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                        1, &histCopy);
-                    transitionImage(cmd, m_renderer.rt().aaHdr.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-                        VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                        VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_READ_BIT,
-                        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
-                    transitionImage(cmd, m_renderer.rt().aaHistory.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-                        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                        VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
-                        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
-                } else {
-                    m_renderer.smaa().bindResources(*m_device, m_renderer.rt());
-                    m_renderer.smaa().record(cmd, m_renderer.rt());
-                }
-                writeTimestamp(cmd, m_renderer.kTsAA);
-
-                // Barrier: ldrTonemap GENERAL → TRANSFER_SRC for blit
-                transitionImage(cmd, m_renderer.rt().ldrTonemap.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-                    VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
-                    VK_PIPELINE_STAGE_2_BLIT_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
-            } else {
-                // No AA: tonemap writes directly to ldrTonemap
-                transitionImage(cmd, m_renderer.rt().ldrTonemap.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-                    VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
-                    VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
-                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
-                m_renderer.tonemap().bindOutput(*m_device, m_renderer.rt().ldrTonemap.view(), m_currentFrameInFlight);
-                m_renderer.tonemap().record(cmd, m_renderer.rt(), m_currentFrameInFlight);
-                writeTimestamp(cmd, m_renderer.kTsTonemap);
-                writeTimestamp(cmd, m_renderer.kTsAA);
-
-                // Barrier: ldrTonemap GENERAL → TRANSFER_SRC for blit
-                transitionImage(cmd, m_renderer.rt().ldrTonemap.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-                    VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
-                    VK_PIPELINE_STAGE_2_BLIT_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
-            }
-
-            // SDR blit: ldrTonemap → swapchain
-            transitionImage(cmd, m_currentSwapImage, VK_IMAGE_ASPECT_COLOR_BIT,
-                VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
-                VK_PIPELINE_STAGE_2_BLIT_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
-
-            VkImageBlit blit{};
-            blit.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-            blit.srcOffsets[1] = {(int32_t)m_renderer.rt().extent.width, (int32_t)m_renderer.rt().extent.height, 1};
-            blit.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-            blit.dstOffsets[1] = {(int32_t)m_currentSwapExtent.width, (int32_t)m_currentSwapExtent.height, 1};
-            vkCmdBlitImage(cmd,
-                m_renderer.rt().ldrTonemap.image(), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                m_currentSwapImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                1, &blit, VK_FILTER_LINEAR);
-
-            // SDR: transition swapchain to COLOR_ATTACHMENT for ImGui
-            transitionImage(cmd, m_currentSwapImage, VK_IMAGE_ASPECT_COLOR_BIT,
-                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-                VK_PIPELINE_STAGE_2_BLIT_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
-                VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
-
-        } // end SDR path
-
-        // Phase 5: ImGui overlay + present transition
-
-        writeTimestamp(cmd, m_renderer.kTsEnd);
-
-        // ImGui rendered to separate window
-
-        transitionImage(cmd, m_currentSwapImage, VK_IMAGE_ASPECT_COLOR_BIT,
-            VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
-            VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
-            VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT, 0);
-
+        // ---- Finalize + submit main window ----
         m_renderer.timestampValid(m_currentFrameInFlight) = true;
-
         VK_CHECK(vkEndCommandBuffer(cmd));
 
         VkCommandBufferSubmitInfo csi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO};
@@ -3571,46 +3590,12 @@ void App::run() {
         si.signalSemaphoreInfoCount = 1;   si.pSignalSemaphoreInfos = &signalS;
         si.commandBufferInfoCount = 1;     si.pCommandBufferInfos = &csi;
         VK_CHECK(vkQueueSubmit2(m_device->graphicsQueue(), 1, &si, frame.sync->inFlight));
-
         m_swap->present(frame);
 
-        // ---- ImGui debug window (600x900) ----
-        {
-        if (m_imguiWin->shouldClose()) {
-            m_device->waitIdle();
-            m_renderer.imgui().destroy();
-            m_imguiSwap.reset();
-            m_imguiWin.reset();
-            WindowDesc iwd; iwd.title = "SomeGI Debug"; iwd.width = 600; iwd.height = 900;
-            m_imguiWin = std::make_unique<Window>(iwd);
-            m_imguiSwap = std::make_unique<Swapchain>(*m_device, *m_imguiWin);
-            m_renderer.imgui().init(*m_device, m_imguiWin->handle(), m_imguiSwap->format(), kFramesInFlight);
-            continue;
-        }
-            auto f = m_imguiSwap->acquireNextFrame();
-            if (f.needsResize) { m_imguiSwap->recreate(); }
-            else {
-                VkCommandBuffer c = m_imguiCmds[f.frameInFlight];
-                vkResetCommandBuffer(c, 0);
-                VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO, nullptr, VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT};
-                VK_CHECK(vkBeginCommandBuffer(c, &bi));
-                transitionImage(c, f.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
-                m_renderer.imgui().render(c, f.view, f.extent);
-                transitionImage(c, f.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT, 0);
-                VK_CHECK(vkEndCommandBuffer(c));
-                VkCommandBufferSubmitInfo cs{VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO, nullptr, c};
-                VkSemaphoreSubmitInfo ws{VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO, nullptr, f.sync->imageAvailable, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT};
-                VkSemaphoreSubmitInfo ss{VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO, nullptr, f.renderFinished, VK_PIPELINE_STAGE_2_ALL_GRAPHICS_BIT};
-                VkSubmitInfo2 si{VK_STRUCTURE_TYPE_SUBMIT_INFO_2};
-                si.waitSemaphoreInfoCount = 1; si.pWaitSemaphoreInfos = &ws;
-                si.commandBufferInfoCount = 1; si.pCommandBufferInfos = &cs;
-                si.signalSemaphoreInfoCount = 1; si.pSignalSemaphoreInfos = &ss;
-                VK_CHECK(vkQueueSubmit2(m_device->graphicsQueue(), 1, &si, f.sync->inFlight));
-                m_imguiSwap->present(f);
-            }
-        }
+        // ---- ImGui debug window ----
+        renderDebugWindow();
 
-        // B.4 SSGI 时序：保存这帧 viewProj 给下一帧 reproject。
+        // ---- Save viewProj for next frame's reprojection ----
         m_prevViewProj = ubo.viewProj;
     }
 }
