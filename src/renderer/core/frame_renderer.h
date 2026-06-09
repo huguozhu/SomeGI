@@ -77,7 +77,11 @@ public:
 
     void bindScenePasses(Device& d, const SceneGpu& gpu, uint32_t textureCount);
 
-    void applyGiFlags(int effectiveGiIndex);
+    // 根据 GI 技术索引设置内部各 pass 的启用标志（替代 App 直接修改 bool）
+    void applyGiSelection(int giIndex);
+
+    // 根据 scene AABB 计算并设置 LPV/VXGI/PRT/DDGI 四种 GI 网格参数
+    void setupGiGrids(const glm::vec3& aabbMin, const glm::vec3& aabbMax);
 
     // Bootstrap
     void bootstrapHdrPrev();

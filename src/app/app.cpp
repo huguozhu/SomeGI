@@ -407,49 +407,10 @@ void App::applySceneSelection() {
     glm::vec3 c = (m_scene.aabbMin + m_scene.aabbMax) * 0.5f;
     glm::vec3 d = m_scene.aabbMax - m_scene.aabbMin;
 
-    // M6 LPV：32³ 网格按 scene AABB 摆。每边 padding 5% 防边界漏；cellSize
-    // 选 max axis 平均出来，让 grid 是均匀立方体（容易 trilinear 插值）。
-    {
-        glm::vec3 padded = d * 1.10f;
-        float maxExtent = std::max({padded.x, padded.y, padded.z});
-        m_renderer.lpvCellSize() = maxExtent / float(m_renderer.kLpvResolution);
-        glm::vec3 gridHalf = glm::vec3(m_renderer.lpvCellSize() * float(m_renderer.kLpvResolution) * 0.5f);
-        m_renderer.lpvGridMin() = c - gridHalf;
-    }
-
-    // M7 VXGI：128³ 网格同样按 scene AABB 摆，但 cell 更细 → 4× LPV 的精度。
-    {
-        glm::vec3 padded = d * 1.10f;
-        float maxExtent = std::max({padded.x, padded.y, padded.z});
-        m_renderer.vxgiCellSize() = maxExtent / float(m_renderer.kVxgiResolution);
-        glm::vec3 gridHalf = glm::vec3(m_renderer.vxgiCellSize() * float(m_renderer.kVxgiResolution) * 0.5f);
-        m_renderer.vxgiGridMin() = c - gridHalf;
-    }
-
-    // C.4 ReSTIR DI demo lights：按 scene AABB 摆 8 个 point light。
+    // GI 网格参数：由 FrameRenderer 根据 AABB 统一计算
+    m_renderer.setupGiGrids(m_scene.aabbMin, m_scene.aabbMax);
+    // ReSTIR demo lights
     m_renderer.rebuildDemoLights(m_scene);
-
-    // M8 PRT：与 LPV 同 32³，但语义不同 —— 存的是 visibility transfer SH。
-    {
-        glm::vec3 padded = d * 1.10f;
-        float maxExtent = std::max({padded.x, padded.y, padded.z});
-        m_renderer.prtCellSize() = maxExtent / float(m_renderer.kPrtResolution);
-        glm::vec3 gridHalf = glm::vec3(m_renderer.prtCellSize() * float(m_renderer.kPrtResolution) * 0.5f);
-        m_renderer.prtGridMin() = c - gridHalf;
-    }
-    m_renderer.prtBaked() = false;   // scene 切换 → bake 失效，下一帧 main loop 入口重 bake
-
-    // M11 DDGI：probe grid 按 scene AABB 摆，padding 5%；间距 = padded / probes。
-    {
-        glm::vec3 padded = d * 1.05f;
-        m_renderer.ddgiSpacing() = glm::vec3(
-            padded.x / float(DdgiResources::kProbesX - 1),
-            padded.y / float(DdgiResources::kProbesY - 1),
-            padded.z / float(DdgiResources::kProbesZ - 1));
-        glm::vec3 half = padded * 0.5f;
-        m_renderer.ddgiOrigin() = c - half;
-    }
-    m_renderer.ddgiAtlasInited() = false;   // 重新初始化 atlas（清零等价于 first-time）
 
     bool interiorLike = std::max(d.x, d.z) > d.y * 2.0f;
     if (interiorLike) {
@@ -622,38 +583,11 @@ void App::applyGiSelection() {
     if (effective == m_giIndexApplied) return;
 
     m_pipelineDirty = true;  // GI 模式切换，下一帧重建管线执行表
-
-    // GI 模式切换：设置各 pass 的启用标志。IBL 的 set=1 描述符在
-    // init 阶段一次性创建，不随 GI 切换变更。
-    m_renderer.ssgi().enabled      = (effective == 2);
-    // m_ssgi、关 m_rsmSample；选 RSM 反过来。其他模式（None/IBL）两者
-    // 都关，rsmGI / ssgi 都被 clear path 抹成 0，lighting.slang 的 lerp
-    // 退化成纯 IBL diffuse。
-    m_renderer.ssgi().enabled      = (effective == 2);
-    m_renderer.rsmSample().enabled = (effective == 3);
-    m_renderer.lpvEnabled()        = (effective == 4);
-    m_renderer.vxgiEnabled()       = (effective == 5);
-    m_renderer.prtEnabled()        = (effective == 6);
-    m_renderer.ddgiEnabled()       = (effective == 7);
-    m_renderer.gtgi().enabled      = (effective == 8);
-    m_renderer.sdfgiPass().enabled = (effective == 9);
-    // M9 RT GI (index 10) — 不用额外 enabled flag，render loop 检查 m_renderer.rtGiBound() && m_giIndexApplied == 10
-    m_renderer.restirPass().enabled = (effective == 11);   // C.4
-    m_renderer.lumenEnabled()       = (effective == 12);   // L 阶段
-    // Lumen 模式自动开启 multi-bounce relight
-    if (m_renderer.lumenEnabled()) m_renderer.vxgiRelightEnabled() = true;
+    m_renderer.applyGiSelection(effective);
 
     m_giIndexApplied = effective;
-    std::printf("[GI] applied technique index=%d (UI=%d SSGI=%d RSM=%d LPV=%d VXGI=%d PRT=%d DDGI=%d GTGI=%d SDFGI=%d RT=%d ReSTIR=%d Lumen=%d)\n",
-                m_giIndexApplied, m_currentGiIndex,
-                m_renderer.ssgi().enabled ? 1 : 0, m_renderer.rsmSample().enabled ? 1 : 0,
-                m_renderer.lpvEnabled() ? 1 : 0, m_renderer.vxgiEnabled() ? 1 : 0,
-                m_renderer.prtEnabled() ? 1 : 0, m_renderer.ddgiEnabled() ? 1 : 0,
-                m_renderer.gtgi().enabled ? 1 : 0,
-                m_renderer.sdfgiPass().enabled ? 1 : 0,
-                effective == 10 ? 1 : 0,
-                m_renderer.restirPass().enabled ? 1 : 0,
-                m_renderer.lumenEnabled() ? 1 : 0);
+    std::printf("[GI] applied technique index=%d (UI=%d)\n",
+                m_giIndexApplied, m_currentGiIndex);
 }
 
 void App::startBenchmark() {

@@ -265,18 +265,65 @@ void FrameRenderer::bindScenePasses(Device& d, const SceneGpu& gpu, uint32_t tex
     m_vxgiVoxelize.bindScene(d, gpu, textureCount, m_vxgi);
 }
 
-void FrameRenderer::applyGiFlags(int effectiveGiIndex) {
-    m_lpvEnabled         = (effectiveGiIndex == 4);
-    m_vxgiEnabled        = (effectiveGiIndex == 5);
-    m_prtEnabled         = (effectiveGiIndex == 6);
-    m_ddgiEnabled        = (effectiveGiIndex == 7);
-    m_lumenEnabled       = (effectiveGiIndex == 12);
-    m_vxgiRelightEnabled = m_lumenEnabled;
-    m_ssgi.enabled       = (effectiveGiIndex == 2);
-    m_rsmSample.enabled  = (effectiveGiIndex == 3);
-    m_gtgi.enabled       = (effectiveGiIndex == 8);
-    m_sdfgiPass.enabled  = (effectiveGiIndex == 9);
-    m_restirPass.enabled = (effectiveGiIndex == 11);
+void FrameRenderer::applyGiSelection(int giIndex) {
+    // SSGI (2) / RSM (3) 屏幕空间技术互斥，其他模式清零
+    m_ssgi.enabled       = (giIndex == 2);
+    m_rsmSample.enabled  = (giIndex == 3);
+    // 体素/网格类 GI
+    m_lpvEnabled         = (giIndex == 4);
+    m_vxgiEnabled        = (giIndex == 5);
+    m_prtEnabled         = (giIndex == 6);
+    m_ddgiEnabled        = (giIndex == 7);
+    m_gtgi.enabled       = (giIndex == 8);
+    m_sdfgiPass.enabled  = (giIndex == 9);
+    // RT/index 10 由 rtGiBound() 在 buildPipelineTable 中判断
+    m_restirPass.enabled = (giIndex == 11);
+    m_lumenEnabled       = (giIndex == 12);
+    // Lumen 自动开启 VXGI multi-bounce relight
+    m_vxgiRelightEnabled = (giIndex == 12);
+}
+
+void FrameRenderer::setupGiGrids(const glm::vec3& aabbMin, const glm::vec3& aabbMax) {
+    glm::vec3 c = (aabbMin + aabbMax) * 0.5f;
+    glm::vec3 d = aabbMax - aabbMin;
+
+    // LPV 网格：padding 5%，cellSize = maxExtent / resolution
+    {
+        glm::vec3 padded = d * 1.10f;
+        float maxExt = std::max({padded.x, padded.y, padded.z});
+        m_lpvCellSize = maxExt / float(kLpvResolution);
+        glm::vec3 half = glm::vec3(m_lpvCellSize * float(kLpvResolution) * 0.5f);
+        m_lpvGridMin = c - half;
+    }
+    // VXGI 网格
+    {
+        glm::vec3 padded = d * 1.10f;
+        float maxExt = std::max({padded.x, padded.y, padded.z});
+        m_vxgiCellSize = maxExt / float(kVxgiResolution);
+        glm::vec3 half = glm::vec3(m_vxgiCellSize * float(kVxgiResolution) * 0.5f);
+        m_vxgiGridMin = c - half;
+    }
+    // PRT 网格（与 LPV 同分辨率，存 visibility transfer SH）
+    {
+        glm::vec3 padded = d * 1.10f;
+        float maxExt = std::max({padded.x, padded.y, padded.z});
+        m_prtCellSize = maxExt / float(kPrtResolution);
+        glm::vec3 half = glm::vec3(m_prtCellSize * float(kPrtResolution) * 0.5f);
+        m_prtGridMin = c - half;
+    }
+    m_prtBaked = false;  // scene 切换后需重新 bake
+
+    // DDGI probe 网格
+    {
+        glm::vec3 padded = d * 1.05f;
+        m_ddgiSpacing = glm::vec3(
+            padded.x / float(DdgiResources::kProbesX - 1),
+            padded.y / float(DdgiResources::kProbesY - 1),
+            padded.z / float(DdgiResources::kProbesZ - 1));
+        glm::vec3 half = padded * 0.5f;
+        m_ddgiOrigin = c - half;
+    }
+    m_ddgiAtlasInited = false;
 }
 
 void FrameRenderer::bootstrapHdrPrev() {
