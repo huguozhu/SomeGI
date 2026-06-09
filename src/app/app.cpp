@@ -640,6 +640,8 @@ void App::applyGiSelection() {
 
     if (effective == m_giIndexApplied) return;
 
+    m_pipelineDirty = true;  // GI 模式切换，下一帧重建管线执行表
+
     if (!m_renderer.giTech()) {
         m_renderer.giTech() = std::make_unique<IBLTechnique>();
         GIContext gctx{};
@@ -1278,7 +1280,7 @@ void App::buildUI() {
         int aoIdx = (int)m_aoMethod;
         if (ImGui::BeginCombo("AO method", aoLabels[aoIdx])) {
             for (int i = 0; i < 3; ++i) {
-                if (ImGui::Selectable(aoLabels[i], aoIdx == i)) m_aoMethod = (AOMethod)i;
+                if (ImGui::Selectable(aoLabels[i], aoIdx == i)) { m_aoMethod = (AOMethod)i; m_pipelineDirty = true; }
             }
             ImGui::EndCombo();
         }
@@ -1303,6 +1305,7 @@ void App::buildUI() {
                     if (ImGui::Selectable(modeLabels[i], sel)) {
                         if ((RenderingMode)i != m_renderingMode) {
                             m_renderingMode = (RenderingMode)i;
+                            m_pipelineDirty = true;
                         }
                     }
                     if (sel) ImGui::SetItemDefaultFocus();
@@ -1595,6 +1598,10 @@ void App::writeTimestamp(VkCommandBuffer cmd, uint32_t slot) {
 }
 
 void App::buildPipelineTable() {
+    // 仅在管线状态变化时重建执行表，避免每帧无效的 setEnabled + build
+    if (!m_pipelineDirty) return;
+    m_pipelineDirty = false;
+
     bool fwd = (m_renderingMode == RenderingMode::Forward);
 
     // 前向/延迟核心路径切换

@@ -95,6 +95,9 @@ private:
     int m_currentGiIndex = 1;
     int m_giIndexApplied = -1;
 
+    // 管线表脏标记：GI/AO/渲染模式切换时置 true，buildPipelineTable() 重建后清除
+    bool m_pipelineDirty = true;
+
     // TAA
     glm::vec2 m_jitter{};
     glm::vec2 m_prevJitter{};
