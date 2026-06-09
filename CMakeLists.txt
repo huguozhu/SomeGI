@@ -108,12 +108,16 @@ file(GLOB_RECURSE SHADER_SOURCES CONFIGURE_DEPENDS
 list(FILTER SHADER_SOURCES EXCLUDE REGEX "/shaders/common/")
 if(SHADER_SOURCES AND SLANGC_EXE)
     compile_slang(somegi_shaders SOURCES ${SHADER_SOURCES})
+    # 需要 SPIR-V BaseInstance 补丁的 shader（顶点着色器使用 SV_InstanceID 的）
+    set(SPV_PATCH_LIST
+        gbuffer/gbuffer.spv
+        forward/forward.spv
+        gi/rsm/rsm_geometry.spv
+        forward/forward_ibl.spv
+    )
     add_custom_command(TARGET somegi_shaders POST_BUILD
-        COMMAND python "${CMAKE_SOURCE_DIR}/cmake/patch_spv.py"
-            "${CMAKE_BINARY_DIR}/shaders/gbuffer/gbuffer.spv"
-            "${CMAKE_BINARY_DIR}/shaders/forward/forward.spv"
-            "${CMAKE_BINARY_DIR}/shaders/gi/rsm/rsm_geometry.spv"
-            "${CMAKE_BINARY_DIR}/shaders/forward/forward_ibl.spv"
+        COMMAND python "${CMAKE_SOURCE_DIR}/cmake/patch_spv.py" ${SPV_PATCH_LIST}
+        WORKING_DIRECTORY "${CMAKE_BINARY_DIR}/shaders"
         COMMENT "Patching SPIR-V InstanceIndex"
     )
 
