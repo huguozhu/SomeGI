@@ -113,6 +113,7 @@ if(SHADER_SOURCES AND SLANGC_EXE)
             "${CMAKE_BINARY_DIR}/shaders/gbuffer/gbuffer.spv"
             "${CMAKE_BINARY_DIR}/shaders/forward/forward.spv"
             "${CMAKE_BINARY_DIR}/shaders/gi/rsm/rsm_geometry.spv"
+            "${CMAKE_BINARY_DIR}/shaders/forward/forward_ibl.spv"
         COMMENT "Patching SPIR-V InstanceIndex"
     )
 
