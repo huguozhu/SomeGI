@@ -3085,49 +3085,72 @@ void App::buildFrameUBO(FrameUBO& ubo) {
                                 m_renderer.prtShOrder(), 0);
     ubo.prtGridMinCell = glm::vec4(m_renderer.prtGridMin(), m_renderer.prtCellSize());
 
-    // SH projection of sun direction
+    // SH 投影：缓存结果，仅在 sunDir 或 intensity 变化时重算
     {
         glm::vec3 dToSun = -glm::normalize(m_sunDir);
-        float x = dToSun.x, y = dToSun.y, z = dToSun.z;
-        // l=0,1
-        float Y0   = 0.282094792f;
-        float Y1n1 = 0.488602512f * y;
-        float Y10  = 0.488602512f * z;
-        float Y11  = 0.488602512f * x;
-        // l=2
-        float Y2n2 = 1.092548431f * x * y;
-        float Y2n1 = 1.092548431f * y * z;
-        float Y20  = 0.315391565f * (3.0f * z * z - 1.0f);
-        float Y21  = 1.092548431f * z * x;
-        float Y22  = 0.546274215f * (x * x - y * y);
-        // l=3
-        float Y3n3 = 0.590043589f * y * (3.0f * x * x - y * y);
-        float Y3n2 = 2.890611442f * x * y * z;
-        float Y3n1 = 0.457045799f * y * (5.0f * z * z - 1.0f);
-        float Y30  = 0.373176333f * z * (5.0f * z * z - 3.0f);
-        float Y31  = 0.457045799f * x * (5.0f * z * z - 1.0f);
-        float Y32  = 1.445305721f * z * (x * x - y * y);
-        float Y33  = 0.590043589f * x * (x * x - 3.0f * y * y);
-        glm::vec3 sunC{1.0f, 0.95f, 0.85f};
         float I = m_sunIntensity;
-        // SH4
-        ubo.prtLightSH_R = glm::vec4(I*sunC.r*Y0, I*sunC.r*Y1n1, I*sunC.r*Y10, I*sunC.r*Y11);
-        ubo.prtLightSH_G = glm::vec4(I*sunC.g*Y0, I*sunC.g*Y1n1, I*sunC.g*Y10, I*sunC.g*Y11);
-        ubo.prtLightSH_B = glm::vec4(I*sunC.b*Y0, I*sunC.b*Y1n1, I*sunC.b*Y10, I*sunC.b*Y11);
-        // SH9
-        ubo.prtLightSH9_R0 = glm::vec4(I*sunC.r*Y2n2, I*sunC.r*Y2n1, I*sunC.r*Y20, I*sunC.r*Y21);
-        ubo.prtLightSH9_R1 = glm::vec4(I*sunC.r*Y22,  0, 0, 0);
-        ubo.prtLightSH9_G0 = glm::vec4(I*sunC.g*Y2n2, I*sunC.g*Y2n1, I*sunC.g*Y20, I*sunC.g*Y21);
-        ubo.prtLightSH9_G1 = glm::vec4(I*sunC.g*Y22,  0, 0, 0);
-        ubo.prtLightSH9_B0 = glm::vec4(I*sunC.b*Y2n2, I*sunC.b*Y2n1, I*sunC.b*Y20, I*sunC.b*Y21);
-        ubo.prtLightSH9_B1 = glm::vec4(I*sunC.b*Y22,  0, 0, 0);
-        // SH16
-        ubo.prtLightSH16_R0 = glm::vec4(I*sunC.r*Y3n3, I*sunC.r*Y3n2, I*sunC.r*Y3n1, I*sunC.r*Y30);
-        ubo.prtLightSH16_R1 = glm::vec4(I*sunC.r*Y31,  I*sunC.r*Y32,  I*sunC.r*Y33,  0);
-        ubo.prtLightSH16_G0 = glm::vec4(I*sunC.g*Y3n3, I*sunC.g*Y3n2, I*sunC.g*Y3n1, I*sunC.g*Y30);
-        ubo.prtLightSH16_G1 = glm::vec4(I*sunC.g*Y31,  I*sunC.g*Y32,  I*sunC.g*Y33,  0);
-        ubo.prtLightSH16_B0 = glm::vec4(I*sunC.b*Y3n3, I*sunC.b*Y3n2, I*sunC.b*Y3n1, I*sunC.b*Y30);
-        ubo.prtLightSH16_B1 = glm::vec4(I*sunC.b*Y31,  I*sunC.b*Y32,  I*sunC.b*Y33,  0);
+        if (dToSun != m_cachedSH.lastSunDir || I != m_cachedSH.lastSunIntensity) {
+            m_cachedSH.lastSunDir = dToSun;
+            m_cachedSH.lastSunIntensity = I;
+
+            float x = dToSun.x, y = dToSun.y, z = dToSun.z;
+            glm::vec3 sunC{1.0f, 0.95f, 0.85f};
+
+            // l=0,1
+            float Y0   = 0.282094792f;
+            float Y1n1 = 0.488602512f * y;
+            float Y10  = 0.488602512f * z;
+            float Y11  = 0.488602512f * x;
+            // l=2
+            float Y2n2 = 1.092548431f * x * y;
+            float Y2n1 = 1.092548431f * y * z;
+            float Y20  = 0.315391565f * (3.0f * z * z - 1.0f);
+            float Y21  = 1.092548431f * z * x;
+            float Y22  = 0.546274215f * (x * x - y * y);
+            // l=3
+            float Y3n3 = 0.590043589f * y * (3.0f * x * x - y * y);
+            float Y3n2 = 2.890611442f * x * y * z;
+            float Y3n1 = 0.457045799f * y * (5.0f * z * z - 1.0f);
+            float Y30  = 0.373176333f * z * (5.0f * z * z - 3.0f);
+            float Y31  = 0.457045799f * x * (5.0f * z * z - 1.0f);
+            float Y32  = 1.445305721f * z * (x * x - y * y);
+            float Y33  = 0.590043589f * x * (x * x - 3.0f * y * y);
+
+            // SH4
+            m_cachedSH.prtLightSH_R = glm::vec4(I*sunC.r*Y0, I*sunC.r*Y1n1, I*sunC.r*Y10, I*sunC.r*Y11);
+            m_cachedSH.prtLightSH_G = glm::vec4(I*sunC.g*Y0, I*sunC.g*Y1n1, I*sunC.g*Y10, I*sunC.g*Y11);
+            m_cachedSH.prtLightSH_B = glm::vec4(I*sunC.b*Y0, I*sunC.b*Y1n1, I*sunC.b*Y10, I*sunC.b*Y11);
+            // SH9
+            m_cachedSH.prtLightSH9_R0 = glm::vec4(I*sunC.r*Y2n2, I*sunC.r*Y2n1, I*sunC.r*Y20, I*sunC.r*Y21);
+            m_cachedSH.prtLightSH9_R1 = glm::vec4(I*sunC.r*Y22,  0, 0, 0);
+            m_cachedSH.prtLightSH9_G0 = glm::vec4(I*sunC.g*Y2n2, I*sunC.g*Y2n1, I*sunC.g*Y20, I*sunC.g*Y21);
+            m_cachedSH.prtLightSH9_G1 = glm::vec4(I*sunC.g*Y22,  0, 0, 0);
+            m_cachedSH.prtLightSH9_B0 = glm::vec4(I*sunC.b*Y2n2, I*sunC.b*Y2n1, I*sunC.b*Y20, I*sunC.b*Y21);
+            m_cachedSH.prtLightSH9_B1 = glm::vec4(I*sunC.b*Y22,  0, 0, 0);
+            // SH16
+            m_cachedSH.prtLightSH16_R0 = glm::vec4(I*sunC.r*Y3n3, I*sunC.r*Y3n2, I*sunC.r*Y3n1, I*sunC.r*Y30);
+            m_cachedSH.prtLightSH16_R1 = glm::vec4(I*sunC.r*Y31,  I*sunC.r*Y32,  I*sunC.r*Y33,  0);
+            m_cachedSH.prtLightSH16_G0 = glm::vec4(I*sunC.g*Y3n3, I*sunC.g*Y3n2, I*sunC.g*Y3n1, I*sunC.g*Y30);
+            m_cachedSH.prtLightSH16_G1 = glm::vec4(I*sunC.g*Y31,  I*sunC.g*Y32,  I*sunC.g*Y33,  0);
+            m_cachedSH.prtLightSH16_B0 = glm::vec4(I*sunC.b*Y3n3, I*sunC.b*Y3n2, I*sunC.b*Y3n1, I*sunC.b*Y30);
+            m_cachedSH.prtLightSH16_B1 = glm::vec4(I*sunC.b*Y31,  I*sunC.b*Y32,  I*sunC.b*Y33,  0);
+        }
+        // 从缓存写入 UBO（无论是否重算）
+        ubo.prtLightSH_R   = m_cachedSH.prtLightSH_R;
+        ubo.prtLightSH_G   = m_cachedSH.prtLightSH_G;
+        ubo.prtLightSH_B   = m_cachedSH.prtLightSH_B;
+        ubo.prtLightSH9_R0 = m_cachedSH.prtLightSH9_R0;
+        ubo.prtLightSH9_R1 = m_cachedSH.prtLightSH9_R1;
+        ubo.prtLightSH9_G0 = m_cachedSH.prtLightSH9_G0;
+        ubo.prtLightSH9_G1 = m_cachedSH.prtLightSH9_G1;
+        ubo.prtLightSH9_B0 = m_cachedSH.prtLightSH9_B0;
+        ubo.prtLightSH9_B1 = m_cachedSH.prtLightSH9_B1;
+        ubo.prtLightSH16_R0 = m_cachedSH.prtLightSH16_R0;
+        ubo.prtLightSH16_R1 = m_cachedSH.prtLightSH16_R1;
+        ubo.prtLightSH16_G0 = m_cachedSH.prtLightSH16_G0;
+        ubo.prtLightSH16_G1 = m_cachedSH.prtLightSH16_G1;
+        ubo.prtLightSH16_B0 = m_cachedSH.prtLightSH16_B0;
+        ubo.prtLightSH16_B1 = m_cachedSH.prtLightSH16_B1;
     }
 
     // DDGI probe params

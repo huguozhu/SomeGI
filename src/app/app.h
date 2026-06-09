@@ -101,6 +101,23 @@ private:
     float m_taaBlendAlpha = 0.92f;
     glm::mat4 m_prevViewProj{1.0f};
 
+    // SH 投影缓存：仅在 sunDir 或 intensity 变化时重算球谐系数
+    struct CachedSH {
+        glm::vec3 lastSunDir{0.0f};
+        float lastSunIntensity = -1.0f;          // -1 确保首帧一定计算
+        // SH4（l=0,1 共 4 系数 / RGB 通道）
+        glm::vec4 prtLightSH_R, prtLightSH_G, prtLightSH_B;
+        // SH9（l=2 追加 5 系数）
+        glm::vec4 prtLightSH9_R0, prtLightSH9_R1;
+        glm::vec4 prtLightSH9_G0, prtLightSH9_G1;
+        glm::vec4 prtLightSH9_B0, prtLightSH9_B1;
+        // SH16（l=3 追加 7 系数）
+        glm::vec4 prtLightSH16_R0, prtLightSH16_R1;
+        glm::vec4 prtLightSH16_G0, prtLightSH16_G1;
+        glm::vec4 prtLightSH16_B0, prtLightSH16_B1;
+    };
+    CachedSH m_cachedSH;
+
     // ---- Per-frame temp state ----
     uint32_t m_currentFrameInFlight = 0;
     VkImageView m_currentSwapView = VK_NULL_HANDLE;
