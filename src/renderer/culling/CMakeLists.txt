@@ -1,3 +1,3 @@
-add_library(somegi_renderer_culling OBJECT frustum_cull_pass.cpp)
+add_library(somegi_renderer_culling OBJECT frustum_cull_pass.cpp hiz_build_pass.cpp)
 target_include_directories(somegi_renderer_culling PUBLIC ${CMAKE_SOURCE_DIR}/src)
 target_link_libraries(somegi_renderer_culling PUBLIC somegi_core)

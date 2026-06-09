@@ -44,6 +44,7 @@
 #include "renderer/core/barrier_manager.h"
 #include "renderer/core/render_pipeline.h"
 #include "renderer/culling/frustum_cull_pass.h"
+#include "renderer/culling/hiz_build_pass.h"
 #include "gi/ibl_baker.h"
 #include "gi/gi_technique.h"
 #include "scene/scene.h"
@@ -122,6 +123,7 @@ public:
     BarrierManager&      barriers()    { return m_barriers; }
     RenderPipeline&      pipeline()    { return m_pipeline; }
     FrustumCullPass& cullPass() { return m_cullPass; }
+    HiZBuildPass& hizPass() { return m_hizPass; }
 
     IblResources&        envIbl()      { return m_envIbl; }
     std::unique_ptr<IGITechnique>& giTech() { return m_giTech; }
@@ -222,6 +224,7 @@ private:
     BarrierManager m_barriers;
     RenderPipeline m_pipeline;
     FrustumCullPass m_cullPass;
+    HiZBuildPass m_hizPass;
 
     GBufferPass     m_gbuffer;
     ForwardPass     m_forward;

@@ -1147,14 +1147,18 @@ void App::buildUI() {
 
         ImGui::Separator();
         ImGui::Separator();
-        ImGui::Checkbox("GPU-Driven Rendering", &m_useGpuDriven);
+        ImGui::Checkbox("GPU Frustum Culling", &m_useGpuCulling);
         ImGui::SameLine();
-        if (m_useGpuDriven)
-            ImGui::TextColored(ImVec4(0.3f,1,0.3f,1), "GPU Cull ON");
-        else
-            ImGui::TextDisabled("CPU Fill");
-        ImGui::Text("  Draws: %u total | indirect multi-draw (%u culled)", m_drawCount, m_culledDrawCount);
-        ImGui::TextDisabled("  3 indirect calls/frame (RSM+Forward+GBuffer)");
+        if (m_useGpuCulling) {
+            ImGui::TextColored(ImVec4(0.3f,1,0.3f,1), "ON");
+            ImGui::Checkbox("Hi-Z Occlusion", &m_useHiZOcclusion);
+            ImGui::SameLine();
+            ImGui::TextColored(ImVec4(m_useHiZOcclusion?0.3f:0.6f, m_useHiZOcclusion?1.0f:0.6f, m_useHiZOcclusion?0.3f:0.6f, 1),
+                m_useHiZOcclusion ? "ON" : "OFF");
+        } else
+            ImGui::TextDisabled("OFF (CPU Fill)");
+        ImGui::Text("  Draws: %u total | indirect (%u culled)", m_drawCount, m_culledDrawCount);
+        ImGui::TextDisabled("  3 indirect calls/frame");
         ImGui::Text("GPU Profile");
         {
             uint32_t fi = 0; // show most recent frame's data
@@ -3250,7 +3254,7 @@ void App::run() {
         }
 
         // Read back GPU culling count from previous frame
-        if (m_useGpuDriven && m_countBuf.handle() != VK_NULL_HANDLE && m_drawCount > 0) {
+        if (m_useGpuCulling && m_countBuf.handle() != VK_NULL_HANDLE && m_drawCount > 0) {
             uint32_t culled = *(uint32_t*)m_countBuf.mapped();
             if (culled > 0 && culled <= m_drawCount) m_culledDrawCount = culled;
         }
@@ -3274,11 +3278,22 @@ void App::run() {
         // ============================================================
         // GPU-driven: fill indirect buffer (CPU or GPU culling)
         if (m_drawCount > 0) {
-            if (m_useGpuDriven) {
-                // GPU frustum culling via compute shader
+            if (m_useGpuCulling) {
+                // Build Hi-Z from previous frame's depth (only if occlusion enabled)
+                if (m_useHiZOcclusion) m_renderer.hizPass().record(cmd, m_renderer.rt());
+                // GPU frustum culling (+ Hi-Z occlusion if enabled)
                 glm::mat4 vp = ubo.viewProj;
-                m_renderer.cullPass().record(cmd, m_sceneGpu.drawDataBuffer.handle(),
-                    m_drawCount, m_indirectBuf.handle(), m_countBuf.handle(), vp, frame.frameInFlight);
+                if (m_useHiZOcclusion) {
+                    m_renderer.cullPass().record(cmd, m_sceneGpu.drawDataBuffer.handle(),
+                        m_drawCount, m_indirectBuf.handle(), m_countBuf.handle(), vp,
+                        m_renderer.rt().extent, frame.frameInFlight,
+                        m_renderer.hizPass().mip1View(), m_renderer.hizPass().mip2View(),
+                        m_renderer.hizPass().mip3View(), m_renderer.hizPass().mip4View());
+                } else {
+                    m_renderer.cullPass().record(cmd, m_sceneGpu.drawDataBuffer.handle(),
+                        m_drawCount, m_indirectBuf.handle(), m_countBuf.handle(), vp,
+                        m_renderer.rt().extent, frame.frameInFlight);
+                }
                 m_culledDrawCount = m_drawCount;  // conservative; GPU cull reduces this
                 // Barrier: compute write → indirect draw
                 VkBufferMemoryBarrier2 b{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2};
