@@ -3260,14 +3260,38 @@ void App::run() {
         // ============================================================
         // 构建管线表并执行所有内部渲染 Pass
         // ============================================================
-        // GPU-driven: CPU fill indirect buffer
+        // GPU-driven: fill indirect buffer (CPU or GPU culling)
         if (m_drawCount > 0) {
-            auto* icmds = (VkDrawIndexedIndirectCommand*)m_indirectBuf.mapped();
-            for (uint32_t i = 0; i < m_drawCount; ++i) {
-                const auto& e = m_drawEntries[i];
-                icmds[i] = {e.indexCount, 1, e.firstIndex, e.vertexOffset, i};
+            if (m_useGpuDriven) {
+                // GPU frustum culling via compute shader
+                glm::mat4 vp = ubo.viewProj;
+                m_renderer.cullPass().record(cmd, m_sceneGpu.drawDataBuffer.handle(),
+                    m_drawCount, m_indirectBuf.handle(), m_countBuf.handle(), vp, frame.frameInFlight);
+                // Barrier: compute write → indirect draw
+                VkBufferMemoryBarrier2 b{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2};
+                b.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                b.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+                b.dstStageMask = VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT;
+                b.dstAccessMask = VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT;
+                b.buffer = m_indirectBuf.handle(); b.size = VK_WHOLE_SIZE;
+                VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+                di.bufferMemoryBarrierCount = 1; di.pBufferMemoryBarriers = &b;
+                vkCmdPipelineBarrier2(cmd, &di);
+                // Sun-view uses full unfiltered list
+                auto* sunCmds = (VkDrawIndexedIndirectCommand*)m_indirectBufSun.mapped();
+                for (uint32_t i = 0; i < m_drawCount; ++i) {
+                    const auto& e = m_drawEntries[i];
+                    sunCmds[i] = {e.indexCount, 1, e.firstIndex, e.vertexOffset, i};
+                }
+            } else {
+                // CPU fill (no culling)
+                auto* icmds = (VkDrawIndexedIndirectCommand*)m_indirectBuf.mapped();
+                for (uint32_t i = 0; i < m_drawCount; ++i) {
+                    const auto& e = m_drawEntries[i];
+                    icmds[i] = {e.indexCount, 1, e.firstIndex, e.vertexOffset, i};
+                }
+                std::memcpy(m_indirectBufSun.mapped(), icmds, m_drawCount * sizeof(VkDrawIndexedIndirectCommand));
             }
-            std::memcpy(m_indirectBufSun.mapped(), icmds, m_drawCount * sizeof(VkDrawIndexedIndirectCommand));
         }
 
         buildPipelineTable();
