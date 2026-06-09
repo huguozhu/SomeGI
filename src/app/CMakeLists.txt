@@ -2,6 +2,8 @@ add_executable(SomeGI
     main.cpp
     app.h
     app.cpp
+    benchmark_runner.h
+    benchmark_runner.cpp
 )
 target_link_libraries(SomeGI PRIVATE somegi_core somegi_scene somegi_gi somegi_renderer)
 target_compile_definitions(SomeGI PRIVATE

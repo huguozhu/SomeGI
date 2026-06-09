@@ -591,154 +591,53 @@ void App::applyGiSelection() {
 }
 
 void App::startBenchmark() {
-    m_renderer.benchResults().clear();
-    m_renderer.benchGi() = 0; m_renderer.benchAa() = 0; m_renderer.benchAo() = 0;
-    m_renderer.benchRunning() = true;
-    m_renderer.benchCollecting() = false;
-    m_renderer.benchTimer() = 0;
-    applyBenchSettings();
-    std::printf("[bench] starting — GI(0..12) x AA(0..3) x AO(0..2) = 156 tests\n");
-}
-
-void App::applyBenchSettings() {
-
-    // GI
-    m_currentGiIndex = m_renderer.benchGi();
-    m_giIndexApplied = -1;
-    applyGiSelection();
-
-    // AA
-    AAMethod newAa = (AAMethod)m_renderer.benchAa();
-    if (newAa != m_aaMethod) {
-        m_aaMethod = newAa;
-        if (m_aaMethod == AAMethod::TAA || m_aaMethod == AAMethod::SMAA) {
-            m_renderer.rt().ensureAaResources(*m_device);
-            m_renderer.taa().bindResources(*m_device, m_renderer.rt(), 0);
-            m_renderer.smaa().bindResources(*m_device, m_renderer.rt());
-            m_renderer.aaHistoryNeedsInit() = true;
-        } else {
-            m_renderer.rt().destroyAaResources();
-            m_renderer.tonemap().bindOutput(*m_device, m_renderer.rt().ldrTonemap.view(), 0);
+    auto applySettings = [this](int gi, int aa, int ao) {
+        // GI
+        m_currentGiIndex = gi;
+        m_giIndexApplied = -1;
+        applyGiSelection();
+        // AA
+        AAMethod newAa = (AAMethod)aa;
+        if (newAa != m_aaMethod) {
+            m_aaMethod = newAa;
+            if (m_aaMethod == AAMethod::TAA || m_aaMethod == AAMethod::SMAA) {
+                m_renderer.rt().ensureAaResources(*m_device);
+                m_renderer.taa().bindResources(*m_device, m_renderer.rt(), 0);
+                m_renderer.smaa().bindResources(*m_device, m_renderer.rt());
+                m_renderer.aaHistoryNeedsInit() = true;
+            } else {
+                m_renderer.rt().destroyAaResources();
+                m_renderer.tonemap().bindOutput(*m_device, m_renderer.rt().ldrTonemap.view(), 0);
+            }
         }
-    }
-
-    // AO
-    m_aoMethod = (AOMethod)m_renderer.benchAo();
-
-    // Reset collection state
-    m_renderer.benchCollecting() = false;
-    m_renderer.benchTimer() = 0;
-    m_renderer.benchFrameCount() = 0;
-    m_renderer.benchFpsSum() = 0; m_renderer.benchGpuSum() = 0;
+        // AO
+        m_aoMethod = (AOMethod)ao;
+    };
+    m_benchmark.start(applySettings);
 }
+
+void App::applyBenchSettings() { /* 逻辑已移入 BenchmarkRunner + startBenchmark 的 applySettings 回调 */ }
 
 void App::tickBenchmark(float dt) {
-    if (!m_renderer.benchRunning()) return;
-
-    // Cap dt to avoid waitIdle spikes skewing the timer
-    m_renderer.benchTimer() += (dt > 0.1f ? 0.016f : dt);
-
-    // Stabilization phase: wait for pipeline to settle
-    float warmupTime = 0.8f;
-    float collectTime = 1.0f;
-    if (!m_renderer.benchCollecting()) {
-        if (m_renderer.benchTimer() >= warmupTime) {
-            m_renderer.benchCollecting() = true;
-            m_renderer.benchTimer() = 0;
+    m_benchmark.tick(dt, m_renderer.gpuMs(), [this](int gi, int aa, int ao) {
+        m_currentGiIndex = gi;
+        m_giIndexApplied = -1;
+        applyGiSelection();
+        AAMethod newAa = (AAMethod)aa;
+        if (newAa != m_aaMethod) {
+            m_aaMethod = newAa;
+            if (m_aaMethod == AAMethod::TAA || m_aaMethod == AAMethod::SMAA) {
+                m_renderer.rt().ensureAaResources(*m_device);
+                m_renderer.taa().bindResources(*m_device, m_renderer.rt(), 0);
+                m_renderer.smaa().bindResources(*m_device, m_renderer.rt());
+                m_renderer.aaHistoryNeedsInit() = true;
+            } else {
+                m_renderer.rt().destroyAaResources();
+                m_renderer.tonemap().bindOutput(*m_device, m_renderer.rt().ldrTonemap.view(), 0);
+            }
         }
-        return;
-    }
-
-    // Collection phase
-    m_renderer.benchGpuSum() += m_renderer.gpuMs();
-    m_renderer.benchFrameCount()++;
-
-    if (m_renderer.benchTimer() >= collectTime) {
-        FrameRenderer::BenchResult r{};
-        r.gi = m_renderer.benchGi(); r.aa = m_renderer.benchAa(); r.ao = m_renderer.benchAo();
-        r.fps = (float)m_renderer.benchFrameCount() / m_renderer.benchTimer();
-        r.gpuMs = m_renderer.benchGpuSum() / (float)m_renderer.benchFrameCount();
-        m_renderer.benchResults().push_back(r);
-        std::printf("[bench] GI=%2d AA=%d AO=%d  fps=%6.1f  gpu=%.2fms\n",
-                    r.gi, r.aa, r.ao, r.fps, r.gpuMs);
-
-        // Advance to next combination
-        m_renderer.benchAo()++;
-        if (m_renderer.benchAo() >= 3) { m_renderer.benchAo() = 0; m_renderer.benchAa()++; }
-        if (m_renderer.benchAa() >= 4) { m_renderer.benchAa() = 0; m_renderer.benchGi()++; }
-
-        if (m_renderer.benchGi() >= 13) {
-            // Done — print matrix + write CSV
-            m_renderer.benchRunning() = false;
-            static const char* kGiNames[] = {
-                "None", "IBL", "SSGI", "RSM", "LPV", "VXGI", "PRT",
-                "DDGI", "GTGI", "SDFGI", "RT GI", "ReSTIR", "Lumen"
-            };
-            static const char* kAaNames[] = {"None", "MSAA", "TAA", "SMAA"};
-            static const char* kAoNameCsv[] = {"None", "SSAO", "GTAO"};
-
-            std::printf("\n[bench] === Performance Matrix (fps / gpu ms) ===\n");
-            std::printf("[bench] GI technique               | None     | MSAA     | TAA      | SMAA     |\n");
-            std::printf("[bench] --------------------------- | -------- | -------- | -------- | -------- |\n");
-            for (int gi = 0; gi < 13; ++gi) {
-                std::printf("[bench] %-28s |", kGiNames[gi]);
-                for (int aa = 0; aa < 4; ++aa) {
-                    float sumFps = 0, sumGpu = 0;
-                    int count = 0;
-                    for (auto& br : m_renderer.benchResults()) {
-                        if (br.gi == gi && br.aa == aa) { sumFps += br.fps; sumGpu += br.gpuMs; count++; }
-                    }
-                    if (count > 0)
-                        std::printf(" %4.0f/%4.2f |", sumFps / count, sumGpu / count);
-                    else
-                        std::printf(" %8s |", "—");
-                }
-                std::printf("\n");
-            }
-            std::printf("[bench] Done.\n");
-
-            // Write detailed CSV (one row per combination)
-            {
-                std::ofstream f("benchmark_results.csv");
-                if (f) {
-                    f << "GI,AA,AO,FPS,GPU_ms\n";
-                    for (auto& br : m_renderer.benchResults()) {
-                        f << kGiNames[br.gi] << "," << kAaNames[br.aa] << ","
-                          << kAoNameCsv[br.ao] << "," << br.fps << "," << br.gpuMs << "\n";
-                    }
-                    std::printf("[bench] Wrote benchmark_results.csv (%zu rows)\n", m_renderer.benchResults().size());
-                }
-            }
-
-            // Write matrix CSV (GI x AA, averaged across AO)
-            {
-                std::ofstream f("benchmark_matrix.csv");
-                if (f) {
-                    f << "GI";
-                    for (int aa = 0; aa < 4; ++aa) f << "," << kAaNames[aa] << "_fps" << "," << kAaNames[aa] << "_gpu";
-                    f << "\n";
-                    for (int gi = 0; gi < 13; ++gi) {
-                        f << kGiNames[gi];
-                        for (int aa = 0; aa < 4; ++aa) {
-                            float sumFps = 0, sumGpu = 0;
-                            int count = 0;
-                            for (auto& br : m_renderer.benchResults()) {
-                                if (br.gi == gi && br.aa == aa) { sumFps += br.fps; sumGpu += br.gpuMs; count++; }
-                            }
-                            if (count > 0)
-                                f << "," << (sumFps / count) << "," << (sumGpu / count);
-                            else
-                                f << ",,";
-                        }
-                        f << "\n";
-                    }
-                    std::printf("[bench] Wrote benchmark_matrix.csv\n");
-                }
-            }
-        } else {
-            applyBenchSettings();
-        }
-    }
+        m_aoMethod = (AOMethod)ao;
+    });
 }
 
 void App::onSwapchainResized() {
@@ -1001,12 +900,10 @@ void App::buildUI() {
                     m_dtMs, m_fpsAvg, m_renderer.gpuMs());
         ImGui::SameLine(); ImGui::TextDisabled("  F2: benchmark");
 
-        if (m_renderer.benchRunning()) {
+        if (m_benchmark.running()) {
             ImGui::SameLine();
-            ImGui::TextColored(ImVec4(1,1,0,1), "  [%d/%d] GI=%d AA=%d AO=%d %s",
-                (int)m_renderer.benchResults().size(), 156,
-                m_renderer.benchGi(), m_renderer.benchAa(), m_renderer.benchAo(),
-                m_renderer.benchCollecting() ? "collecting..." : "warming...");
+            ImGui::TextColored(ImVec4(1,1,0,1), "  [%d/156] benchmarking...",
+                (int)m_benchmark.results().size());
         }
 
         if (ImGui::BeginTabBar("MainTabs")) {
@@ -1398,7 +1295,7 @@ void App::buildUI() {
         }
 
         // ===== Tab 5: Benchmark (only if data available) =====
-        if (!m_renderer.benchResults().empty() && ImGui::BeginTabItem("Benchmark")) {
+        if (!m_benchmark.results().empty() && ImGui::BeginTabItem("Benchmark")) {
 
         static const char* kGiNames[] = {
             "None", "IBL", "SSGI", "RSM", "LPV", "VXGI", "PRT",
@@ -1412,7 +1309,7 @@ void App::buildUI() {
             std::vector<float> fpsByGi(13, 0);
             std::vector<int>   cntByGi(13, 0);
             float maxFps = 1;
-            for (auto& r : m_renderer.benchResults()) {
+            for (auto& r : m_benchmark.results()) {
                 fpsByGi[r.gi] += r.fps;
                 cntByGi[r.gi]++;
             }
@@ -1434,7 +1331,7 @@ void App::buildUI() {
             std::vector<float> fpsByAa(4, 0);
             std::vector<int>   cntByAa(4, 0);
             float maxFps = 1;
-            for (auto& r : m_renderer.benchResults()) {
+            for (auto& r : m_benchmark.results()) {
                 fpsByAa[r.aa] += r.fps;
                 cntByAa[r.aa]++;
             }
@@ -1456,7 +1353,7 @@ void App::buildUI() {
             std::vector<float> gpuByGi(13, 0);
             std::vector<int>   cntByGi(13, 0);
             float maxGpu = 1;
-            for (auto& r : m_renderer.benchResults()) {
+            for (auto& r : m_benchmark.results()) {
                 gpuByGi[r.gi] += r.gpuMs;
                 cntByGi[r.gi]++;
             }
@@ -3356,7 +3253,7 @@ void App::run() {
         if (!wantKbd && ImGui::IsKeyPressed(ImGuiKey_F2)) {
             startBenchmark();
         }
-        if (m_renderer.benchRunning()) {
+        if (m_benchmark.running()) {
             tickBenchmark(dt);
         } else {
             applyGiSelection();

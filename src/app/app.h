@@ -6,6 +6,7 @@
 #include "renderer/core/frame_ubo.h"      // for FrameUBO type
 #include "renderer/core/frame_context.h"
 #include "renderer/core/frame_renderer.h"
+#include "app/benchmark_runner.h"
 #include <map>
 #include <memory>
 #include <filesystem>
@@ -124,6 +125,9 @@ private:
 
     // ---- Per-frame temp state ----
     RenderFrame m_frameCtx;
+
+    // ---- Benchmark ----
+    BenchmarkRunner m_benchmark;
 
     // ---- Stats ----
     float m_fpsAvg = 0.0f;
