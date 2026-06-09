@@ -74,7 +74,8 @@ void ImGuiPass::render(VkCommandBuffer cmd, VkImageView swapchainView, VkExtent2
     VkRenderingAttachmentInfo color{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
     color.imageView = swapchainView;
     color.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-    color.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+    color.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    color.clearValue.color = {{0.1f, 0.1f, 0.1f, 1.0f}};
     color.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
 
     VkRenderingInfo ri{VK_STRUCTURE_TYPE_RENDERING_INFO};

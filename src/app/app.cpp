@@ -161,7 +161,7 @@ static void transitionImage(VkCommandBuffer cmd, VkImage image,
 }
 
 App::App() {
-    WindowDesc wd; wd.title = "SomeGI [M1 forward]";
+    WindowDesc wd; wd.title = "SomeGI"; wd.width = 800; wd.height = 450;
     m_window = std::make_unique<Window>(wd);
     m_device = std::make_unique<Device>(*m_window, /*validation=*/true);
 
@@ -178,6 +178,23 @@ App::App() {
     }
 
     m_swap   = std::make_unique<Swapchain>(*m_device, *m_window);
+
+    // ImGui debug window (600x900)
+    {
+        WindowDesc iwd; iwd.title = "SomeGI Debug"; iwd.width = 600; iwd.height = 900;
+        m_imguiWin = std::make_unique<Window>(iwd);
+        m_imguiSwap = std::make_unique<Swapchain>(*m_device, *m_imguiWin);
+        VkCommandPoolCreateInfo pci{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
+        pci.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+        pci.queueFamilyIndex = m_device->graphicsQueueFamily();
+        VK_CHECK(vkCreateCommandPool(m_device->device(), &pci, nullptr, &m_imguiPool));
+        VkCommandBufferAllocateInfo ai{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
+        ai.commandPool = m_imguiPool; ai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        ai.commandBufferCount = kFramesInFlight;
+        VK_CHECK(vkAllocateCommandBuffers(m_device->device(), &ai, m_imguiCmds));
+        VkFenceCreateInfo fci{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO, nullptr, VK_FENCE_CREATE_SIGNALED_BIT};
+        VK_CHECK(vkCreateFence(m_device->device(), &fci, nullptr, &m_imguiFence));
+    }
 
     // M9：检测 HW RT 支持并更新 dropdown 实现状态。
     bool rtSupported = m_device->features().rayQuery && m_device->features().accelStruct;
@@ -203,6 +220,9 @@ App::App() {
     // Delegate all rendering setup to FrameRenderer
     m_renderer.init(*m_device, m_pool, m_swap->extent(), m_msaaSamples,
                     rtSupported, m_swap->format(), m_window->handle());
+
+    // Init ImGui on the separate debug window
+    m_renderer.imgui().init(*m_device, m_imguiWin->handle(), m_imguiSwap->format(), kFramesInFlight);
 
     // Register all rendering steps into the pipeline table
     registerPipelineSteps();
@@ -287,7 +307,6 @@ void App::applySceneSelection() {
 
     if (prevIndex >= 0) {
         m_sceneStates[kScenes[prevIndex].name] = captureSceneState();
-        m_device->waitIdle();
     }
 
     auto path = std::filesystem::path(SOMEGI_ASSET_DIR) / kScenes[m_currentSceneIndex].relPath;
@@ -529,9 +548,6 @@ App::~App() {
 }
 
 void App::cleanup() {
-    if (m_device) m_device->waitIdle();
-    m_renderer.imgui().destroy();
-    m_renderer.tonemap().destroy();
     m_renderer.taa().destroy();
     m_renderer.smaa().destroy();
     m_renderer.rtGi().destroy();
@@ -577,6 +593,11 @@ void App::cleanup() {
     if (m_device) destroySceneSamplers(*m_device, m_sceneGpu);
     if (m_renderer.timestampPool()) vkDestroyQueryPool(m_device->device(), m_renderer.timestampPool(), nullptr);
     if (m_pool) vkDestroyCommandPool(m_device->device(), m_pool, nullptr);
+    if (m_imguiFence) vkDestroyFence(m_device->device(), m_imguiFence, nullptr);
+    if (m_imguiCmds[0]) vkFreeCommandBuffers(m_device->device(), m_imguiPool, kFramesInFlight, m_imguiCmds);
+    if (m_imguiPool) vkDestroyCommandPool(m_device->device(), m_imguiPool, nullptr);
+    m_imguiSwap.reset();
+    m_imguiWin.reset();
 }
 
 void App::applyGiSelection() {
@@ -591,7 +612,6 @@ void App::applyGiSelection() {
     if (effective == m_giIndexApplied) return;
 
     if (!m_renderer.giTech()) {
-        if (m_device) m_device->waitIdle();
         m_renderer.giTech() = std::make_unique<IBLTechnique>();
         GIContext gctx{};
         gctx.device = m_device.get();
@@ -645,7 +665,6 @@ void App::startBenchmark() {
 }
 
 void App::applyBenchSettings() {
-    m_device->waitIdle();
 
     // GI
     m_currentGiIndex = m_renderer.benchGi();
@@ -787,7 +806,6 @@ void App::tickBenchmark(float dt) {
 }
 
 void App::onSwapchainResized() {
-    m_device->waitIdle();
     m_renderer.rt().destroy();
     m_renderer.rt().create(*m_device, m_swap->extent(), m_msaaSamples);
     m_renderer.lighting().bindFrame(*m_device, m_renderer.rt(), m_renderer.gbuffer().frameUboHandle(),
@@ -1153,7 +1171,6 @@ void App::buildUI() {
                     bool sel = (curIdx == i);
                     if (ImGui::Selectable(opts[i].label, sel)) {
                         if (m_msaaSamples != opts[i].value) {
-                            m_device->waitIdle();
                             m_msaaSamples = opts[i].value;
                             m_renderer.rt().recreateMsaa(*m_device, m_msaaSamples);
                             m_renderer.gbuffer().setMsaaSamples(m_msaaSamples);
@@ -1166,7 +1183,6 @@ void App::buildUI() {
             bool prevMip = m_useMipmaps;
             ImGui::Checkbox("Mipmap", &m_useMipmaps);
             if (m_useMipmaps != prevMip) {
-                m_device->waitIdle();
                 destroySceneSamplers(*m_device, m_sceneGpu);
                 m_sceneGpu.vertexBuffer.reset();
                 m_sceneGpu.indexBuffer.reset();
@@ -1180,10 +1196,7 @@ void App::buildUI() {
         if (m_swap->hdrAvailable()) {
             bool hdrOn = m_swap->hdrEnabled();
             if (ImGui::Checkbox("HDR (scRGB)", &hdrOn)) {
-                m_device->waitIdle();
                 m_swap->setHdrEnabled(hdrOn);
-                m_renderer.imgui().destroy();
-                m_renderer.imgui().init(*m_device, m_window->handle(), m_swap->format(), kFramesInFlight);
             }
         }
         ImGui::Separator();
@@ -1197,7 +1210,6 @@ void App::buildUI() {
                     bool sel = (cur == i);
                     if (ImGui::Selectable(items[i], sel)) {
                         if (i != (int)m_aaMethod) {
-                            m_device->waitIdle();
                             m_aaMethod = (AAMethod)i;
                             if (m_aaMethod == AAMethod::TAA || m_aaMethod == AAMethod::SMAA) {
                                 m_renderer.rt().ensureAaResources(*m_device);
@@ -1248,7 +1260,6 @@ void App::buildUI() {
                     bool sel = (modeIdx == i);
                     if (ImGui::Selectable(modeLabels[i], sel)) {
                         if ((RenderingMode)i != m_renderingMode) {
-                            m_device->waitIdle();
                             m_renderingMode = (RenderingMode)i;
                         }
                     }
@@ -2997,6 +3008,7 @@ void App::run() {
     int fpsFrames = 0;
     while (!m_window->shouldClose()) {
         m_window->pollEvents();
+        m_imguiWin->pollEvents();
         auto now = std::chrono::high_resolution_clock::now();
         float dt = std::chrono::duration<float>(now - last).count();
         last = now;
@@ -3440,7 +3452,7 @@ void App::run() {
 
         writeTimestamp(cmd, m_renderer.kTsEnd);
 
-        m_renderer.imgui().render(cmd, m_currentSwapView, m_currentSwapExtent);
+        // ImGui rendered to separate window
 
         transitionImage(cmd, m_currentSwapImage, VK_IMAGE_ASPECT_COLOR_BIT,
             VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
@@ -3466,6 +3478,42 @@ void App::run() {
         VK_CHECK(vkQueueSubmit2(m_device->graphicsQueue(), 1, &si, frame.sync->inFlight));
 
         m_swap->present(frame);
+
+        // ---- ImGui debug window (600x900) ----
+        {
+        if (m_imguiWin->shouldClose()) {
+            m_device->waitIdle();
+            m_renderer.imgui().destroy();
+            m_imguiSwap.reset();
+            m_imguiWin.reset();
+            WindowDesc iwd; iwd.title = "SomeGI Debug"; iwd.width = 600; iwd.height = 900;
+            m_imguiWin = std::make_unique<Window>(iwd);
+            m_imguiSwap = std::make_unique<Swapchain>(*m_device, *m_imguiWin);
+            m_renderer.imgui().init(*m_device, m_imguiWin->handle(), m_imguiSwap->format(), kFramesInFlight);
+            continue;
+        }
+            auto f = m_imguiSwap->acquireNextFrame();
+            if (f.needsResize) { m_imguiSwap->recreate(); }
+            else {
+                VkCommandBuffer c = m_imguiCmds[f.frameInFlight];
+                vkResetCommandBuffer(c, 0);
+                VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO, nullptr, VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT};
+                VK_CHECK(vkBeginCommandBuffer(c, &bi));
+                transitionImage(c, f.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
+                m_renderer.imgui().render(c, f.view, f.extent);
+                transitionImage(c, f.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT, 0);
+                VK_CHECK(vkEndCommandBuffer(c));
+                VkCommandBufferSubmitInfo cs{VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO, nullptr, c};
+                VkSemaphoreSubmitInfo ws{VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO, nullptr, f.sync->imageAvailable, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT};
+                VkSemaphoreSubmitInfo ss{VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO, nullptr, f.renderFinished, VK_PIPELINE_STAGE_2_ALL_GRAPHICS_BIT};
+                VkSubmitInfo2 si{VK_STRUCTURE_TYPE_SUBMIT_INFO_2};
+                si.waitSemaphoreInfoCount = 1; si.pWaitSemaphoreInfos = &ws;
+                si.commandBufferInfoCount = 1; si.pCommandBufferInfos = &cs;
+                si.signalSemaphoreInfoCount = 1; si.pSignalSemaphoreInfos = &ss;
+                VK_CHECK(vkQueueSubmit2(m_device->graphicsQueue(), 1, &si, f.sync->inFlight));
+                m_imguiSwap->present(f);
+            }
+        }
 
         // B.4 SSGI 时序：保存这帧 viewProj 给下一帧 reproject。
         m_prevViewProj = ubo.viewProj;

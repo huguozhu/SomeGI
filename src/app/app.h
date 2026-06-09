@@ -58,6 +58,13 @@ private:
     // ---- Rendering (all passes owned by FrameRenderer) ----
     FrameRenderer m_renderer;
 
+    // ---- ImGui debug window ----
+    std::unique_ptr<Window> m_imguiWin;
+    std::unique_ptr<Swapchain> m_imguiSwap;
+    VkCommandPool m_imguiPool = VK_NULL_HANDLE;
+    VkCommandBuffer m_imguiCmds[kFramesInFlight]{};
+    VkFence m_imguiFence = VK_NULL_HANDLE;
+
     // ---- Live lighting values ----
     glm::vec3 m_sunDir{-0.4f, -1.0f, -0.3f};
     float m_sunIntensity = 3.0f;

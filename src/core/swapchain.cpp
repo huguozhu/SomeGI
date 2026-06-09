@@ -6,6 +6,7 @@
 namespace somegi {
 
 Swapchain::Swapchain(Device& device, Window& window) : m_device(device), m_window(window) {
+    m_surface = m_window.createSurface(m_device.instance());
     m_frameSync.resize(kFramesInFlight);
     VkSemaphoreCreateInfo sci{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
     VkFenceCreateInfo fci{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO, nullptr, VK_FENCE_CREATE_SIGNALED_BIT};
@@ -17,9 +18,9 @@ Swapchain::Swapchain(Device& device, Window& window) : m_device(device), m_windo
     // Query HDR support via surface formats
     {
         uint32_t count = 0;
-        vkGetPhysicalDeviceSurfaceFormatsKHR(m_device.physicalDevice(), m_device.surface(), &count, nullptr);
+        vkGetPhysicalDeviceSurfaceFormatsKHR(m_device.physicalDevice(), m_surface, &count, nullptr);
         std::vector<VkSurfaceFormatKHR> formats(count);
-        vkGetPhysicalDeviceSurfaceFormatsKHR(m_device.physicalDevice(), m_device.surface(), &count, formats.data());
+        vkGetPhysicalDeviceSurfaceFormatsKHR(m_device.physicalDevice(), m_surface, &count, formats.data());
         for (auto& fmt : formats) {
             if (fmt.format == VK_FORMAT_R16G16B16A16_SFLOAT &&
                 fmt.colorSpace == VK_COLOR_SPACE_EXTENDED_SRGB_LINEAR_EXT) {
@@ -36,6 +37,7 @@ Swapchain::Swapchain(Device& device, Window& window) : m_device(device), m_windo
 
 Swapchain::~Swapchain() {
     destroy();
+    if (m_surface) { vkDestroySurfaceKHR(m_device.instance(), m_surface, nullptr); }
     for (auto& s : m_frameSync) {
         vkDestroySemaphore(m_device.device(), s.imageAvailable, nullptr);
         vkDestroyFence(m_device.device(), s.inFlight, nullptr);
@@ -43,7 +45,7 @@ Swapchain::~Swapchain() {
 }
 
 void Swapchain::create() {
-    vkb::SwapchainBuilder sb{m_device.physicalDevice(), m_device.device(), m_device.surface()};
+    vkb::SwapchainBuilder sb{m_device.physicalDevice(), m_device.device(), m_surface};
 
     VkSurfaceFormatKHR desired{};
     if (m_hdrEnabled && m_hdrAvailable) {

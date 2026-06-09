@@ -170,7 +170,6 @@ void FrameRenderer::init(Device& d, VkCommandPool pool, VkExtent2D extent,
     m_taa.init(d);
     m_smaa.init(d, extent);
     std::printf("[init] imgui pass...\n");
-    m_imgui.init(d, window, swapchainFmt, kFramesInFlight);
 
     registerPipelineSteps();
     std::printf("[init] all renderer passes set up.\n");
