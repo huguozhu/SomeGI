@@ -46,7 +46,6 @@
 #include "renderer/culling/frustum_cull_pass.h"
 #include "renderer/culling/hiz_build_pass.h"
 #include "gi/ibl_baker.h"
-#include "gi/gi_technique.h"
 #include "scene/scene.h"
 #include <glm/glm.hpp>
 #include <memory>
@@ -78,7 +77,6 @@ public:
 
     void bindScenePasses(Device& d, const SceneGpu& gpu, uint32_t textureCount);
 
-    void setGiTechnique(IGITechnique* tech);
     void applyGiFlags(int effectiveGiIndex);
 
     // Bootstrap
@@ -134,7 +132,6 @@ public:
     HiZBuildPass& hizPass() { return m_hizPass; }
 
     IblResources&        envIbl()      { return m_envIbl; }
-    std::unique_ptr<IGITechnique>& giTech() { return m_giTech; }
 
     // GI flags
     bool& lpvEnabled()          { return m_lpvEnabled; }
@@ -277,7 +274,6 @@ private:
     ImGuiPass       m_imgui;
 
     IblResources m_envIbl;
-    std::unique_ptr<IGITechnique> m_giTech;
 
     // GI flags
     bool m_lpvEnabled = false;

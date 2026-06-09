@@ -7,8 +7,6 @@
 #include "scene/scene_gpu.h"
 #include "scene/env_loader.h"
 #include "scene/upload.h"
-#include "gi/ibl_technique.h"
-#include "gi/gi_technique.h"
 #include <glm/gtc/matrix_inverse.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <imgui.h>
@@ -226,14 +224,16 @@ App::App() {
     // Initial scene load (camera framed inside applySceneSelection).
     applySceneSelection();
 
-    // Bake skybox.hdr BEFORE GI attach — IBLTechnique reads env cubemaps.
+    // Bake skybox.hdr, then bind IBL resources to lighting pass
     std::printf("[init] env (skybox.hdr) load + bake...\n");
     bakeEnvIbl();
     std::printf("[init] env bake done.\n");
     m_renderer.skybox().bindEnv(*m_device, m_renderer.envIbl().envCube.view(),
                                 m_renderer.envIbl().linear);
+    m_renderer.lighting().bindIblResources(*m_device, m_renderer.envIbl());
+    m_renderer.forward().bindIblResources(*m_device, m_renderer.envIbl());
 
-    std::printf("[init] GI technique attach...\n");
+    std::printf("[init] apply GI selection...\n");
     applyGiSelection();
 
     // Tonemap with scene sampler
@@ -383,7 +383,6 @@ void App::applySceneSelection() {
 
     m_renderer.gbuffer().bindScene(*m_device, m_sceneGpu, (uint32_t)m_sceneGpu.images.size());
     m_renderer.forward().bindScene(*m_device, m_sceneGpu, (uint32_t)m_sceneGpu.images.size());
-    m_renderer.forward().setTechnique(m_renderer.giTech().get());
     m_renderer.rsmGeom().bindScene(*m_device, m_sceneGpu, (uint32_t)m_sceneGpu.images.size());
     m_renderer.vxgiVoxelize().bindScene(*m_device, m_sceneGpu, (uint32_t)m_sceneGpu.images.size(), m_renderer.vxgi());
     if (m_sceneIndexApplied >= 0) {
@@ -599,7 +598,6 @@ void App::cleanup() {
     m_renderer.rsmSample().destroy();
     m_renderer.rsmGeom().destroy();
     m_renderer.gbuffer().destroy();
-    m_renderer.giTech().reset();       // GI onDetach (releases borrow of m_renderer.envIbl())
     if (m_device) m_renderer.envIbl().destroy(*m_device);
     m_renderer.rt().destroy();
     if (m_device) destroySceneSamplers(*m_device, m_sceneGpu);
@@ -625,19 +623,9 @@ void App::applyGiSelection() {
 
     m_pipelineDirty = true;  // GI 模式切换，下一帧重建管线执行表
 
-    if (!m_renderer.giTech()) {
-        m_renderer.giTech() = std::make_unique<IBLTechnique>();
-        GIContext gctx{};
-        gctx.device = m_device.get();
-        gctx.oneShotPool = m_pool;
-        gctx.iblBaked = &m_renderer.envIbl();
-        m_renderer.giTech()->onAttach(gctx);
-        m_renderer.lighting().setTechnique(m_renderer.giTech().get());
-        m_renderer.forward().setTechnique(m_renderer.giTech().get());
-        std::printf("[GI] IBLTechnique attached (set=1 bound)\n");
-    }
-
-    // Preset：下拉里 SSGI / RSM 两个屏幕空间技术互斥。选 SSGI 时打开
+    // GI 模式切换：设置各 pass 的启用标志。IBL 的 set=1 描述符在
+    // init 阶段一次性创建，不随 GI 切换变更。
+    m_renderer.ssgi().enabled      = (effective == 2);
     // m_ssgi、关 m_rsmSample；选 RSM 反过来。其他模式（None/IBL）两者
     // 都关，rsmGI / ssgi 都被 clear path 抹成 0，lighting.slang 的 lerp
     // 退化成纯 IBL diffuse。
@@ -1367,10 +1355,13 @@ void App::buildUI() {
                 ImGui::EndCombo();
             }
         }
-        if (m_renderer.giTech()) {
-            ImGui::Text("Active: %s", m_renderer.giTech()->name());
-            m_renderer.giTech()->drawUI();
+        // IBL intensity slider — 拖动时即时写入 host-coherent UBO
+        float iblI = m_renderer.lighting().iblIntensity();
+        if (ImGui::SliderFloat("IBL intensity", &iblI, 0.0f, 4.0f)) {
+            m_renderer.lighting().setIblIntensity(iblI);
         }
+        if (m_renderer.envIbl().specularMipCount > 0)
+            ImGui::Text("specular mips: %u", m_renderer.envIbl().specularMipCount);
         ImGui::Separator();
 
         ImGui::Text("RSM (Reflective Shadow Maps)");
@@ -2995,9 +2986,7 @@ void App::buildFrameUBO(FrameUBO& ubo) {
     ubo.ambient = glm::vec4(m_ambient, 0);
 
     int specMips = 0;
-    if (auto* ibl = dynamic_cast<IBLTechnique*>(m_renderer.giTech().get())) {
-        specMips = (int)ibl->specularMipCount();
-    }
+    specMips = (int)m_renderer.envIbl().specularMipCount;
     int indirectEnabled = (m_giIndexApplied >= 1) ? 1 : 0;
     int rsmEnabled = m_renderer.rsmSample().enabled ? 1 : 0;
     ubo.counts = glm::ivec4((int)m_scene.materials.size(), specMips, indirectEnabled, rsmEnabled);

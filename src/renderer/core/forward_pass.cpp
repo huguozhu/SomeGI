@@ -1,6 +1,5 @@
 #include "renderer/core/forward_pass.h"
 #include "core/device.h"
-#include "gi/gi_technique.h"
 #include <array>
 #include <cstring>
 
@@ -63,23 +62,19 @@ void ForwardPass::init(Device& d, VkFormat colorFmt, VkFormat depthFmt, uint32_t
                        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
 }
 
-void ForwardPass::buildPipeline(const char* variant, VkDescriptorSetLayout giDsl) {
+void ForwardPass::buildPipeline() {
     auto& d = *m_device;
 
-
-    std::array<VkDescriptorSetLayout, 2> sets{m_setLayout, giDsl};
-
+    // set=0（帧/材质/纹理）+ set=1（IBL cube 贴图）
+    std::array<VkDescriptorSetLayout, 2> sets{m_setLayout, m_iblDsl};
     VkPipelineLayoutCreateInfo plci{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
-    plci.setLayoutCount = giDsl ? 2u : 1u;
+    plci.setLayoutCount = 2;
     plci.pSetLayouts = sets.data();
     plci.pushConstantRangeCount = 0; plci.pPushConstantRanges = nullptr;
     VK_CHECK(vkCreatePipelineLayout(d.device(), &plci, nullptr, &m_pipelineLayout));
 
     auto sd = shaderDir();
-    std::string spvName = (std::strcmp(variant, "default") == 0)
-                          ? "forward.spv"
-                          : std::string("forward_") + variant + ".spv";
-    ShaderModule shader(d, sd / "forward" / spvName);
+    ShaderModule shader(d, sd / "forward" / "forward_ibl.spv");
 
     VkPipelineShaderStageCreateInfo stages[2]{};
     stages[0] = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
@@ -148,21 +143,84 @@ void ForwardPass::destroyPipeline() {
     m_pipeline = VK_NULL_HANDLE; m_pipelineLayout = VK_NULL_HANDLE;
 }
 
-void ForwardPass::setTechnique(IGITechnique* tech) {
-    m_tech = tech;
-    destroyPipeline();
-    // shaderVariant() 已删除，ForwardPass 自身也将随前向管线移除
-    buildPipeline(tech ? "ibl" : "default",
-                  tech ? tech->descriptorSetLayout() : VK_NULL_HANDLE);
+void ForwardPass::bindIblResources(Device& d, const IblResources& ibl) {
+    // 创建 IBL set=1 描述符布局
+    constexpr VkShaderStageFlags kStages =
+        VK_SHADER_STAGE_FRAGMENT_BIT;
+    std::array<VkDescriptorSetLayoutBinding, 5> b{};
+    b[0] = {0, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,  1, kStages};  // diffuse cube
+    b[1] = {1, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,  1, kStages};  // specular cube
+    b[2] = {2, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,  1, kStages};  // brdf lut
+    b[3] = {3, VK_DESCRIPTOR_TYPE_SAMPLER,        1, kStages};  // linear sampler
+    b[4] = {4, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, kStages};  // params (intensity)
+
+    VkDescriptorSetLayoutCreateInfo li{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+    li.bindingCount = (uint32_t)b.size(); li.pBindings = b.data();
+    VK_CHECK(vkCreateDescriptorSetLayout(d.device(), &li, nullptr, &m_iblDsl));
+
+    // 分配 IBL set=1 descriptor pool + set
+    std::array<VkDescriptorPoolSize, 3> ps{{
+        {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 3},
+        {VK_DESCRIPTOR_TYPE_SAMPLER, 1},
+        {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1},
+    }};
+    VkDescriptorPoolCreateInfo pci{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+    pci.maxSets = 1; pci.poolSizeCount = (uint32_t)ps.size(); pci.pPoolSizes = ps.data();
+    VK_CHECK(vkCreateDescriptorPool(d.device(), &pci, nullptr, &m_iblPool));
+
+    VkDescriptorSetAllocateInfo dai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+    dai.descriptorPool = m_iblPool; dai.descriptorSetCount = 1; dai.pSetLayouts = &m_iblDsl;
+    VK_CHECK(vkAllocateDescriptorSets(d.device(), &dai, &m_iblSet));
+
+    // 写入 IBL 描述符
+    auto cubeInfo = [](VkImageView v) {
+        VkDescriptorImageInfo i{};
+        i.imageView = v;
+        i.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        return i;
+    };
+    VkDescriptorImageInfo diffI = cubeInfo(ibl.diffuseCube.view());
+    VkDescriptorImageInfo specI = cubeInfo(ibl.specularCube.view());
+    VkDescriptorImageInfo lutI  = cubeInfo(ibl.brdfLut.view());
+    VkDescriptorImageInfo smpI{}; smpI.sampler = ibl.linear;
+    // Dummy intensity UBO（前向路径可通过 FrameUBO 传 intensity）
+    Buffer dummyUbo(d, 16,
+        VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    float one = 1.0f;
+    std::memcpy(dummyUbo.mapped(), &one, sizeof(float));
+    VkDescriptorBufferInfo uboI{dummyUbo.handle(), 0, VK_WHOLE_SIZE};
+
+    std::array<VkWriteDescriptorSet, 5> w{};
+    auto setImg = [&](VkWriteDescriptorSet& W, uint32_t bi, const VkDescriptorImageInfo* p) {
+        W = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+        W.dstSet = m_iblSet; W.dstBinding = bi; W.descriptorCount = 1;
+        W.descriptorType = (bi == 3) ? VK_DESCRIPTOR_TYPE_SAMPLER : VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+        W.pImageInfo = p;
+    };
+    setImg(w[0], 0, &diffI);
+    setImg(w[1], 1, &specI);
+    setImg(w[2], 2, &lutI);
+    setImg(w[3], 3, &smpI);
+    w[4] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+    w[4].dstSet = m_iblSet; w[4].dstBinding = 4; w[4].descriptorCount = 1;
+    w[4].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER; w[4].pBufferInfo = &uboI;
+    vkUpdateDescriptorSets(d.device(), (uint32_t)w.size(), w.data(), 0, nullptr);
+
+    // 创建 IBL set=1 后构建 pipeline
+    buildPipeline();
 }
 
 void ForwardPass::destroy() {
     if (!m_device) return;
     destroyPipeline();
     auto dev = m_device->device();
-    if (m_pool) vkDestroyDescriptorPool(dev, m_pool, nullptr);
+    if (m_pool)     vkDestroyDescriptorPool(dev, m_pool, nullptr);
     if (m_setLayout) vkDestroyDescriptorSetLayout(dev, m_setLayout, nullptr);
+    if (m_iblPool)  vkDestroyDescriptorPool(dev, m_iblPool, nullptr);
+    if (m_iblDsl)   vkDestroyDescriptorSetLayout(dev, m_iblDsl, nullptr);
     m_pool = VK_NULL_HANDLE; m_setLayout = VK_NULL_HANDLE;
+    m_iblPool = VK_NULL_HANDLE; m_iblDsl = VK_NULL_HANDLE;
     m_frameUbo.reset();
     m_device = nullptr;
 }
@@ -244,10 +302,9 @@ void ForwardPass::record(VkCommandBuffer cmd, const RenderTargets& rt,
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipeline);
 
-    VkDescriptorSet sets[2] = {m_set, m_tech ? m_tech->descriptorSet() : VK_NULL_HANDLE};
-    uint32_t setCount = m_tech ? 2u : 1u;
+    VkDescriptorSet sets[2] = {m_set, m_iblSet};
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-        m_pipelineLayout, 0, setCount, sets, 0, nullptr);
+        m_pipelineLayout, 0, 2, sets, 0, nullptr);
 
     VkDeviceSize zero = 0;
     VkBuffer vb = gpu.vertexBuffer.handle();

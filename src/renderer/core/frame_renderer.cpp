@@ -220,7 +220,6 @@ void FrameRenderer::destroy() {
     m_rsmSample.destroy();
     m_rsmGeom.destroy();
     m_gbuffer.destroy();
-    m_giTech.reset();
     m_envIbl.destroy(*m_device);
     m_rt.destroy();
     if (m_timestampPool) vkDestroyQueryPool(m_device->device(), m_timestampPool, nullptr);
@@ -262,14 +261,8 @@ void FrameRenderer::onResize(Device& d, VkExtent2D newExtent,
 void FrameRenderer::bindScenePasses(Device& d, const SceneGpu& gpu, uint32_t textureCount) {
     m_gbuffer.bindScene(d, gpu, textureCount);
     m_forward.bindScene(d, gpu, textureCount);
-    if (m_giTech) m_forward.setTechnique(m_giTech.get());
     m_rsmGeom.bindScene(d, gpu, textureCount);
     m_vxgiVoxelize.bindScene(d, gpu, textureCount, m_vxgi);
-}
-
-void FrameRenderer::setGiTechnique(IGITechnique* tech) {
-    m_lighting.setTechnique(tech);
-    if (m_giTech) m_forward.setTechnique(m_giTech.get());
 }
 
 void FrameRenderer::applyGiFlags(int effectiveGiIndex) {

@@ -4,25 +4,23 @@
 #include "scene/scene.h"
 #include "renderer/core/render_targets.h"
 #include "renderer/core/frame_ubo.h"
+#include "gi/ibl_baker.h"                 // IblResources
 #include <glm/glm.hpp>
 
 namespace somegi {
 class Device;
-class IGITechnique;
 
 class ForwardPass {
 public:
     void init(Device& d, VkFormat colorFmt, VkFormat depthFmt, uint32_t maxTextures);
     void destroy();
 
+    // 绑定 IBL 预烘焙资源到 set=1（init 之后、首帧之前调用一次）
+    void bindIblResources(Device& d, const IblResources& ibl);
+
     void bindScene(Device& d, const SceneGpu& gpu, uint32_t textureCount);
     void bindDrawData(Device& d, VkBuffer drawDataBuf);
     void updateFrame(const FrameUBO& ubo);
-
-    // Switch to a GI technique (or nullptr for the default no-IBL variant).
-    // Rebuilds pipeline + pipelineLayout. Caller must vkDeviceWaitIdle if
-    // any prior frames may still be in flight.
-    void setTechnique(IGITechnique* tech);
 
     void record(VkCommandBuffer cmd, const RenderTargets& rt,
                 VkBuffer indirectBuf, uint32_t drawCount, const SceneGpu& gpu);
@@ -33,7 +31,7 @@ public:
         VkBuffer w3, VkBuffer b3);
 
 private:
-    void buildPipeline(const char* variant, VkDescriptorSetLayout giDsl);
+    void buildPipeline();
     void destroyPipeline();
 
     Device* m_device = nullptr;
@@ -47,10 +45,13 @@ private:
     VkDescriptorPool m_pool = VK_NULL_HANDLE;
     VkDescriptorSet m_set = VK_NULL_HANDLE;       // Set=0
 
+    // IBL set=1（bindIblResources 时分配）
+    VkDescriptorSetLayout m_iblDsl = VK_NULL_HANDLE;
+    VkDescriptorPool m_iblPool = VK_NULL_HANDLE;
+    VkDescriptorSet m_iblSet = VK_NULL_HANDLE;
+
     Buffer m_frameUbo;
     uint32_t m_maxTextures = 0;
-
-    IGITechnique* m_tech = nullptr;
 };
 
 }

@@ -11,9 +11,8 @@
 #include "renderer/core/lighting_pass.h"
 #include "core/device.h"
 #include "core/shader.h"
-#include "gi/gi_technique.h"
 #include <array>
-#include <stdexcept>
+#include <cstring>
 
 namespace somegi {
 
@@ -121,19 +120,39 @@ void LightingPass::init(Device& d) {
     si.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
     si.maxLod = 0.0f;
     VK_CHECK(vkCreateSampler(d.device(), &si, nullptr, &m_lpvSampler));
+
+    // 创建 IBL set=1 描述符布局（固定：3 张 cube 贴图 + sampler + params UBO）
+    createIblDescriptorSetLayout();
+    // 构建 pipeline（set=0 + set=1 IBL，之后不再重建）
+    buildPipeline();
 }
 
-void LightingPass::buildPipeline(VkDescriptorSetLayout giDsl) {
+void LightingPass::createIblDescriptorSetLayout() {
+    constexpr VkShaderStageFlags kStages =
+        VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT;
+    std::array<VkDescriptorSetLayoutBinding, 5> b{};
+    b[0] = {0, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,  1, kStages};  // diffuse cube
+    b[1] = {1, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,  1, kStages};  // specular cube
+    b[2] = {2, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,  1, kStages};  // brdf lut
+    b[3] = {3, VK_DESCRIPTOR_TYPE_SAMPLER,        1, kStages};  // linear sampler
+    b[4] = {4, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, kStages};  // params (intensity)
+
+    VkDescriptorSetLayoutCreateInfo li{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+    li.bindingCount = (uint32_t)b.size(); li.pBindings = b.data();
+    VK_CHECK(vkCreateDescriptorSetLayout(m_device->device(), &li, nullptr, &m_iblDsl));
+}
+
+void LightingPass::buildPipeline() {
     auto& d = *m_device;
 
     VkPushConstantRange pc{};
     pc.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
     pc.size = sizeof(LightingPC);
 
-    std::array<VkDescriptorSetLayout, 2> sets{m_setLayout, giDsl};
+    std::array<VkDescriptorSetLayout, 2> sets{m_setLayout, m_iblDsl};
 
     VkPipelineLayoutCreateInfo plci{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
-    plci.setLayoutCount = giDsl ? 2u : 1u;
+    plci.setLayoutCount = 2;
     plci.pSetLayouts = sets.data();
     plci.pushConstantRangeCount = 1; plci.pPushConstantRanges = &pc;
     VK_CHECK(vkCreatePipelineLayout(d.device(), &plci, nullptr, &m_pipelineLayout));
@@ -157,25 +176,77 @@ void LightingPass::destroyPipeline() {
     m_pipeline = VK_NULL_HANDLE; m_pipelineLayout = VK_NULL_HANDLE;
 }
 
-void LightingPass::setTechnique(IGITechnique* tech) {
-    if (!tech) {
-        throw std::runtime_error("LightingPass::setTechnique requires a non-null GI technique in M4.0");
-    }
-    m_tech = tech;
-    destroyPipeline();
-    buildPipeline(tech->descriptorSetLayout());
+void LightingPass::bindIblResources(Device& d, const IblResources& ibl) {
+    // 分配 IBL set=1 descriptor pool + set
+    std::array<VkDescriptorPoolSize, 3> ps{{
+        {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,  3},
+        {VK_DESCRIPTOR_TYPE_SAMPLER,        1},
+        {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1},
+    }};
+    VkDescriptorPoolCreateInfo pci{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+    pci.maxSets = 1; pci.poolSizeCount = (uint32_t)ps.size(); pci.pPoolSizes = ps.data();
+    VK_CHECK(vkCreateDescriptorPool(d.device(), &pci, nullptr, &m_iblPool));
+
+    VkDescriptorSetAllocateInfo dai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+    dai.descriptorPool = m_iblPool; dai.descriptorSetCount = 1; dai.pSetLayouts = &m_iblDsl;
+    VK_CHECK(vkAllocateDescriptorSets(d.device(), &dai, &m_iblSet));
+
+    // 创建 params UBO（host-coherent，ImGui slider 直接写 mapped 内存）
+    struct IblParams { float intensity; float _pad0, _pad1, _pad2; };
+    m_iblParamsUbo = Buffer(d, sizeof(IblParams),
+        VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+
+    // 写入 IBL 描述符
+    auto cubeInfo = [](VkImageView v) {
+        VkDescriptorImageInfo i{};
+        i.imageView = v;
+        i.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        return i;
+    };
+    VkDescriptorImageInfo diffI = cubeInfo(ibl.diffuseCube.view());
+    VkDescriptorImageInfo specI = cubeInfo(ibl.specularCube.view());
+    VkDescriptorImageInfo lutI  = cubeInfo(ibl.brdfLut.view());
+    VkDescriptorImageInfo smpI{}; smpI.sampler = ibl.linear;
+    VkDescriptorBufferInfo uboI{m_iblParamsUbo.handle(), 0, VK_WHOLE_SIZE};
+
+    std::array<VkWriteDescriptorSet, 5> w{};
+    auto setImg = [&](VkWriteDescriptorSet& W, uint32_t bi, const VkDescriptorImageInfo* p) {
+        W = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+        W.dstSet = m_iblSet; W.dstBinding = bi; W.descriptorCount = 1;
+        W.descriptorType = (bi == 3) ? VK_DESCRIPTOR_TYPE_SAMPLER : VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+        W.pImageInfo = p;
+    };
+    setImg(w[0], 0, &diffI);
+    setImg(w[1], 1, &specI);
+    setImg(w[2], 2, &lutI);
+    setImg(w[3], 3, &smpI);
+    w[4] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+    w[4].dstSet = m_iblSet; w[4].dstBinding = 4; w[4].descriptorCount = 1;
+    w[4].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER; w[4].pBufferInfo = &uboI;
+
+    vkUpdateDescriptorSets(d.device(), (uint32_t)w.size(), w.data(), 0, nullptr);
+
+    // 写入默认 intensity
+    IblParams params{};
+    params.intensity = m_iblIntensity;
+    std::memcpy(m_iblParamsUbo.mapped(), &params, sizeof(params));
 }
 
 void LightingPass::destroy() {
     if (!m_device) return;
     destroyPipeline();
     auto dev = m_device->device();
-    if (m_pool)       vkDestroyDescriptorPool(dev, m_pool, nullptr);
-    if (m_setLayout)  vkDestroyDescriptorSetLayout(dev, m_setLayout, nullptr);
+    if (m_pool)      vkDestroyDescriptorPool(dev, m_pool, nullptr);
+    if (m_setLayout) vkDestroyDescriptorSetLayout(dev, m_setLayout, nullptr);
+    if (m_iblPool)   vkDestroyDescriptorPool(dev, m_iblPool, nullptr);
+    if (m_iblDsl)    vkDestroyDescriptorSetLayout(dev, m_iblDsl, nullptr);
     if (m_lpvSampler) vkDestroySampler(dev, m_lpvSampler, nullptr);
     m_pool = VK_NULL_HANDLE; m_setLayout = VK_NULL_HANDLE;
+    m_iblPool = VK_NULL_HANDLE; m_iblDsl = VK_NULL_HANDLE;
     m_lpvSampler = VK_NULL_HANDLE;
     m_dummyBuf.reset();
+    m_iblParamsUbo.reset();
     m_device = nullptr;
 }
 
@@ -288,10 +359,17 @@ void LightingPass::setNdgiWeights(Device& d,
     vkUpdateDescriptorSets(d.device(), (uint32_t)w.size(), w.data(), 0, nullptr);
 }
 
+void LightingPass::setIblIntensity(float v) {
+    m_iblIntensity = v;
+    struct { float intensity; float _pad0, _pad1, _pad2; } p{};
+    p.intensity = v;
+    std::memcpy(m_iblParamsUbo.mapped(), &p, sizeof(p));
+}
+
 void LightingPass::record(VkCommandBuffer cmd, const RenderTargets& rt) {
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipeline);
 
-    VkDescriptorSet sets[2] = {m_set, m_tech->descriptorSet()};
+    VkDescriptorSet sets[2] = {m_set, m_iblSet};
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
         m_pipelineLayout, 0, 2, sets, 0, nullptr);
 

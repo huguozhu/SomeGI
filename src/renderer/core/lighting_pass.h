@@ -5,6 +5,7 @@
 #include "renderer/gi/vxgi/vxgi_resources.h"
 #include "renderer/gi/prt/prt_resources.h"
 #include "renderer/gi/ddgi/ddgi_resources.h"
+#include "gi/ibl_baker.h"                  // IblResources
 
 // LightingPass —— M4 deferred 路径的核心 compute 阶段。
 // 每帧 GBufferPass 写完几何后由它消费：从 GBuffer 重建 worldPos / N、
@@ -12,66 +13,66 @@
 //
 // 描述符组织：
 //   set=0（本类自己 own）：frame UBO + GBuffer 三张图 + depth + storage
-//                          hdrColor + ssao + ssr + ssgi 共 9 个 binding。
-//                          per-swapchain（resize 时重写 descriptor，但
-//                          layout / pipeline 不变）。
-//   set=1（来自 IGITechnique）：IBL 资源（diffuse/specular cubes + brdfLut
-//                              + sampler + intensity UBO）。切换 GI 技术
-//                              时通过 setTechnique() 用新 DSL 重建 pipeline。
+//                          hdrColor + ssao + ssr + ssgi + 各路 GI 输出，
+//                          共 33 个 binding。
+//   set=1（本类自己 own）：IBL 资源（diffuse/specular cubes + brdfLut
+//                         + sampler + intensity UBO），启动时一次性创建。
+// GI 模式切换通过 FrameUBO 闸门标志在 shader 内分支，不重建 pipeline。
 
 namespace somegi {
 class Device;
-class IGITechnique;
 
 class LightingPass {
 public:
     void init(Device& d);
     void destroy();
 
-    // 用 tech->descriptorSetLayout() 作为 set=1 重建 compute pipeline。
-    // M4.0 起要求非空：lighting.slang 的 evalIBLDiffuse/Specular 直接
-    // 引用 set=1 binding，没法运行时跳过。当用户选 None 时，App 仍然
-    // 保留一个 IBLTechnique 让 lighting 有合法的 set=1，shader 自己用
-    // FrameUBO.counts.z 切到 hemispheric ambient 分支。
-    void setTechnique(IGITechnique* tech);
+    // 绑定 IBL 预烘焙资源到 set=1，创建 pipeline（仅调用一次，init 之后）
+    void bindIblResources(Device& d, const IblResources& ibl);
 
-    // 写 set=0 描述符。调用时机：init 之后一次；onSwapchainResized 后
-    // （rt 里所有 image 都换了新 view）；scene 切换不触发，因为 GBuffer
-    // 是 per-swapchain 不是 per-scene。
-    // M6 LPV / M7 VXGI：除了 GBuffer / SSAO / SSR / SSGI / RSM，还要绑
-    // LPV grid[0] 三张 SH image + VXGI voxel mipchain。资源稳定，一次性
-    // bind 不需 per-frame 更新。
+    // 绑定 set=0 描述符。调用时机：init 之后一次；onSwapchainResized 后重新调用。
     void bindFrame(Device& d, const RenderTargets& rt, VkBuffer frameUbo,
                    const LpvGrid& lpvGrid0, const VxgiResources& vxgi,
                    const PrtResources& prt, const DdgiResources& ddgi,
                    VkBuffer ddgiProbeStatesBuf);
 
-    // 更新 set=0 中的 NDGI MLP 权重 binding (27-32)。
-    // 权重 buffer 生命周期由 NdgiResources 管理。
+    // 更新 set=0 中的 NDGI MLP 权重 binding (27-32)
     void setNdgiWeights(Device& d,
         VkBuffer w1, VkBuffer b1, VkBuffer w2, VkBuffer b2,
         VkBuffer w3, VkBuffer b3);
 
-    // 录制 dispatch：bindPipeline → bind 两个 set → push constant
-    // (outSize/invOutSize) → dispatch (W+7)/8 × (H+7)/8。
+    // 录制 dispatch：bindPipeline → bind 两个 set → push constant → dispatch
     void record(VkCommandBuffer cmd, const RenderTargets& rt);
 
+    // IBL intensity —— 供 App 的 buildUI() 滑条使用
+    float iblIntensity() const { return m_iblIntensity; }
+    // 写 intensity 到 UBO（host-coherent，slider 改变时调用一次即可）
+    void setIblIntensity(float v);
+
 private:
-    void buildPipeline(VkDescriptorSetLayout giDsl);
+    void createIblDescriptorSetLayout();   // set=1 布局
+    void buildPipeline();                  // 用 m_setLayout + m_iblDsl 创建 pipeline
     void destroyPipeline();
 
     Device* m_device = nullptr;
 
+    // set=0
     VkDescriptorSetLayout m_setLayout = VK_NULL_HANDLE;
+    VkDescriptorPool m_pool = VK_NULL_HANDLE;
+    VkDescriptorSet m_set = VK_NULL_HANDLE;
+    VkSampler m_lpvSampler = VK_NULL_HANDLE;
+    Buffer m_dummyBuf;
+
+    // Pipeline
     VkPipelineLayout m_pipelineLayout = VK_NULL_HANDLE;
     VkPipeline m_pipeline = VK_NULL_HANDLE;
 
-    VkDescriptorPool m_pool = VK_NULL_HANDLE;
-    VkDescriptorSet m_set = VK_NULL_HANDLE;
-    VkSampler m_lpvSampler = VK_NULL_HANDLE;   // 给 LPV trilinear 用
-    Buffer m_dummyBuf;                          // NDGI weights fallback (zero buffer)
-
-    IGITechnique* m_tech = nullptr;
+    // IBL set=1（init 时创建布局，bindIblResources 时分配 set + 写描述符）
+    VkDescriptorSetLayout m_iblDsl = VK_NULL_HANDLE;
+    VkDescriptorPool m_iblPool = VK_NULL_HANDLE;
+    VkDescriptorSet m_iblSet = VK_NULL_HANDLE;
+    Buffer m_iblParamsUbo;              // set=1 binding 4: { intensity, pad×3 }
+    float m_iblIntensity = 1.0f;       // ImGui slider 状态
 };
 
 }
