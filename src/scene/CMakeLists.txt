@@ -10,6 +10,8 @@ add_library(somegi_scene STATIC
     env_loader.cpp
     scene_gpu.h
     scene_gpu.cpp
+    draw_list.h
+    draw_list.cpp
 )
 
 target_link_libraries(somegi_scene

@@ -26,6 +26,7 @@ Device::Device(Window& window, bool enableValidation) {
     f12.descriptorBindingPartiallyBound = VK_TRUE;
     f12.descriptorBindingSampledImageUpdateAfterBind = VK_TRUE;
     f12.shaderSampledImageArrayNonUniformIndexing = VK_TRUE;
+    f12.drawIndirectCount = VK_TRUE;
 
     // Slang emits the SPIR-V DrawParameters capability for shaders that touch
     // SV_VertexID / gl_BaseVertex (e.g. the skybox fullscreen triangle).

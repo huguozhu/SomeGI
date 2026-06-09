@@ -43,6 +43,7 @@
 #include "renderer/gi/lumen/lumen_filter_pass.h"
 #include "renderer/core/barrier_manager.h"
 #include "renderer/core/render_pipeline.h"
+#include "renderer/culling/frustum_cull_pass.h"
 #include "gi/ibl_baker.h"
 #include "gi/gi_technique.h"
 #include "scene/scene.h"
@@ -120,6 +121,7 @@ public:
     LumenGatherPass&     lumenGather() { return m_lumenGatherPass; }
     BarrierManager&      barriers()    { return m_barriers; }
     RenderPipeline&      pipeline()    { return m_pipeline; }
+    FrustumCullPass& cullPass() { return m_cullPass; }
 
     IblResources&        envIbl()      { return m_envIbl; }
     std::unique_ptr<IGITechnique>& giTech() { return m_giTech; }
@@ -219,6 +221,7 @@ private:
     RenderTargets m_rt;
     BarrierManager m_barriers;
     RenderPipeline m_pipeline;
+    FrustumCullPass m_cullPass;
 
     GBufferPass     m_gbuffer;
     ForwardPass     m_forward;

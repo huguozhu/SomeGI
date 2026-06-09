@@ -83,14 +83,15 @@ void RsmGeometryPass::init(Device& d, uint32_t maxTextures) {
     // 3. set=0 layout —— 与 GBufferPass 同：UBO + materials SSBO + sampler
     //    + 贴图数组。RsmFrameUbo 占 binding 0（GBufferPass 那是 FrameUbo，
     //    本 pass 是 RsmFrameUbo，shader 端通过 import 引用名字一致）。
-    std::array<VkDescriptorSetLayoutBinding, 4> b{};
+    std::array<VkDescriptorSetLayoutBinding, 5> b{};
     b[0] = {0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_VERTEX_BIT|VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
     b[1] = {1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
     b[2] = {2, VK_DESCRIPTOR_TYPE_SAMPLER,        1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
     b[3] = {3, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,  maxTextures, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
+    b[4] = {10, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_VERTEX_BIT, nullptr};
 
-    std::array<VkDescriptorBindingFlags, 4> bf{0u, 0u, 0u,
-        VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT};
+    std::array<VkDescriptorBindingFlags, 5> bf{0u, 0u, 0u,
+        VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT, 0u};
     VkDescriptorSetLayoutBindingFlagsCreateInfo bfci{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO};
     bfci.bindingCount = (uint32_t)bf.size(); bfci.pBindingFlags = bf.data();
 
@@ -101,7 +102,7 @@ void RsmGeometryPass::init(Device& d, uint32_t maxTextures) {
 
     std::array<VkDescriptorPoolSize, 4> ps{{
         {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1},
-        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1},
+        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 2},
         {VK_DESCRIPTOR_TYPE_SAMPLER, 1},
         {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, maxTextures},
     }};
@@ -127,13 +128,10 @@ void RsmGeometryPass::init(Device& d, uint32_t maxTextures) {
 void RsmGeometryPass::buildPipeline() {
     auto& d = *m_device;
 
-    VkPushConstantRange pc{};
-    pc.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
-    pc.size = sizeof(PC);
 
     VkPipelineLayoutCreateInfo plci{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
     plci.setLayoutCount = 1; plci.pSetLayouts = &m_setLayout;
-    plci.pushConstantRangeCount = 1; plci.pPushConstantRanges = &pc;
+    plci.pushConstantRangeCount = 0; plci.pPushConstantRanges = nullptr;
     VK_CHECK(vkCreatePipelineLayout(d.device(), &plci, nullptr, &m_pipelineLayout));
 
     ShaderModule shader(d, shaderDir() / "gi" / "rsm" / "rsm_geometry.spv");
@@ -264,6 +262,13 @@ void RsmGeometryPass::bindScene(Device& d, const SceneGpu& gpu, uint32_t texture
     vkUpdateDescriptorSets(d.device(), (uint32_t)w.size(), w.data(), 0, nullptr);
 }
 
+void RsmGeometryPass::bindDrawData(Device& d, VkBuffer drawDataBuf) {
+    VkDescriptorBufferInfo dd{drawDataBuf,0,VK_WHOLE_SIZE};
+    VkWriteDescriptorSet w{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+    w.dstSet=m_set;w.dstBinding=10;w.descriptorCount=1;
+    w.descriptorType=VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;w.pBufferInfo=&dd;
+    vkUpdateDescriptorSets(d.device(),1,&w,0,nullptr);
+}
 void RsmGeometryPass::updateLight(const glm::vec3& aabbMin, const glm::vec3& aabbMax,
                                   const glm::vec3& sunDir,
                                   const glm::vec3& sunColor, float sunIntensity) {
@@ -315,7 +320,8 @@ void RsmGeometryPass::updateLight(const glm::vec3& aabbMin, const glm::vec3& aab
     std::memcpy(m_rsmFrameUbo.mapped(), &u, sizeof(u));
 }
 
-void RsmGeometryPass::record(VkCommandBuffer cmd, const SceneCpu& cpu, const SceneGpu& gpu) {
+void RsmGeometryPass::record(VkCommandBuffer cmd, VkBuffer indirectBuf, uint32_t drawCount, const SceneGpu& gpu) {
+    if (drawCount == 0) return;
     // 1. layout 转换：4 张 RT 都到合适的 attachment layout。
     //    第一帧 / 切场景后是 UNDEFINED；后续帧来自上一次结尾的 SHADER_READ_ONLY，
     //    用 UNDEFINED 起始（discard 上一帧内容）就够 —— 因为本 pass 整张
@@ -384,20 +390,7 @@ void RsmGeometryPass::record(VkCommandBuffer cmd, const SceneCpu& cpu, const Sce
     vkCmdBindVertexBuffers(cmd, 0, 1, &vb, &zero);
     vkCmdBindIndexBuffer(cmd, gpu.indexBuffer.handle(), 0, VK_INDEX_TYPE_UINT32);
 
-    PC pc;
-    for (auto& n : cpu.nodes) {
-        if (n.meshIndex < 0) continue;
-        const Mesh& M = cpu.meshes[n.meshIndex];
-        pc.model = n.worldTransform;
-        for (auto& p : M.primitives) {
-            pc.materialIndex = p.materialIndex >= 0 ? p.materialIndex : 0;
-            pc.p0 = pc.p1 = pc.p2 = 0;
-            vkCmdPushConstants(cmd, m_pipelineLayout,
-                VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-                0, sizeof(PC), &pc);
-            vkCmdDrawIndexed(cmd, p.indexCount, 1, p.firstIndex, p.vertexOffset, 0);
-        }
-    }
+        vkCmdDrawIndexedIndirectCount(cmd, indirectBuf, 0, indirectBuf, 0, drawCount, sizeof(VkDrawIndexedIndirectCommand));
 
     vkCmdEndRendering(cmd);
 

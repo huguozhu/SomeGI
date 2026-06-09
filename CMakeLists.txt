@@ -108,6 +108,12 @@ file(GLOB_RECURSE SHADER_SOURCES CONFIGURE_DEPENDS
 list(FILTER SHADER_SOURCES EXCLUDE REGEX "/shaders/common/")
 if(SHADER_SOURCES AND SLANGC_EXE)
     compile_slang(somegi_shaders SOURCES ${SHADER_SOURCES})
+
+	    # Post-process: patch InstanceIndex (remove BaseInstance subtraction)
+	    add_custom_command(TARGET somegi_shaders POST_BUILD
+	        COMMAND sh "${CMAKE_SOURCE_DIR}/cmake/patch_spv.sh" "${CMAKE_BINARY_DIR}/shaders/gbuffer/gbuffer.spv" "${CMAKE_BINARY_DIR}/shaders/forward/forward.spv" "${CMAKE_BINARY_DIR}/shaders/gi/rsm/rsm_geometry.spv"
+	        COMMENT "Patching SPIR-V InstanceIndex"
+	    )
 endif()
 
 # ---- Project ----

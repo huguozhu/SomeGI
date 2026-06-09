@@ -2,6 +2,7 @@
 #include "core/vk_common.h"
 #include "scene/scene.h"
 #include "scene/camera.h"
+#include "scene/draw_list.h"
 #include "renderer/core/forward_pass.h"      // for FrameUBO type
 #include "renderer/core/frame_renderer.h"
 #include <map>
@@ -57,6 +58,12 @@ private:
 
     // ---- Rendering (all passes owned by FrameRenderer) ----
     FrameRenderer m_renderer;
+    Buffer m_indirectBuf;
+    Buffer m_indirectBufSun;
+    Buffer m_countBuf;
+    uint32_t m_drawCount = 0;
+    bool m_useGpuDriven = false;
+    std::vector<DrawEntry> m_drawEntries;
 
     // ---- ImGui debug window ----
     std::unique_ptr<Window> m_imguiWin;

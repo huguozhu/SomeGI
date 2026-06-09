@@ -29,6 +29,7 @@ public:
 
     // scene 切换时重新写场景描述符。
     void bindScene(Device& d, const SceneGpu& gpu, uint32_t textureCount);
+    void bindDrawData(Device& d, VkBuffer drawDataBuf);
 
     // 计算 sun 的 ortho viewProj 让其 frustum 正好包住 scene AABB；
     // 写到 RsmFrameUbo（host-coherent，立即生效）。
@@ -42,7 +43,7 @@ public:
     // 录制 sun-view MRT 渲染。layout 转换由本方法内部完成：调用前后
     // 4 张 RT 都在 SHADER_READ_ONLY_OPTIMAL（方便后续 RsmSamplePass 直
     // 接读）。第一帧的 UNDEFINED → COLOR_ATTACHMENT 也正确处理。
-    void record(VkCommandBuffer cmd, const SceneCpu& cpu, const SceneGpu& gpu);
+    void record(VkCommandBuffer cmd, VkBuffer indirectBuf, uint32_t drawCount, const SceneGpu& gpu);
 
     // 给 RsmSamplePass / Lighting 取这 4 张图与 UBO。
     const Image& position() const { return m_position; }

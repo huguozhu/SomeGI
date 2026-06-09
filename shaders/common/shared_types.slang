@@ -61,6 +61,16 @@ struct MaterialGpu {
     uint _pad0;
 };
 
+// GPU-Driven: mirrors VkDrawIndexedIndirectCommand (20 bytes).
+struct IndirectDrawCommand {
+    uint indexCount; uint instanceCount; uint firstIndex; int vertexOffset; uint firstInstance;
+};
+// GPU-Driven: per-draw data indexed by gl_InstanceIndex.
+struct DrawData {
+    float4x4 modelMatrix; uint materialIndex; int firstIndex; uint indexCount; int vertexOffset;
+    float3 aabbMin; uint _pad0; float3 aabbMax; uint _pad1;
+};
+
 struct PushConsts {
     float4x4 model;
     int materialIndex;

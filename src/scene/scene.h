@@ -72,6 +72,8 @@ struct SceneGpu {
     Image whiteTex;
     Image normalTex;
     VkSampler linearSampler = VK_NULL_HANDLE;
+    Buffer drawDataBuffer;
+    uint32_t drawCount = 0;
 };
 
 }

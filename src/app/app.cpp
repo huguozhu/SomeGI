@@ -1,4 +1,5 @@
 #include "app.h"
+#include "scene/draw_list.h"
 #include "core/window.h"
 #include "core/device.h"
 #include "core/swapchain.h"
@@ -367,6 +368,34 @@ void App::applySceneSelection() {
             m_renderer.ndgiInited() = true;
             // initWeights 需要在 command buffer 中执行，延迟到下一帧 pipeline
         }
+    }
+
+    // GPU-driven: build draw list + indirect buffers
+    {
+        buildDrawList(m_scene, m_drawEntries);
+        m_drawCount = (uint32_t)m_drawEntries.size();
+        m_sceneGpu.drawCount = m_drawCount;
+        std::printf("[scene] draw list: %u entries\n", m_drawCount);
+        m_sceneGpu.drawDataBuffer.reset();
+        m_sceneGpu.drawDataBuffer = Buffer(*m_device, m_drawCount * sizeof(DrawEntry),
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+        std::memcpy(m_sceneGpu.drawDataBuffer.mapped(), m_drawEntries.data(), m_drawCount * sizeof(DrawEntry));
+        m_indirectBuf.reset();
+        m_indirectBuf = Buffer(*m_device, m_drawCount * sizeof(VkDrawIndexedIndirectCommand),
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT,
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+        m_indirectBufSun.reset();
+        m_indirectBufSun = Buffer(*m_device, m_drawCount * sizeof(VkDrawIndexedIndirectCommand),
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT,
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+        m_countBuf.reset();
+        m_countBuf = Buffer(*m_device, sizeof(uint32_t),
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+        m_renderer.gbuffer().bindDrawData(*m_device, m_sceneGpu.drawDataBuffer.handle());
+        m_renderer.forward().bindDrawData(*m_device, m_sceneGpu.drawDataBuffer.handle());
+        m_renderer.rsmGeom().bindDrawData(*m_device, m_sceneGpu.drawDataBuffer.handle());
     }
 
     m_renderer.gbuffer().bindScene(*m_device, m_sceneGpu, (uint32_t)m_sceneGpu.images.size());
@@ -1117,6 +1146,9 @@ void App::buildUI() {
         ImGui::Separator();
 
         ImGui::Separator();
+        ImGui::Separator();
+        ImGui::Checkbox("GPU-Driven Rendering", &m_useGpuDriven);
+        ImGui::SameLine(); ImGui::TextDisabled("(%u draws)", m_drawCount);
         ImGui::Text("GPU Profile");
         {
             uint32_t fi = 0; // show most recent frame's data
@@ -1629,7 +1661,7 @@ void App::registerPipelineSteps() {
         .name = "RSM-Geometry",
         .phase = "PrePass",
         .record = [this](VkCommandBuffer cmd) {
-            m_renderer.rsmGeom().record(cmd, m_scene, m_sceneGpu);
+            m_renderer.rsmGeom().record(cmd, m_indirectBufSun.handle(), m_drawCount, m_sceneGpu);
         }
     });
 
@@ -1654,7 +1686,7 @@ void App::registerPipelineSteps() {
                 VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT,
                 VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT);
 
-            m_renderer.forward().record(cmd, m_renderer.rt(), m_scene, m_sceneGpu);
+            m_renderer.forward().record(cmd, m_renderer.rt(), m_indirectBuf.handle(), m_drawCount, m_sceneGpu);
 
             // hdrColor COLOR_ATTACHMENT → GENERAL（匹配延迟 Lighting 输出）
             transitionImage(cmd, m_renderer.rt().hdrColor.image(), VK_IMAGE_ASPECT_COLOR_BIT,
@@ -1715,7 +1747,7 @@ void App::registerPipelineSteps() {
                 VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT,
                 VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT);
 
-            m_renderer.gbuffer().record(cmd, m_renderer.rt(), m_scene, m_sceneGpu);
+            m_renderer.gbuffer().record(cmd, m_renderer.rt(), m_indirectBuf.handle(), m_drawCount, m_sceneGpu);
 
             // Resolved GBuffer → SHADER_READ_ONLY for downstream compute
             auto toSampled = [&](VkImage img) {
@@ -3228,6 +3260,16 @@ void App::run() {
         // ============================================================
         // 构建管线表并执行所有内部渲染 Pass
         // ============================================================
+        // GPU-driven: CPU fill indirect buffer
+        if (m_drawCount > 0) {
+            auto* icmds = (VkDrawIndexedIndirectCommand*)m_indirectBuf.mapped();
+            for (uint32_t i = 0; i < m_drawCount; ++i) {
+                const auto& e = m_drawEntries[i];
+                icmds[i] = {e.indexCount, 1, e.firstIndex, e.vertexOffset, i};
+            }
+            std::memcpy(m_indirectBufSun.mapped(), icmds, m_drawCount * sizeof(VkDrawIndexedIndirectCommand));
+        }
+
         buildPipelineTable();
         m_renderer.pipeline().execute(cmd);
 

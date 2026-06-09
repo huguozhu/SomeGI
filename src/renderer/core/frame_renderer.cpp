@@ -171,6 +171,7 @@ void FrameRenderer::init(Device& d, VkCommandPool pool, VkExtent2D extent,
     m_smaa.init(d, extent);
     std::printf("[init] imgui pass...\n");
 
+    m_cullPass.init(d, 4096);
     registerPipelineSteps();
     std::printf("[init] all renderer passes set up.\n");
 }

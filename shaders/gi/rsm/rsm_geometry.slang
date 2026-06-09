@@ -20,7 +20,7 @@ import shared_types;
 [[vk::binding(2, 0)]] SamplerState gLinear;
 [[vk::binding(3, 0)]] Texture2D gTextures[];
 
-[[vk::push_constant]] PushConsts gPC;
+[[vk::binding(10, 0)]] StructuredBuffer<DrawData> gDrawData;
 
 struct VsIn {
     float3 pos     : POSITION;
@@ -38,16 +38,17 @@ struct VsOut {
 };
 
 [shader("vertex")]
-VsOut vs_main(VsIn i) {
+VsOut vs_main(VsIn i, uint drawID : SV_InstanceID) {
+    DrawData dd = gDrawData[drawID];
     VsOut o;
-    float4 wp = mul(gPC.model, float4(i.pos, 1.0));
+    float4 wp = mul(dd.modelMatrix, float4(i.pos, 1.0));
     o.worldPos = wp.xyz;
     // 用 sun 的 viewProj，所以 svPos 落在 sun light space 的 clip 坐标里。
     o.svPos = mul(gRsm.sunViewProj, wp);
-    float3x3 n3 = (float3x3)gPC.model;
+    float3x3 n3 = (float3x3)dd.modelMatrix;
     o.normal  = normalize(mul(n3, i.normal));
     o.uv = i.uv0;
-    o.matIndex = gPC.materialIndex;
+    o.matIndex = int(dd.materialIndex);
     return o;
 }
 

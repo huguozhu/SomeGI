@@ -22,7 +22,7 @@ void ForwardPass::init(Device& d, VkFormat colorFmt, VkFormat depthFmt, uint32_t
     m_maxTextures = maxTextures;
 
     // === Set=0 layout ===
-    std::array<VkDescriptorSetLayoutBinding, 10> b{};
+    std::array<VkDescriptorSetLayoutBinding, 11> b{};
     b[0] = {0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_VERTEX_BIT|VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
     b[1] = {1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
     b[2] = {2, VK_DESCRIPTOR_TYPE_SAMPLER,         1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
@@ -30,8 +30,10 @@ void ForwardPass::init(Device& d, VkFormat colorFmt, VkFormat depthFmt, uint32_t
     // NDGI MLP 权重 (bindings 4-9)
     for (uint32_t i = 4; i < 10; ++i)
         b[i] = {i, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
+    // GPU-driven DrawData (binding 10)
+    b[10] = {10, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_VERTEX_BIT, nullptr};
 
-    std::array<VkDescriptorBindingFlags, 10> bf{};
+    std::array<VkDescriptorBindingFlags, 11> bf{};
     bf[3] = VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT;
     VkDescriptorSetLayoutBindingFlagsCreateInfo bfci{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO};
     bfci.bindingCount = (uint32_t)bf.size(); bfci.pBindingFlags = bf.data();
@@ -44,7 +46,7 @@ void ForwardPass::init(Device& d, VkFormat colorFmt, VkFormat depthFmt, uint32_t
     // === Descriptor pool + Set=0 alloc ===
     std::array<VkDescriptorPoolSize, 4> ps{{
         {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1},
-        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 7},  // +6 NDGI
+        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 8},  // +6 NDGI
         {VK_DESCRIPTOR_TYPE_SAMPLER, 1},
         {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, maxTextures},
     }};
@@ -64,16 +66,13 @@ void ForwardPass::init(Device& d, VkFormat colorFmt, VkFormat depthFmt, uint32_t
 void ForwardPass::buildPipeline(const char* variant, VkDescriptorSetLayout giDsl) {
     auto& d = *m_device;
 
-    VkPushConstantRange pc{};
-    pc.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
-    pc.size = sizeof(PC);
 
     std::array<VkDescriptorSetLayout, 2> sets{m_setLayout, giDsl};
 
     VkPipelineLayoutCreateInfo plci{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
     plci.setLayoutCount = giDsl ? 2u : 1u;
     plci.pSetLayouts = sets.data();
-    plci.pushConstantRangeCount = 1; plci.pPushConstantRanges = &pc;
+    plci.pushConstantRangeCount = 0; plci.pPushConstantRanges = nullptr;
     VK_CHECK(vkCreatePipelineLayout(d.device(), &plci, nullptr, &m_pipelineLayout));
 
     auto sd = shaderDir();
@@ -202,12 +201,20 @@ void ForwardPass::bindScene(Device& d, const SceneGpu& gpu, uint32_t textureCoun
     vkUpdateDescriptorSets(d.device(), (uint32_t)w.size(), w.data(), 0, nullptr);
 }
 
+void ForwardPass::bindDrawData(Device& d, VkBuffer drawDataBuf) {
+    VkDescriptorBufferInfo dd{drawDataBuf,0,VK_WHOLE_SIZE};
+    VkWriteDescriptorSet w{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+    w.dstSet=m_set;w.dstBinding=10;w.descriptorCount=1;
+    w.descriptorType=VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;w.pBufferInfo=&dd;
+    vkUpdateDescriptorSets(d.device(),1,&w,0,nullptr);
+}
 void ForwardPass::updateFrame(const FrameUBO& ubo) {
     std::memcpy(m_frameUbo.mapped(), &ubo, sizeof(FrameUBO));
 }
 
 void ForwardPass::record(VkCommandBuffer cmd, const RenderTargets& rt,
-                         const SceneCpu& cpu, const SceneGpu& gpu) {
+                         VkBuffer indirectBuf, uint32_t drawCount, const SceneGpu& gpu) {
+    if (drawCount == 0) return;
     VkRenderingAttachmentInfo color{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
     color.imageView = rt.hdrColor.view();
     color.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
@@ -246,20 +253,7 @@ void ForwardPass::record(VkCommandBuffer cmd, const RenderTargets& rt,
     vkCmdBindVertexBuffers(cmd, 0, 1, &vb, &zero);
     vkCmdBindIndexBuffer(cmd, gpu.indexBuffer.handle(), 0, VK_INDEX_TYPE_UINT32);
 
-    PC pc;
-    for (auto& n : cpu.nodes) {
-        if (n.meshIndex < 0) continue;
-        const Mesh& M = cpu.meshes[n.meshIndex];
-        pc.model = n.worldTransform;
-        for (auto& p : M.primitives) {
-            pc.materialIndex = p.materialIndex >= 0 ? p.materialIndex : 0;
-            pc.p0 = pc.p1 = pc.p2 = 0;
-            vkCmdPushConstants(cmd, m_pipelineLayout,
-                VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-                0, sizeof(PC), &pc);
-            vkCmdDrawIndexed(cmd, p.indexCount, 1, p.firstIndex, p.vertexOffset, 0);
-        }
-    }
+        vkCmdDrawIndexedIndirectCount(cmd, indirectBuf, 0, indirectBuf, 0, drawCount, sizeof(VkDrawIndexedIndirectCommand));
 
     vkCmdEndRendering(cmd);
 }

@@ -55,6 +55,7 @@ public:
     void destroy();
 
     void bindScene(Device& d, const SceneGpu& gpu, uint32_t textureCount);
+    void bindDrawData(Device& d, VkBuffer drawDataBuf);
     void updateFrame(const FrameUBO& ubo);
 
     // Switch to a GI technique (or nullptr for the default no-IBL variant).
@@ -63,7 +64,7 @@ public:
     void setTechnique(IGITechnique* tech);
 
     void record(VkCommandBuffer cmd, const RenderTargets& rt,
-                const SceneCpu& cpu, const SceneGpu& gpu);
+                VkBuffer indirectBuf, uint32_t drawCount, const SceneGpu& gpu);
 
     // 更新 set=0 中的 NDGI MLP 权重 binding
     void setNdgiWeights(Device& d,
