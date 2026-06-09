@@ -4,8 +4,9 @@
 //
 // 调用顺序约定：init → setTechnique → bindFrame → 每帧 record。
 // onSwapchainResized 时 GBuffer image 换新 → 调用方需重新 bindFrame；
-// 切换 GI 技术（None/IBL/SSGI 实际只切换 m_giTech 实例）→ 重新 setTechnique
-// 让 pipeline 用新的 set=1 layout 重建。
+// GI 模式切换通过 FrameUBO 的各路闸门（counts/lpvCounts/vxgiCounts 等）
+// 在 shader 内分支，不需要重建 pipeline；仅 set=1 描述符布局变更时
+// （如 IBLTechnique 初始化）才通过 setTechnique 重建 pipeline。
 
 #include "renderer/core/lighting_pass.h"
 #include "core/device.h"
