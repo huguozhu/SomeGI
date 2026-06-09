@@ -29,23 +29,6 @@ struct PC {
     int p0, p1, p2;
 };
 static_assert(sizeof(PC) == 80, "PC must match shader push constant layout");
-
-// barrier helper —— 与 ibl_baker / app.cpp 中的 transitionImage 类似。
-void transitionImage2(VkCommandBuffer cmd, VkImage img,
-                      VkImageAspectFlags aspect,
-                      VkImageLayout oldL, VkImageLayout newL,
-                      VkPipelineStageFlags2 srcStg, VkAccessFlags2 srcAcc,
-                      VkPipelineStageFlags2 dstStg, VkAccessFlags2 dstAcc) {
-    VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
-    b.srcStageMask = srcStg; b.srcAccessMask = srcAcc;
-    b.dstStageMask = dstStg; b.dstAccessMask = dstAcc;
-    b.oldLayout = oldL; b.newLayout = newL;
-    b.image = img;
-    b.subresourceRange = {aspect, 0, 1, 0, 1};
-    VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-    di.imageMemoryBarrierCount = 1; di.pImageMemoryBarriers = &b;
-    vkCmdPipelineBarrier2(cmd, &di);
-}
 }
 
 void RsmGeometryPass::init(Device& d, uint32_t maxTextures) {
@@ -326,22 +309,22 @@ void RsmGeometryPass::record(VkCommandBuffer cmd, VkBuffer indirectBuf, uint32_t
     //    第一帧 / 切场景后是 UNDEFINED；后续帧来自上一次结尾的 SHADER_READ_ONLY，
     //    用 UNDEFINED 起始（discard 上一帧内容）就够 —— 因为本 pass 整张
     //    覆盖写。
-    transitionImage2(cmd, m_position.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+    transitionImage(cmd, m_position.image(), VK_IMAGE_ASPECT_COLOR_BIT,
         VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
         VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
         VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
         VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
-    transitionImage2(cmd, m_normal.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+    transitionImage(cmd, m_normal.image(), VK_IMAGE_ASPECT_COLOR_BIT,
         VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
         VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
         VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
         VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
-    transitionImage2(cmd, m_flux.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+    transitionImage(cmd, m_flux.image(), VK_IMAGE_ASPECT_COLOR_BIT,
         VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
         VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
         VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
         VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
-    transitionImage2(cmd, m_depth.image(), VK_IMAGE_ASPECT_DEPTH_BIT,
+    transitionImage(cmd, m_depth.image(), VK_IMAGE_ASPECT_DEPTH_BIT,
         VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
         VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
         VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT,
@@ -395,28 +378,28 @@ void RsmGeometryPass::record(VkCommandBuffer cmd, VkBuffer indirectBuf, uint32_t
     vkCmdEndRendering(cmd);
 
     // 3. 4 张 RT 转 SHADER_READ_ONLY，方便后续 RsmSamplePass 立即采样。
-    transitionImage2(cmd, m_position.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+    transitionImage(cmd, m_position.image(), VK_IMAGE_ASPECT_COLOR_BIT,
         VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
         VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
         VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
         VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
         VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
-    transitionImage2(cmd, m_normal.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+    transitionImage(cmd, m_normal.image(), VK_IMAGE_ASPECT_COLOR_BIT,
         VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
         VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
         VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
         VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
         VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
-    transitionImage2(cmd, m_flux.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+    transitionImage(cmd, m_flux.image(), VK_IMAGE_ASPECT_COLOR_BIT,
         VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
         VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
         VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
         VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
         VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
-    transitionImage2(cmd, m_depth.image(), VK_IMAGE_ASPECT_DEPTH_BIT,
+    transitionImage(cmd, m_depth.image(), VK_IMAGE_ASPECT_DEPTH_BIT,
         VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
         VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,

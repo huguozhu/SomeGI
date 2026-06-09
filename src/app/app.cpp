@@ -144,23 +144,6 @@ void saveAllSceneStates(const std::map<std::string, SceneState>& states,
 }
 }
 
-static void transitionImage(VkCommandBuffer cmd, VkImage image,
-                            VkImageAspectFlags aspect,
-                            VkImageLayout oldL, VkImageLayout newL,
-                            VkPipelineStageFlags2 srcStage, VkAccessFlags2 srcAccess,
-                            VkPipelineStageFlags2 dstStage, VkAccessFlags2 dstAccess) {
-    VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
-    b.srcStageMask  = srcStage;  b.srcAccessMask = srcAccess;
-    b.dstStageMask  = dstStage;  b.dstAccessMask = dstAccess;
-    b.oldLayout = oldL;          b.newLayout = newL;
-    b.image = image;
-    b.subresourceRange = {aspect, 0, 1, 0, 1};
-    VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-    di.imageMemoryBarrierCount = 1;
-    di.pImageMemoryBarriers = &b;
-    vkCmdPipelineBarrier2(cmd, &di);
-}
-
 App::App() {
     WindowDesc wd; wd.title = "SomeGI"; wd.width = 800; wd.height = 450;
     m_window = std::make_unique<Window>(wd);
