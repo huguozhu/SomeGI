@@ -3,7 +3,7 @@
 #include "core/shader.h"
 #include "scene/scene.h"
 #include "renderer/core/render_targets.h"
-#include "renderer/core/forward_pass.h"   // for FrameUBO type
+#include "renderer/core/frame_ubo.h"   // for FrameUBO type
 
 namespace somegi {
 class Device;

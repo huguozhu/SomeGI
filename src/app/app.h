@@ -3,7 +3,7 @@
 #include "scene/scene.h"
 #include "scene/camera.h"
 #include "scene/draw_list.h"
-#include "renderer/core/forward_pass.h"      // for FrameUBO type
+#include "renderer/core/frame_ubo.h"      // for FrameUBO type
 #include "renderer/core/frame_renderer.h"
 #include <map>
 #include <memory>
