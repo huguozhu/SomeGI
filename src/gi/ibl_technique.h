@@ -28,7 +28,6 @@ public:
     ~IBLTechnique() override;
 
     const char* name() const override { return "IBL"; }
-    const char* shaderVariant() const override { return "ibl"; }
 
     void onAttach(const GIContext& ctx) override;
     void onDetach() override;

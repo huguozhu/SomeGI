@@ -151,7 +151,8 @@ void ForwardPass::destroyPipeline() {
 void ForwardPass::setTechnique(IGITechnique* tech) {
     m_tech = tech;
     destroyPipeline();
-    buildPipeline(tech ? tech->shaderVariant() : "default",
+    // shaderVariant() 已删除，ForwardPass 自身也将随前向管线移除
+    buildPipeline(tech ? "ibl" : "default",
                   tech ? tech->descriptorSetLayout() : VK_NULL_HANDLE);
 }
 

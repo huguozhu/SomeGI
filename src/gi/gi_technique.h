@@ -32,18 +32,13 @@ struct FrameContext {
 };
 
 // 所有 GI 技术的虚基类。生命周期：App 构造时 onAttach，析构时 onDetach。
-// LightingPass/ForwardPass 每帧通过 descriptorSet() / descriptorSetLayout()
-// 取当前 technique 的资源；shaderVariant() 决定 fragment shader spv 的
-// 文件名（forward_<variant>.spv，"default" → forward.spv）。
+// LightingPass 每帧通过 descriptorSet() / descriptorSetLayout()
+// 取当前 technique 的资源。
 class IGITechnique {
 public:
     virtual ~IGITechnique() = default;
 
     virtual const char* name() const = 0;
-
-    // ForwardPass / LightingPass 用此选择 spv 变体（仅 forward 路径还在用，
-    // M4 deferred 路径只有一个 lighting.spv 不分变体）。
-    virtual const char* shaderVariant() const = 0;
 
     // 一次性资源初始化（M3 IBL：占用 GIContext.iblBaked；M5+ VXGI：体素化、
     // 注入光照、生成 mip 都在这里）。
