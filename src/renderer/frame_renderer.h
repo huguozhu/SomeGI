@@ -165,7 +165,8 @@ public:
     glm::vec3& ddgiSpacing()    { return m_ddgiSpacing; }
 
     // Profiling
-    float gpuMs() const { return m_gpuMs; }
+    float& gpuMs() { return m_gpuMs; }
+    float  gpuMs() const { return m_gpuMs; }
     float* passTimes(uint32_t fi) { return m_passMs[fi]; }
     const char* const* passNames() const { return m_passNames; }
 

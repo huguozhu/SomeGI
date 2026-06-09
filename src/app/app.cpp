@@ -205,6 +205,9 @@ App::App() {
                     m_device->features().rayQuery && m_device->features().accelStruct,
                     m_swap->format(), m_window->handle());
 
+    // Register all rendering steps into the pipeline table
+    registerPipelineSteps();
+
     // Load all scenes' persisted view + lighting before the first scene apply.
     {
         PersistedAll p = loadAllSceneStates();
@@ -220,15 +223,17 @@ App::App() {
     // Initial scene load (camera framed inside applySceneSelection).
     applySceneSelection();
 
-    std::printf("[init] GI technique attach...\n");
-    applyGiSelection();
-
-    // Init skybox with baked env, tonemap with scene sampler
+    // Bake skybox.hdr BEFORE GI attach — IBLTechnique reads env cubemaps.
     std::printf("[init] env (skybox.hdr) load + bake...\n");
     bakeEnvIbl();
     std::printf("[init] env bake done.\n");
     m_renderer.skybox().bindEnv(*m_device, m_renderer.envIbl().envCube.view(),
                                 m_renderer.envIbl().linear);
+
+    std::printf("[init] GI technique attach...\n");
+    applyGiSelection();
+
+    // Tonemap with scene sampler
     m_renderer.tonemap().init(*m_device, m_sceneGpu.linearSampler);
     m_renderer.tonemap().bindTargets(*m_device, m_renderer.rt());
 
@@ -571,7 +576,7 @@ void App::cleanup() {
     if (m_device) m_renderer.envIbl().destroy(*m_device);
     m_renderer.rt().destroy();
     if (m_device) destroySceneSamplers(*m_device, m_sceneGpu);
-    if (m_timestampPool) vkDestroyQueryPool(m_device->device(), m_timestampPool, nullptr);
+    if (m_renderer.timestampPool()) vkDestroyQueryPool(m_device->device(), m_renderer.timestampPool(), nullptr);
     if (m_pool) vkDestroyCommandPool(m_device->device(), m_pool, nullptr);
 }
 
@@ -691,7 +696,7 @@ void App::tickBenchmark(float dt) {
     }
 
     // Collection phase
-    m_benchGpuSum += m_gpuMs;
+    m_benchGpuSum += m_renderer.gpuMs();
     m_benchFrameCount++;
 
     if (m_benchTimer >= collectTime) {
@@ -1040,7 +1045,7 @@ void App::buildUI() {
     ImGuiIO& io = ImGui::GetIO();
     if (ImGui::Begin("SomeGI Debug")) {
         ImGui::Text("Frame: %.2f ms (%.0f fps)  GPU: %.2f ms",
-                    m_dtMs, m_fpsAvg, m_gpuMs);
+                    m_dtMs, m_fpsAvg, m_renderer.gpuMs());
         ImGui::SameLine(); ImGui::TextDisabled("  F2: benchmark");
 
         if (m_benchRunning) {
@@ -1098,13 +1103,13 @@ void App::buildUI() {
         ImGui::Text("GPU Profile");
         {
             uint32_t fi = 0; // show most recent frame's data
-            float* ms = m_passMs[fi];
+            float* ms = m_renderer.passTimes(fi);
             float maxMs = 0.02f; // min bar width
             for (uint32_t i = kTsGBuffer; i <= kTsEnd; ++i)
                 if (ms[i] > maxMs) maxMs = ms[i];
 
             for (uint32_t i = kTsGBuffer; i <= kTsAA; ++i) {
-                const char* name = m_passNames[i];
+                const char* name = m_renderer.passNames()[i];
                 float t = ms[i];
                 ImGui::Text("%-10s", name); ImGui::SameLine(80);
                 ImGui::ProgressBar(t / maxMs, ImVec2(120, 0), "");
@@ -1533,7 +1538,7 @@ void App::buildUI() {
 
 void App::writeTimestamp(VkCommandBuffer cmd, uint32_t slot) {
     vkCmdWriteTimestamp2(cmd, VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT,
-                         m_timestampPool,
+                         m_renderer.timestampPool(),
                          m_currentFrameInFlight * kTimestampSlots + slot);
 }
 
@@ -3003,7 +3008,7 @@ void App::run() {
             fpsTimer = 0; fpsFrames = 0;
             // A.2 console echo —— sweep 时拿来汇总各模式 ms。
             std::printf("[profile] fps=%.0f cpu=%.2fms gpu=%.2fms gi=%d\n",
-                        m_fpsAvg, m_dtMs, m_gpuMs, m_giIndexApplied);
+                        m_fpsAvg, m_dtMs, m_renderer.gpuMs(), m_giIndexApplied);
         }
 
         // 不要在 ImGui 想要键盘/鼠标时给相机
@@ -3175,15 +3180,15 @@ void App::run() {
         uint32_t qBase = frame.frameInFlight * kTimestampSlots;
 
         // Read back previous frame's per-pass timestamps
-        if (m_timestampValid[frame.frameInFlight]) {
+        if (m_renderer.timestampValid(frame.frameInFlight)) {
             uint64_t ts[kTimestampSlots] = {};
-            VkResult r = vkGetQueryPoolResults(m_device->device(), m_timestampPool,
+            VkResult r = vkGetQueryPoolResults(m_device->device(), m_renderer.timestampPool(),
                 qBase, kTimestampSlots, sizeof(ts), ts, sizeof(uint64_t),
                 VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT);
             if (r == VK_SUCCESS) {
                 float period = m_device->timestampPeriod() * 1e-6f;
                 float total = 0;
-                float* dst = m_passMs[frame.frameInFlight];
+                float* dst = m_renderer.passTimes(frame.frameInFlight);
                 for (uint32_t i = 1; i < kTimestampSlots; ++i) {
                     if (ts[i] > ts[i-1]) {
                         float ms = float(ts[i] - ts[i-1]) * period;
@@ -3191,7 +3196,7 @@ void App::run() {
                         total += ms;
                     }
                 }
-                if (total > 0) m_gpuMs = m_gpuMs * 0.9f + total * 0.1f;
+                if (total > 0) m_renderer.gpuMs() = m_renderer.gpuMs() * 0.9f + total * 0.1f;
             }
         }
 
@@ -3205,9 +3210,9 @@ void App::run() {
         m_currentInvViewProj = ubo.invViewProj;
 
         // Reset + write start timestamp
-        vkCmdResetQueryPool(cmd, m_timestampPool, qBase, kTimestampSlots);
+        vkCmdResetQueryPool(cmd, m_renderer.timestampPool(), qBase, kTimestampSlots);
         vkCmdWriteTimestamp2(cmd, VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT,
-                             m_timestampPool, qBase + kTsStart);
+                             m_renderer.timestampPool(), qBase + kTsStart);
 
         // ============================================================
         // 构建管线表并执行所有内部渲染 Pass
@@ -3440,7 +3445,7 @@ void App::run() {
             VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
             VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT, 0);
 
-        m_timestampValid[m_currentFrameInFlight] = true;
+        m_renderer.timestampValid(m_currentFrameInFlight) = true;
 
         VK_CHECK(vkEndCommandBuffer(cmd));
 
