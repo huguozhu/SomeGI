@@ -1,96 +1,32 @@
-add_library(somegi_renderer STATIC
-    render_targets.h
-    render_targets.cpp
-    frame_renderer.h
-    frame_renderer.cpp
-    barrier_manager.h
-    barrier_manager.cpp
-    render_pipeline.h
-    render_pipeline.cpp
-    forward_pass.h
-    forward_pass.cpp
-    gbuffer_pass.h
-    gbuffer_pass.cpp
-    rsm_geometry_pass.h
-    rsm_geometry_pass.cpp
-    rsm_sample_pass.h
-    rsm_sample_pass.cpp
-    lpv_grid.h
-    lpv_grid.cpp
-    lpv_inject_pass.h
-    lpv_inject_pass.cpp
-    lpv_propagate_pass.h
-    lpv_propagate_pass.cpp
-    vxgi_resources.h
-    vxgi_resources.cpp
-    vxgi_voxelize_pass.h
-    vxgi_voxelize_pass.cpp
-    vxgi_inject_pass.h
-    vxgi_inject_pass.cpp
-    vxgi_mipmap_pass.h
-    vxgi_mipmap_pass.cpp
-    vxgi_aniso_pass.h
-    vxgi_aniso_pass.cpp
-    vxgi_relight_pass.h
-    vxgi_relight_pass.cpp
-    vxgi_resolve_6axis_pass.h
-    vxgi_resolve_6axis_pass.cpp
-    sdfgi_resources.h
-    sdfgi_resources.cpp
-    sdfgi_pass.h
-    sdfgi_pass.cpp
-    restir_resources.h
-    restir_resources.cpp
-    restir_pass.h
-    restir_pass.cpp
-    prt_resources.h
-    prt_resources.cpp
-    prt_bake_pass.h
-    prt_bake_pass.cpp
-    ddgi_resources.h
-    ddgi_resources.cpp
-    ddgi_pass.h
-    ddgi_pass.cpp
-    lighting_pass.h
-    lighting_pass.cpp
-    ssao_pass.h
-    ssao_pass.cpp
-    gtao_pass.h
-    gtao_pass.cpp
-    ssr_pass.h
-    ssr_pass.cpp
-    ssgi_pass.h
-    ssgi_pass.cpp
-    gtgi_pass.h
-    gtgi_pass.cpp
-    scene_rt_as.h
-    scene_rt_as.cpp
-    rt_gi_pass.h
-    rt_gi_pass.cpp
-    skybox_pass.h
-    skybox_pass.cpp
-    tonemap_pass.h
-    tonemap_pass.cpp
-    taa_pass.h
-    taa_pass.cpp
-    smaa_pass.h
-    smaa_pass.cpp
-    imgui_pass.h
-    imgui_pass.cpp
-    lumen_resources.h
-    lumen_resources.cpp
-    lumen_probe_pass.h
-    lumen_probe_pass.cpp
-    lumen_gather_pass.h
-    lumen_gather_pass.cpp
-    lumen_filter_pass.h
-    lumen_filter_pass.cpp
-    ndgi_resources.h
-    ndgi_resources.cpp
-    ndgi_pass.h
-    ndgi_pass.cpp
-)
+add_subdirectory(core)
+add_subdirectory(ao)
+add_subdirectory(screenspace)
+add_subdirectory(gi/rsm)
+add_subdirectory(gi/lpv)
+add_subdirectory(gi/vxgi)
+add_subdirectory(gi/ddgi)
+add_subdirectory(gi/ndgi)
+add_subdirectory(gi/sdfgi)
+add_subdirectory(gi/prt)
+add_subdirectory(gi/restir)
+add_subdirectory(gi/rt)
+add_subdirectory(gi/lumen)
 
+add_library(somegi_renderer STATIC
+    $<TARGET_OBJECTS:somegi_renderer_core>
+    $<TARGET_OBJECTS:somegi_renderer_ao>
+    $<TARGET_OBJECTS:somegi_renderer_screenspace>
+    $<TARGET_OBJECTS:somegi_renderer_rsm>
+    $<TARGET_OBJECTS:somegi_renderer_lpv>
+    $<TARGET_OBJECTS:somegi_renderer_vxgi>
+    $<TARGET_OBJECTS:somegi_renderer_ddgi>
+    $<TARGET_OBJECTS:somegi_renderer_ndgi>
+    $<TARGET_OBJECTS:somegi_renderer_sdfgi>
+    $<TARGET_OBJECTS:somegi_renderer_prt>
+    $<TARGET_OBJECTS:somegi_renderer_restir>
+    $<TARGET_OBJECTS:somegi_renderer_rt>
+    $<TARGET_OBJECTS:somegi_renderer_lumen>
+)
 target_link_libraries(somegi_renderer
     PUBLIC somegi_core somegi_scene somegi_gi imgui
 )
