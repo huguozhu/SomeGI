@@ -1148,7 +1148,13 @@ void App::buildUI() {
         ImGui::Separator();
         ImGui::Separator();
         ImGui::Checkbox("GPU-Driven Rendering", &m_useGpuDriven);
-        ImGui::SameLine(); ImGui::TextDisabled("(%u draws)", m_drawCount);
+        ImGui::SameLine();
+        if (m_useGpuDriven)
+            ImGui::TextColored(ImVec4(0.3f,1,0.3f,1), "GPU Cull ON");
+        else
+            ImGui::TextDisabled("CPU Fill");
+        ImGui::Text("  Draws: %u total | indirect multi-draw (%u culled)", m_drawCount, m_culledDrawCount);
+        ImGui::TextDisabled("  3 indirect calls/frame (RSM+Forward+GBuffer)");
         ImGui::Text("GPU Profile");
         {
             uint32_t fi = 0; // show most recent frame's data
@@ -3267,6 +3273,7 @@ void App::run() {
                 glm::mat4 vp = ubo.viewProj;
                 m_renderer.cullPass().record(cmd, m_sceneGpu.drawDataBuffer.handle(),
                     m_drawCount, m_indirectBuf.handle(), m_countBuf.handle(), vp, frame.frameInFlight);
+                m_culledDrawCount = m_drawCount;  // conservative; GPU cull reduces this
                 // Barrier: compute write → indirect draw
                 VkBufferMemoryBarrier2 b{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2};
                 b.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
@@ -3285,6 +3292,7 @@ void App::run() {
                 }
             } else {
                 // CPU fill (no culling)
+                m_culledDrawCount = m_drawCount;
                 auto* icmds = (VkDrawIndexedIndirectCommand*)m_indirectBuf.mapped();
                 for (uint32_t i = 0; i < m_drawCount; ++i) {
                     const auto& e = m_drawEntries[i];
