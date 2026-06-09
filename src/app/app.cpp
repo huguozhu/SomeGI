@@ -1602,70 +1602,12 @@ void App::buildPipelineTable() {
     if (!m_pipelineDirty) return;
     m_pipelineDirty = false;
 
-    bool fwd = (m_renderingMode == RenderingMode::Forward);
-
-    // 前向/延迟核心路径切换
-    m_renderer.pipeline().setEnabled("RSM-Geometry", true);
-    m_renderer.pipeline().setEnabled("GBuffer",  !fwd);
-    m_renderer.pipeline().setEnabled("Lighting", !fwd);
-    m_renderer.pipeline().setEnabled("Forward",  fwd);
-    m_renderer.pipeline().setEnabled("Skybox",   true);
-    m_renderer.pipeline().setEnabled("Copy-hdrPrev", true);
-
-    // === Phase 1.5: AO ===
-    m_renderer.pipeline().setEnabled("AO-SSAO", !fwd && m_aoMethod == AOMethod::SSAO);
-    m_renderer.pipeline().setEnabled("AO-GTAO", !fwd && m_aoMethod == AOMethod::GTAO);
-    m_renderer.pipeline().setEnabled("AO-Clear", !fwd && m_aoMethod == AOMethod::None);
-
-    // === Phase 1.6: SSR ===
-    m_renderer.pipeline().setEnabled("SSR", !fwd && m_renderer.ssr().enabled);
-    m_renderer.pipeline().setEnabled("SSR-Clear", !fwd && !m_renderer.ssr().enabled);
-
-    // === Phase 1.7: ScreenGI (SSGI/GTGI) ===
-    bool screenGiOn = !fwd && (m_renderer.ssgi().enabled || m_renderer.gtgi().enabled);
-    m_renderer.pipeline().setEnabled("ScreenGI", screenGiOn);
-    m_renderer.pipeline().setEnabled("ScreenGI-Clear", !screenGiOn);
-
-    // === Phase 1.83: VXGI chain ===
-    bool needVoxelGrid = !fwd && (m_renderer.vxgiEnabled() || m_renderer.ddgiEnabled() || m_renderer.sdfgiPass().enabled
-                       || m_renderer.lumenEnabled() || m_renderer.restirPass().enabled);
-    m_renderer.pipeline().setEnabled("VXGI-Chain", needVoxelGrid);
-    m_renderer.pipeline().setEnabled("VXGI-Bootstrap", !needVoxelGrid);
-    m_renderer.pipeline().setEnabled("VXGI-Relight", m_renderer.vxgiRelightEnabled() && needVoxelGrid);
-    m_renderer.pipeline().setEnabled("VXGI-6Axis", m_renderer.lumenEnabled() && m_renderer.vxgiSixAxisInited() && needVoxelGrid);
-
-    // === Phase 1.835: SDFGI ===
-    m_renderer.pipeline().setEnabled("SDFGI", !fwd && m_renderer.sdfgiPass().enabled);
-
-    // === Phase 1.836: RT GI ===
-    m_renderer.pipeline().setEnabled("RTGI", !fwd && m_renderer.rtGiBound() && m_giIndexApplied == 10);
-    m_renderer.pipeline().setEnabled("RTGI-Clear", !fwd && m_renderer.rtGiInited() && !(m_renderer.rtGiBound() && m_giIndexApplied == 10));
-
-    // === Phase 1.837: ReSTIR DI ===
-    m_renderer.pipeline().setEnabled("ReSTIR", !fwd && m_renderer.restirPass().enabled);
-    m_renderer.pipeline().setEnabled("ReSTIR-Clear", !fwd && !m_renderer.restirPass().enabled);
-
-    // === Phase 1.84: DDGI ===
-    m_renderer.pipeline().setEnabled("DDGI", !fwd && m_renderer.ddgiEnabled());
-    m_renderer.pipeline().setEnabled("DDGI-Bootstrap", !fwd && !m_renderer.ddgiEnabled());
-    m_renderer.pipeline().setEnabled("NDGI", m_renderer.ndgiEnabled() && m_renderer.rtSupported());
-
-    // === Phase 1.845: Lumen-lite ===
-    m_renderer.pipeline().setEnabled("Lumen-Probe", !fwd && m_renderer.lumenEnabled() && m_renderer.lumenDebugMode() != 5);
-    m_renderer.pipeline().setEnabled("Lumen-Filter", !fwd && m_renderer.lumenEnabled() && m_renderer.lumenDebugMode() != 5);
-    m_renderer.pipeline().setEnabled("Lumen-Gather", !fwd && m_renderer.lumenEnabled() && m_renderer.lumenDebugMode() != 5);
-    m_renderer.pipeline().setEnabled("Lumen-DebugClear", !fwd && m_renderer.lumenEnabled() && m_renderer.lumenDebugMode() == 5);
-    m_renderer.pipeline().setEnabled("Lumen-Clear", !fwd && !m_renderer.lumenEnabled());
-
-    // === Phase 1.85: LPV ===
-    m_renderer.pipeline().setEnabled("LPV", !fwd && m_renderer.lpvEnabled());
-    m_renderer.pipeline().setEnabled("LPV-Bootstrap", !fwd && !m_renderer.lpvEnabled());
-
-    // === Phase 1.8: RSM Sample ===
-    m_renderer.pipeline().setEnabled("RSM-Sample", !fwd && m_renderer.rsmSample().enabled);
-    m_renderer.pipeline().setEnabled("RSM-Clear", !fwd && !m_renderer.rsmSample().enabled);
-
-    m_renderer.pipeline().build();
+    // 将 App 层状态打包传给 FrameRenderer，由其内部根据 GI/AO 标志完成 setEnabled
+    m_renderer.buildPipelineTable({
+        .forwardMode = (m_renderingMode == RenderingMode::Forward),
+        .aoMethod    = (int)m_aoMethod,
+        .giIndex     = m_giIndexApplied,
+    });
 }
 
 void App::registerPipelineSteps() {

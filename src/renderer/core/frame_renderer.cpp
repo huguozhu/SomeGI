@@ -373,10 +373,75 @@ void FrameRenderer::rebuildDemoLights(const SceneCpu& cpu) {
     }
 }
 
-// registerPipelineSteps and buildPipelineTable are stubs.
-// Their implementation mirrors the inline logic currently in App::run().
-// Migration: move the body of App::run()'s pipeline step registration here.
 void FrameRenderer::registerPipelineSteps() { /* TODO: migrate from App */ }
-void FrameRenderer::buildPipelineTable()    { /* TODO: migrate from App */ }
+
+void FrameRenderer::buildPipelineTable(const PipelineConfig& cfg) {
+    bool fwd = cfg.forwardMode;
+
+    // 前向/延迟核心路径切换
+    m_pipeline.setEnabled("RSM-Geometry", true);
+    m_pipeline.setEnabled("GBuffer",  !fwd);
+    m_pipeline.setEnabled("Lighting", !fwd);
+    m_pipeline.setEnabled("Forward",  fwd);
+    m_pipeline.setEnabled("Skybox",   true);
+    m_pipeline.setEnabled("Copy-hdrPrev", true);
+
+    // AO 互斥：SSAO / GTAO / Clear
+    m_pipeline.setEnabled("AO-SSAO", !fwd && cfg.aoMethod == 1);
+    m_pipeline.setEnabled("AO-GTAO", !fwd && cfg.aoMethod == 2);
+    m_pipeline.setEnabled("AO-Clear", !fwd && cfg.aoMethod == 0);
+
+    // SSR
+    m_pipeline.setEnabled("SSR", !fwd && m_ssr.enabled);
+    m_pipeline.setEnabled("SSR-Clear", !fwd && !m_ssr.enabled);
+
+    // ScreenGI (SSGI/GTGI)
+    bool screenGiOn = !fwd && (m_ssgi.enabled || m_gtgi.enabled);
+    m_pipeline.setEnabled("ScreenGI", screenGiOn);
+    m_pipeline.setEnabled("ScreenGI-Clear", !screenGiOn);
+
+    // VXGI chain
+    bool needVoxelGrid = !fwd && (m_vxgiEnabled || m_ddgiEnabled || m_sdfgiPass.enabled
+                       || m_lumenEnabled || m_restirPass.enabled);
+    m_pipeline.setEnabled("VXGI-Chain", needVoxelGrid);
+    m_pipeline.setEnabled("VXGI-Bootstrap", !needVoxelGrid);
+    m_pipeline.setEnabled("VXGI-Relight", m_vxgiRelightEnabled && needVoxelGrid);
+    m_pipeline.setEnabled("VXGI-6Axis", m_lumenEnabled && m_vxgiSixAxisInited && needVoxelGrid);
+
+    // SDFGI
+    m_pipeline.setEnabled("SDFGI", !fwd && m_sdfgiPass.enabled);
+
+    // RT GI
+    bool rtGiActive = m_rtGiBound && cfg.giIndex == 10;
+    m_pipeline.setEnabled("RTGI", !fwd && rtGiActive);
+    m_pipeline.setEnabled("RTGI-Clear", !fwd && m_rtGiInited && !rtGiActive);
+
+    // ReSTIR DI
+    m_pipeline.setEnabled("ReSTIR", !fwd && m_restirPass.enabled);
+    m_pipeline.setEnabled("ReSTIR-Clear", !fwd && !m_restirPass.enabled);
+
+    // DDGI
+    m_pipeline.setEnabled("DDGI", !fwd && m_ddgiEnabled);
+    m_pipeline.setEnabled("DDGI-Bootstrap", !fwd && !m_ddgiEnabled);
+    m_pipeline.setEnabled("NDGI", m_ndgiEnabled && m_rtSupported);
+
+    // Lumen-lite
+    bool lumenActive = !fwd && m_lumenEnabled;
+    m_pipeline.setEnabled("Lumen-Probe", lumenActive && m_lumenDebugMode != 5);
+    m_pipeline.setEnabled("Lumen-Filter", lumenActive && m_lumenDebugMode != 5);
+    m_pipeline.setEnabled("Lumen-Gather", lumenActive && m_lumenDebugMode != 5);
+    m_pipeline.setEnabled("Lumen-DebugClear", lumenActive && m_lumenDebugMode == 5);
+    m_pipeline.setEnabled("Lumen-Clear", !fwd && !m_lumenEnabled);
+
+    // LPV
+    m_pipeline.setEnabled("LPV", !fwd && m_lpvEnabled);
+    m_pipeline.setEnabled("LPV-Bootstrap", !fwd && !m_lpvEnabled);
+
+    // RSM Sample
+    m_pipeline.setEnabled("RSM-Sample", !fwd && m_rsmSample.enabled);
+    m_pipeline.setEnabled("RSM-Clear", !fwd && !m_rsmSample.enabled);
+
+    m_pipeline.build();
+}
 
 } // namespace somegi

@@ -55,6 +55,14 @@ namespace somegi {
 
 class Device;
 
+// 管线表配置 —— App 传给 FrameRenderer::buildPipelineTable() 的上层状态。
+// FrameRenderer 自身的 GI/AO 标志直接读取成员，不需要通过此结构体传递。
+struct PipelineConfig {
+    bool forwardMode = false;    // 前向渲染模式（true=Forward, false=Deferred）
+    int  aoMethod = 0;          // 0=None, 1=SSAO, 2=GTAO
+    int  giIndex  = 0;          // 当前 GI 技术索引（用于 RT GI 判断）
+};
+
 class FrameRenderer {
 public:
     struct BenchResult { int gi, aa, ao; float fps, gpuMs; };
@@ -213,7 +221,7 @@ public:
     };
 
     void registerPipelineSteps();
-    void buildPipelineTable();
+    void buildPipelineTable(const PipelineConfig& cfg);
     void rebuildDemoLights(const SceneCpu& cpu);
 
 private:
