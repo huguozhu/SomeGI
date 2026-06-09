@@ -1577,7 +1577,7 @@ void App::buildUI() {
 void App::writeTimestamp(VkCommandBuffer cmd, uint32_t slot) {
     vkCmdWriteTimestamp2(cmd, VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT,
                          m_renderer.timestampPool(),
-                         m_currentFrameInFlight * m_renderer.kTimestampSlots + slot);
+                         m_frameCtx.frameInFlight * m_renderer.kTimestampSlots + slot);
 }
 
 void App::buildPipelineTable() {
@@ -1730,7 +1730,7 @@ void App::registerPipelineSteps() {
                 VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                 VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
             m_renderer.ssao().record(cmd, m_renderer.rt(),
-                m_currentProj, glm::inverse(m_currentProj), m_currentView);
+                m_frameCtx.proj, glm::inverse(m_frameCtx.proj), m_frameCtx.view);
             transitionImage(cmd, m_renderer.rt().ssao.image(), VK_IMAGE_ASPECT_COLOR_BIT,
                 VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                 VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
@@ -1751,7 +1751,7 @@ void App::registerPipelineSteps() {
                 VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                 VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
             m_renderer.gtao().record(cmd, m_renderer.rt(),
-                m_currentProj, m_currentView);
+                m_frameCtx.proj, m_frameCtx.view);
             transitionImage(cmd, m_renderer.rt().ssao.image(), VK_IMAGE_ASPECT_COLOR_BIT,
                 VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                 VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
@@ -3175,8 +3175,8 @@ void App::recordPostProcessing(VkCommandBuffer cmd) {
                 VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
                 VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
                 VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
-            m_renderer.tonemap().bindOutput(*m_device, m_renderer.rt().aaHdr.view(), m_currentFrameInFlight);
-            m_renderer.tonemap().record(cmd, m_renderer.rt(), m_currentFrameInFlight, true, 1.0f);
+            m_renderer.tonemap().bindOutput(*m_device, m_renderer.rt().aaHdr.view(), m_frameCtx.frameInFlight);
+            m_renderer.tonemap().record(cmd, m_renderer.rt(), m_frameCtx.frameInFlight, true, 1.0f);
             writeTimestamp(cmd, m_renderer.kTsTonemap);
 
             transitionImage(cmd, m_renderer.rt().aaHdr.image(), VK_IMAGE_ASPECT_COLOR_BIT,
@@ -3184,16 +3184,16 @@ void App::recordPostProcessing(VkCommandBuffer cmd) {
                 VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
                 VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT);
 
-            transitionImage(cmd, m_currentSwapImage, VK_IMAGE_ASPECT_COLOR_BIT,
+            transitionImage(cmd, m_frameCtx.swapImage, VK_IMAGE_ASPECT_COLOR_BIT,
                 VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
                 VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
                 VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
 
             if (m_aaMethod == AAMethod::TAA) {
-                m_renderer.taa().bindResources(*m_device, m_renderer.rt(), m_currentFrameInFlight);
-                m_renderer.taa().bindOutput(*m_device, m_currentSwapView, m_currentFrameInFlight);
+                m_renderer.taa().bindResources(*m_device, m_renderer.rt(), m_frameCtx.frameInFlight);
+                m_renderer.taa().bindOutput(*m_device, m_frameCtx.swapView, m_frameCtx.frameInFlight);
                 m_renderer.taa().record(cmd, m_renderer.rt(), m_jitter, m_prevJitter,
-                            m_currentInvViewProj, m_prevViewProj, m_currentFrameInFlight, m_taaBlendAlpha);
+                            m_frameCtx.invViewProj, m_prevViewProj, m_frameCtx.frameInFlight, m_taaBlendAlpha);
                 // Copy aaHdr → aaHistory for next frame
                 transitionImage(cmd, m_renderer.rt().aaHdr.image(), VK_IMAGE_ASPECT_COLOR_BIT,
                     VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
@@ -3219,24 +3219,24 @@ void App::recordPostProcessing(VkCommandBuffer cmd) {
                     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
             } else {
                 m_renderer.smaa().bindResources(*m_device, m_renderer.rt());
-                m_renderer.smaa().bindOutput(*m_device, m_currentSwapView);
+                m_renderer.smaa().bindOutput(*m_device, m_frameCtx.swapView);
                 m_renderer.smaa().record(cmd, m_renderer.rt());
             }
             writeTimestamp(cmd, m_renderer.kTsAA);
         } else {
             // No AA: tonemap writes directly to swapchain
-            transitionImage(cmd, m_currentSwapImage, VK_IMAGE_ASPECT_COLOR_BIT,
+            transitionImage(cmd, m_frameCtx.swapImage, VK_IMAGE_ASPECT_COLOR_BIT,
                 VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
                 VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
                 VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
-            m_renderer.tonemap().bindOutput(*m_device, m_currentSwapView, m_currentFrameInFlight);
-            m_renderer.tonemap().record(cmd, m_renderer.rt(), m_currentFrameInFlight, true, 1.0f);
+            m_renderer.tonemap().bindOutput(*m_device, m_frameCtx.swapView, m_frameCtx.frameInFlight);
+            m_renderer.tonemap().record(cmd, m_renderer.rt(), m_frameCtx.frameInFlight, true, 1.0f);
             writeTimestamp(cmd, m_renderer.kTsTonemap);
             writeTimestamp(cmd, m_renderer.kTsAA);
         }
 
         // Transition swapchain to COLOR_ATTACHMENT for ImGui
-        transitionImage(cmd, m_currentSwapImage, VK_IMAGE_ASPECT_COLOR_BIT,
+        transitionImage(cmd, m_frameCtx.swapImage, VK_IMAGE_ASPECT_COLOR_BIT,
             VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
             VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
             VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
@@ -3250,8 +3250,8 @@ void App::recordPostProcessing(VkCommandBuffer cmd) {
                 VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
                 VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
                 VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
-            m_renderer.tonemap().bindOutput(*m_device, m_renderer.rt().aaHdr.view(), m_currentFrameInFlight);
-            m_renderer.tonemap().record(cmd, m_renderer.rt(), m_currentFrameInFlight);
+            m_renderer.tonemap().bindOutput(*m_device, m_renderer.rt().aaHdr.view(), m_frameCtx.frameInFlight);
+            m_renderer.tonemap().record(cmd, m_renderer.rt(), m_frameCtx.frameInFlight);
             writeTimestamp(cmd, m_renderer.kTsTonemap);
 
             transitionImage(cmd, m_renderer.rt().aaHdr.image(), VK_IMAGE_ASPECT_COLOR_BIT,
@@ -3279,9 +3279,9 @@ void App::recordPostProcessing(VkCommandBuffer cmd) {
                     VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT,
                     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                     VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
-                m_renderer.taa().bindResources(*m_device, m_renderer.rt(), m_currentFrameInFlight);
+                m_renderer.taa().bindResources(*m_device, m_renderer.rt(), m_frameCtx.frameInFlight);
                 m_renderer.taa().record(cmd, m_renderer.rt(), m_jitter, m_prevJitter,
-                            m_currentInvViewProj, m_prevViewProj, m_currentFrameInFlight, m_taaBlendAlpha);
+                            m_frameCtx.invViewProj, m_prevViewProj, m_frameCtx.frameInFlight, m_taaBlendAlpha);
 
                 // Copy aaHdr → aaHistory for next frame
                 transitionImage(cmd, m_renderer.rt().aaHdr.image(), VK_IMAGE_ASPECT_COLOR_BIT,
@@ -3325,8 +3325,8 @@ void App::recordPostProcessing(VkCommandBuffer cmd) {
                 VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
                 VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
                 VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
-            m_renderer.tonemap().bindOutput(*m_device, m_renderer.rt().ldrTonemap.view(), m_currentFrameInFlight);
-            m_renderer.tonemap().record(cmd, m_renderer.rt(), m_currentFrameInFlight);
+            m_renderer.tonemap().bindOutput(*m_device, m_renderer.rt().ldrTonemap.view(), m_frameCtx.frameInFlight);
+            m_renderer.tonemap().record(cmd, m_renderer.rt(), m_frameCtx.frameInFlight);
             writeTimestamp(cmd, m_renderer.kTsTonemap);
             writeTimestamp(cmd, m_renderer.kTsAA);
 
@@ -3338,7 +3338,7 @@ void App::recordPostProcessing(VkCommandBuffer cmd) {
         }
 
         // SDR blit: ldrTonemap → swapchain
-        transitionImage(cmd, m_currentSwapImage, VK_IMAGE_ASPECT_COLOR_BIT,
+        transitionImage(cmd, m_frameCtx.swapImage, VK_IMAGE_ASPECT_COLOR_BIT,
             VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
             VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
             VK_PIPELINE_STAGE_2_BLIT_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
@@ -3347,14 +3347,14 @@ void App::recordPostProcessing(VkCommandBuffer cmd) {
         blit.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
         blit.srcOffsets[1] = {(int32_t)m_renderer.rt().extent.width, (int32_t)m_renderer.rt().extent.height, 1};
         blit.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-        blit.dstOffsets[1] = {(int32_t)m_currentSwapExtent.width, (int32_t)m_currentSwapExtent.height, 1};
+        blit.dstOffsets[1] = {(int32_t)m_frameCtx.swapExtent.width, (int32_t)m_frameCtx.swapExtent.height, 1};
         vkCmdBlitImage(cmd,
             m_renderer.rt().ldrTonemap.image(), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-            m_currentSwapImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            m_frameCtx.swapImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
             1, &blit, VK_FILTER_LINEAR);
 
         // SDR: transition swapchain to COLOR_ATTACHMENT for ImGui
-        transitionImage(cmd, m_currentSwapImage, VK_IMAGE_ASPECT_COLOR_BIT,
+        transitionImage(cmd, m_frameCtx.swapImage, VK_IMAGE_ASPECT_COLOR_BIT,
             VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
             VK_PIPELINE_STAGE_2_BLIT_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
             VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
@@ -3362,7 +3362,7 @@ void App::recordPostProcessing(VkCommandBuffer cmd) {
 
     // Final timestamp + transition to present
     writeTimestamp(cmd, m_renderer.kTsEnd);
-    transitionImage(cmd, m_currentSwapImage, VK_IMAGE_ASPECT_COLOR_BIT,
+    transitionImage(cmd, m_frameCtx.swapImage, VK_IMAGE_ASPECT_COLOR_BIT,
         VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
         VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
         VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT, 0);
@@ -3504,13 +3504,8 @@ void App::run() {
         }
 
         // ---- Set frame context for pipeline lambda captures ----
-        m_currentFrameInFlight = frame.frameInFlight;
-        m_currentSwapView = frame.view;
-        m_currentSwapImage = frame.image;
-        m_currentSwapExtent = frame.extent;
-        m_currentProj = ubo.proj;
-        m_currentView = ubo.view;
-        m_currentInvViewProj = ubo.invViewProj;
+        m_frameCtx = {frame.frameInFlight, frame.view, frame.image,
+                      frame.extent, ubo.proj, ubo.view, ubo.invViewProj};
 
         // ---- Reset timestamp pool + write start ----
         vkCmdResetQueryPool(cmd, m_renderer.timestampPool(), qBase, m_renderer.kTimestampSlots);
@@ -3529,7 +3524,7 @@ void App::run() {
         recordPostProcessing(cmd);
 
         // ---- Finalize + submit main window ----
-        m_renderer.timestampValid(m_currentFrameInFlight) = true;
+        m_renderer.timestampValid(m_frameCtx.frameInFlight) = true;
         VK_CHECK(vkEndCommandBuffer(cmd));
 
         VkCommandBufferSubmitInfo csi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO};

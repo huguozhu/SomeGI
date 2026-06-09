@@ -4,6 +4,7 @@
 #include "scene/camera.h"
 #include "scene/draw_list.h"
 #include "renderer/core/frame_ubo.h"      // for FrameUBO type
+#include "renderer/core/frame_context.h"
 #include "renderer/core/frame_renderer.h"
 #include <map>
 #include <memory>
@@ -122,13 +123,7 @@ private:
     CachedSH m_cachedSH;
 
     // ---- Per-frame temp state ----
-    uint32_t m_currentFrameInFlight = 0;
-    VkImageView m_currentSwapView = VK_NULL_HANDLE;
-    VkImage     m_currentSwapImage = VK_NULL_HANDLE;
-    VkExtent2D  m_currentSwapExtent{};
-    glm::mat4   m_currentProj{1.0f};
-    glm::mat4   m_currentView{1.0f};
-    glm::mat4   m_currentInvViewProj{1.0f};
+    RenderFrame m_frameCtx;
 
     // ---- Stats ----
     float m_fpsAvg = 0.0f;
