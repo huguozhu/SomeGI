@@ -3249,6 +3249,12 @@ void App::run() {
             }
         }
 
+        // Read back GPU culling count from previous frame
+        if (m_useGpuDriven && m_countBuf.handle() != VK_NULL_HANDLE && m_drawCount > 0) {
+            uint32_t culled = *(uint32_t*)m_countBuf.mapped();
+            if (culled > 0 && culled <= m_drawCount) m_culledDrawCount = culled;
+        }
+
         // 设置帧相关成员供管线表 lambda 使用
         m_currentFrameInFlight = frame.frameInFlight;
         m_currentSwapView = frame.view;
