@@ -180,8 +180,8 @@ App::App() {
     m_swap   = std::make_unique<Swapchain>(*m_device, *m_window);
 
     // M9：检测 HW RT 支持并更新 dropdown 实现状态。
-    m_rtSupported = m_device->features().rayQuery && m_device->features().accelStruct;
-    if (m_rtSupported) {
+    bool rtSupported = m_device->features().rayQuery && m_device->features().accelStruct;
+    if (rtSupported) {
         kGis[10].implemented = true;
         kGis[12].implemented = true;   // Lumen-lite 同样依赖 HW RT
         std::printf("[init] HW RT supported — RayTracing GI + Lumen-lite enabled\n");
@@ -202,8 +202,7 @@ App::App() {
 
     // Delegate all rendering setup to FrameRenderer
     m_renderer.init(*m_device, m_pool, m_swap->extent(), m_msaaSamples,
-                    m_device->features().rayQuery && m_device->features().accelStruct,
-                    m_swap->format(), m_window->handle());
+                    rtSupported, m_swap->format(), m_window->handle());
 
     // Register all rendering steps into the pipeline table
     registerPipelineSteps();
@@ -331,10 +330,10 @@ void App::applySceneSelection() {
     }
 
     // M9：场景已加载，构建加速结构 + bindFrame（仅 HW 支持时）。
-    if (m_rtSupported) {
+    if (m_renderer.rtSupported()) {
         m_renderer.rtAS().build(*m_device, m_pool, m_scene, m_sceneGpu);
-        m_rtGiBound = (m_renderer.rtAS().instanceCount() > 0);
-        if (m_rtGiBound) {
+        m_renderer.rtGiBound() = (m_renderer.rtAS().instanceCount() > 0);
+        if (m_renderer.rtGiBound()) {
             m_renderer.rtGi().bindFrame(*m_device, m_renderer.rt(), m_renderer.gbuffer().frameUboHandle(), m_renderer.rtAS(), m_sceneGpu);
         }
         // M10：TLAS 就绪，绑定到 ReSTIR RT shade pipeline
@@ -345,8 +344,8 @@ void App::applySceneSelection() {
         m_renderer.ndgiPass().bindResources(*m_device, m_renderer.ndgi(), m_renderer.rtAS(), m_sceneGpu, m_renderer.rt(),
             m_renderer.gbuffer().frameUboHandle());
         // 如果 MLP 已经初始化过（从之前的场景），重新 init
-        if (!m_ndgiInited) {
-            m_ndgiInited = true;
+        if (!m_renderer.ndgiInited()) {
+            m_renderer.ndgiInited() = true;
             // initWeights 需要在 command buffer 中执行，延迟到下一帧 pipeline
         }
     }
@@ -383,44 +382,44 @@ void App::applySceneSelection() {
     {
         glm::vec3 padded = d * 1.10f;
         float maxExtent = std::max({padded.x, padded.y, padded.z});
-        m_lpvCellSize = maxExtent / float(kLpvResolution);
-        glm::vec3 gridHalf = glm::vec3(m_lpvCellSize * float(kLpvResolution) * 0.5f);
-        m_lpvGridMin = c - gridHalf;
+        m_renderer.lpvCellSize() = maxExtent / float(m_renderer.kLpvResolution);
+        glm::vec3 gridHalf = glm::vec3(m_renderer.lpvCellSize() * float(m_renderer.kLpvResolution) * 0.5f);
+        m_renderer.lpvGridMin() = c - gridHalf;
     }
 
     // M7 VXGI：128³ 网格同样按 scene AABB 摆，但 cell 更细 → 4× LPV 的精度。
     {
         glm::vec3 padded = d * 1.10f;
         float maxExtent = std::max({padded.x, padded.y, padded.z});
-        m_vxgiCellSize = maxExtent / float(kVxgiResolution);
-        glm::vec3 gridHalf = glm::vec3(m_vxgiCellSize * float(kVxgiResolution) * 0.5f);
-        m_vxgiGridMin = c - gridHalf;
+        m_renderer.vxgiCellSize() = maxExtent / float(m_renderer.kVxgiResolution);
+        glm::vec3 gridHalf = glm::vec3(m_renderer.vxgiCellSize() * float(m_renderer.kVxgiResolution) * 0.5f);
+        m_renderer.vxgiGridMin() = c - gridHalf;
     }
 
     // C.4 ReSTIR DI demo lights：按 scene AABB 摆 8 个 point light。
-    rebuildDemoLights();
+    m_renderer.rebuildDemoLights(m_scene);
 
     // M8 PRT：与 LPV 同 32³，但语义不同 —— 存的是 visibility transfer SH。
     {
         glm::vec3 padded = d * 1.10f;
         float maxExtent = std::max({padded.x, padded.y, padded.z});
-        m_prtCellSize = maxExtent / float(kPrtResolution);
-        glm::vec3 gridHalf = glm::vec3(m_prtCellSize * float(kPrtResolution) * 0.5f);
-        m_prtGridMin = c - gridHalf;
+        m_renderer.prtCellSize() = maxExtent / float(m_renderer.kPrtResolution);
+        glm::vec3 gridHalf = glm::vec3(m_renderer.prtCellSize() * float(m_renderer.kPrtResolution) * 0.5f);
+        m_renderer.prtGridMin() = c - gridHalf;
     }
-    m_prtBaked = false;   // scene 切换 → bake 失效，下一帧 main loop 入口重 bake
+    m_renderer.prtBaked() = false;   // scene 切换 → bake 失效，下一帧 main loop 入口重 bake
 
     // M11 DDGI：probe grid 按 scene AABB 摆，padding 5%；间距 = padded / probes。
     {
         glm::vec3 padded = d * 1.05f;
-        m_ddgiSpacing = glm::vec3(
+        m_renderer.ddgiSpacing() = glm::vec3(
             padded.x / float(DdgiResources::kProbesX - 1),
             padded.y / float(DdgiResources::kProbesY - 1),
             padded.z / float(DdgiResources::kProbesZ - 1));
         glm::vec3 half = padded * 0.5f;
-        m_ddgiOrigin = c - half;
+        m_renderer.ddgiOrigin() = c - half;
     }
-    m_ddgiAtlasInited = false;   // 重新初始化 atlas（清零等价于 first-time）
+    m_renderer.ddgiAtlasInited() = false;   // 重新初始化 atlas（清零等价于 first-time）
 
     bool interiorLike = std::max(d.x, d.z) > d.y * 2.0f;
     if (interiorLike) {
@@ -610,37 +609,37 @@ void App::applyGiSelection() {
     // 退化成纯 IBL diffuse。
     m_renderer.ssgi().enabled      = (effective == 2);
     m_renderer.rsmSample().enabled = (effective == 3);
-    m_lpvEnabled        = (effective == 4);
-    m_vxgiEnabled       = (effective == 5);
-    m_prtEnabled        = (effective == 6);
-    m_ddgiEnabled       = (effective == 7);
+    m_renderer.lpvEnabled()        = (effective == 4);
+    m_renderer.vxgiEnabled()       = (effective == 5);
+    m_renderer.prtEnabled()        = (effective == 6);
+    m_renderer.ddgiEnabled()       = (effective == 7);
     m_renderer.gtgi().enabled      = (effective == 8);
     m_renderer.sdfgiPass().enabled = (effective == 9);
-    // M9 RT GI (index 10) — 不用额外 enabled flag，render loop 检查 m_rtGiBound && m_giIndexApplied == 10
+    // M9 RT GI (index 10) — 不用额外 enabled flag，render loop 检查 m_renderer.rtGiBound() && m_giIndexApplied == 10
     m_renderer.restirPass().enabled = (effective == 11);   // C.4
-    m_lumenEnabled       = (effective == 12);   // L 阶段
+    m_renderer.lumenEnabled()       = (effective == 12);   // L 阶段
     // Lumen 模式自动开启 multi-bounce relight
-    if (m_lumenEnabled) m_vxgiRelightEnabled = true;
+    if (m_renderer.lumenEnabled()) m_renderer.vxgiRelightEnabled() = true;
 
     m_giIndexApplied = effective;
     std::printf("[GI] applied technique index=%d (UI=%d SSGI=%d RSM=%d LPV=%d VXGI=%d PRT=%d DDGI=%d GTGI=%d SDFGI=%d RT=%d ReSTIR=%d Lumen=%d)\n",
                 m_giIndexApplied, m_currentGiIndex,
                 m_renderer.ssgi().enabled ? 1 : 0, m_renderer.rsmSample().enabled ? 1 : 0,
-                m_lpvEnabled ? 1 : 0, m_vxgiEnabled ? 1 : 0,
-                m_prtEnabled ? 1 : 0, m_ddgiEnabled ? 1 : 0,
+                m_renderer.lpvEnabled() ? 1 : 0, m_renderer.vxgiEnabled() ? 1 : 0,
+                m_renderer.prtEnabled() ? 1 : 0, m_renderer.ddgiEnabled() ? 1 : 0,
                 m_renderer.gtgi().enabled ? 1 : 0,
                 m_renderer.sdfgiPass().enabled ? 1 : 0,
                 effective == 10 ? 1 : 0,
                 m_renderer.restirPass().enabled ? 1 : 0,
-                m_lumenEnabled ? 1 : 0);
+                m_renderer.lumenEnabled() ? 1 : 0);
 }
 
 void App::startBenchmark() {
-    m_benchResults.clear();
-    m_benchGi = 0; m_benchAa = 0; m_benchAo = 0;
-    m_benchRunning = true;
-    m_benchCollecting = false;
-    m_benchTimer = 0;
+    m_renderer.benchResults().clear();
+    m_renderer.benchGi() = 0; m_renderer.benchAa() = 0; m_renderer.benchAo() = 0;
+    m_renderer.benchRunning() = true;
+    m_renderer.benchCollecting() = false;
+    m_renderer.benchTimer() = 0;
     applyBenchSettings();
     std::printf("[bench] starting — GI(0..12) x AA(0..3) x AO(0..2) = 156 tests\n");
 }
@@ -649,19 +648,19 @@ void App::applyBenchSettings() {
     m_device->waitIdle();
 
     // GI
-    m_currentGiIndex = m_benchGi;
+    m_currentGiIndex = m_renderer.benchGi();
     m_giIndexApplied = -1;
     applyGiSelection();
 
     // AA
-    AAMethod newAa = (AAMethod)m_benchAa;
+    AAMethod newAa = (AAMethod)m_renderer.benchAa();
     if (newAa != m_aaMethod) {
         m_aaMethod = newAa;
         if (m_aaMethod == AAMethod::TAA || m_aaMethod == AAMethod::SMAA) {
             m_renderer.rt().ensureAaResources(*m_device);
             m_renderer.taa().bindResources(*m_device, m_renderer.rt(), 0);
             m_renderer.smaa().bindResources(*m_device, m_renderer.rt());
-            m_aaHistoryNeedsInit = true;
+            m_renderer.aaHistoryNeedsInit() = true;
         } else {
             m_renderer.rt().destroyAaResources();
             m_renderer.tonemap().bindOutput(*m_device, m_renderer.rt().ldrTonemap.view(), 0);
@@ -669,53 +668,53 @@ void App::applyBenchSettings() {
     }
 
     // AO
-    m_aoMethod = (AOMethod)m_benchAo;
+    m_aoMethod = (AOMethod)m_renderer.benchAo();
 
     // Reset collection state
-    m_benchCollecting = false;
-    m_benchTimer = 0;
-    m_benchFrameCount = 0;
-    m_benchFpsSum = 0; m_benchGpuSum = 0;
+    m_renderer.benchCollecting() = false;
+    m_renderer.benchTimer() = 0;
+    m_renderer.benchFrameCount() = 0;
+    m_renderer.benchFpsSum() = 0; m_renderer.benchGpuSum() = 0;
 }
 
 void App::tickBenchmark(float dt) {
-    if (!m_benchRunning) return;
+    if (!m_renderer.benchRunning()) return;
 
     // Cap dt to avoid waitIdle spikes skewing the timer
-    m_benchTimer += (dt > 0.1f ? 0.016f : dt);
+    m_renderer.benchTimer() += (dt > 0.1f ? 0.016f : dt);
 
     // Stabilization phase: wait for pipeline to settle
     float warmupTime = 0.8f;
     float collectTime = 1.0f;
-    if (!m_benchCollecting) {
-        if (m_benchTimer >= warmupTime) {
-            m_benchCollecting = true;
-            m_benchTimer = 0;
+    if (!m_renderer.benchCollecting()) {
+        if (m_renderer.benchTimer() >= warmupTime) {
+            m_renderer.benchCollecting() = true;
+            m_renderer.benchTimer() = 0;
         }
         return;
     }
 
     // Collection phase
-    m_benchGpuSum += m_renderer.gpuMs();
-    m_benchFrameCount++;
+    m_renderer.benchGpuSum() += m_renderer.gpuMs();
+    m_renderer.benchFrameCount()++;
 
-    if (m_benchTimer >= collectTime) {
-        BenchResult r{};
-        r.gi = m_benchGi; r.aa = m_benchAa; r.ao = m_benchAo;
-        r.fps = (float)m_benchFrameCount / m_benchTimer;
-        r.gpuMs = m_benchGpuSum / (float)m_benchFrameCount;
-        m_benchResults.push_back(r);
+    if (m_renderer.benchTimer() >= collectTime) {
+        FrameRenderer::BenchResult r{};
+        r.gi = m_renderer.benchGi(); r.aa = m_renderer.benchAa(); r.ao = m_renderer.benchAo();
+        r.fps = (float)m_renderer.benchFrameCount() / m_renderer.benchTimer();
+        r.gpuMs = m_renderer.benchGpuSum() / (float)m_renderer.benchFrameCount();
+        m_renderer.benchResults().push_back(r);
         std::printf("[bench] GI=%2d AA=%d AO=%d  fps=%6.1f  gpu=%.2fms\n",
                     r.gi, r.aa, r.ao, r.fps, r.gpuMs);
 
         // Advance to next combination
-        m_benchAo++;
-        if (m_benchAo >= 3) { m_benchAo = 0; m_benchAa++; }
-        if (m_benchAa >= 4) { m_benchAa = 0; m_benchGi++; }
+        m_renderer.benchAo()++;
+        if (m_renderer.benchAo() >= 3) { m_renderer.benchAo() = 0; m_renderer.benchAa()++; }
+        if (m_renderer.benchAa() >= 4) { m_renderer.benchAa() = 0; m_renderer.benchGi()++; }
 
-        if (m_benchGi >= 13) {
+        if (m_renderer.benchGi() >= 13) {
             // Done — print matrix + write CSV
-            m_benchRunning = false;
+            m_renderer.benchRunning() = false;
             static const char* kGiNames[] = {
                 "None", "IBL", "SSGI", "RSM", "LPV", "VXGI", "PRT",
                 "DDGI", "GTGI", "SDFGI", "RT GI", "ReSTIR", "Lumen"
@@ -731,7 +730,7 @@ void App::tickBenchmark(float dt) {
                 for (int aa = 0; aa < 4; ++aa) {
                     float sumFps = 0, sumGpu = 0;
                     int count = 0;
-                    for (auto& br : m_benchResults) {
+                    for (auto& br : m_renderer.benchResults()) {
                         if (br.gi == gi && br.aa == aa) { sumFps += br.fps; sumGpu += br.gpuMs; count++; }
                     }
                     if (count > 0)
@@ -748,11 +747,11 @@ void App::tickBenchmark(float dt) {
                 std::ofstream f("benchmark_results.csv");
                 if (f) {
                     f << "GI,AA,AO,FPS,GPU_ms\n";
-                    for (auto& br : m_benchResults) {
+                    for (auto& br : m_renderer.benchResults()) {
                         f << kGiNames[br.gi] << "," << kAaNames[br.aa] << ","
                           << kAoNameCsv[br.ao] << "," << br.fps << "," << br.gpuMs << "\n";
                     }
-                    std::printf("[bench] Wrote benchmark_results.csv (%zu rows)\n", m_benchResults.size());
+                    std::printf("[bench] Wrote benchmark_results.csv (%zu rows)\n", m_renderer.benchResults().size());
                 }
             }
 
@@ -768,7 +767,7 @@ void App::tickBenchmark(float dt) {
                         for (int aa = 0; aa < 4; ++aa) {
                             float sumFps = 0, sumGpu = 0;
                             int count = 0;
-                            for (auto& br : m_benchResults) {
+                            for (auto& br : m_renderer.benchResults()) {
                                 if (br.gi == gi && br.aa == aa) { sumFps += br.fps; sumGpu += br.gpuMs; count++; }
                             }
                             if (count > 0)
@@ -804,35 +803,35 @@ void App::onSwapchainResized() {
     // ReSTIR：reservoir image 跟 swapchain，需重建；lightBuffer 跨帧持久。
     m_renderer.restir().resize(*m_device, m_swap->extent());
     m_renderer.restirPass().bindResources(*m_device, m_renderer.restir(), m_renderer.vxgi(), m_renderer.rt(), m_renderer.gbuffer().frameUboHandle());
-    m_restirOutInited = false;
-    m_restirBootstrapped = false;
+    m_renderer.restirOutInited() = false;
+    m_renderer.restirBootstrapped() = false;
     m_renderer.rsmSample().bindFrame(*m_device, m_renderer.rt(),
         m_renderer.gbuffer().frameUboHandle(),
         m_renderer.rsmGeom().frameUboHandle(),
         m_renderer.rsmGeom().position(), m_renderer.rsmGeom().normal(), m_renderer.rsmGeom().flux());
     // M9：swapchain resize 后 rtGI 换新 view → 重绑 RT pass。
-    if (m_rtSupported && m_rtGiBound) {
+    if (m_renderer.rtSupported() && m_renderer.rtGiBound()) {
         m_renderer.rtGi().bindFrame(*m_device, m_renderer.rt(), m_renderer.gbuffer().frameUboHandle(), m_renderer.rtAS(), m_sceneGpu);
         // M10：resize 后重绑 ReSTIR RT shade 的 TLAS
         m_renderer.restirPass().bindResourcesRt(*m_device, m_renderer.restir(), m_renderer.rt(),
             m_renderer.gbuffer().frameUboHandle(), m_renderer.rtAS().tlas());
     }
     // L.2：swapchain resize 后 probe atlas 重建。
-    if (m_rtSupported) {
+    if (m_renderer.rtSupported()) {
         m_renderer.lumen().destroy();
         m_renderer.lumen().create(*m_device, m_swap->extent());
-        m_lumenAtlasInited = false;
-        m_lumenOutInited  = false;
-        if (m_lumenProbeInited) {
+        m_renderer.lumenAtlasInited() = false;
+        m_renderer.lumenOutInited()  = false;
+        if (m_renderer.lumenProbeInited()) {
             m_renderer.lumenProbe().bindResources(*m_device, m_renderer.lumen(), m_renderer.rtAS(), m_sceneGpu,
                                             m_renderer.vxgi(), m_renderer.rt(), m_renderer.gbuffer().frameUboHandle(),
-                                            m_vxgiSixAxisInited);
+                                            m_renderer.vxgiSixAxisInited());
         }
-        if (m_lumenFilterInited) {
+        if (m_renderer.lumenFilterInited()) {
             m_renderer.lumenFilter().bindResources(*m_device, m_renderer.lumen(), m_renderer.rt(),
                                              m_renderer.gbuffer().frameUboHandle());
         }
-        if (m_lumenGatherInited) {
+        if (m_renderer.lumenGatherInited()) {
             m_renderer.lumenGather().bindResources(*m_device, m_renderer.lumen(), m_renderer.rt(),
                                              m_renderer.gbuffer().frameUboHandle(), true);
         }
@@ -846,15 +845,15 @@ void App::onSwapchainResized() {
         m_renderer.smaa().init(*m_device, m_swap->extent());
         m_renderer.smaa().bindResources(*m_device, m_renderer.rt());
     }
-    bootstrapHdrPrev();   // fresh hdrPrev image — clear it before SSR can read
-    bootstrapSsgiTemporal();
+    m_renderer.bootstrapHdrPrev();   // fresh hdrPrev image — clear it before SSR can read
+    m_renderer.bootstrapSsgiTemporal();
 }
 
 void App::rebuildDemoLights() {
     // demo lights：按 scene AABB 摆若干 point light。
-    // 位置：4 个 ceiling 角 + 4 个 floor 角（默认 8 盏）。当 m_demoLightCount
-    // 改了，只取前 N 盏。颜色：HSV 环绕；intensity：m_demoLightIntensity。
-    m_demoLights.clear();
+    // 位置：4 个 ceiling 角 + 4 个 floor 角（默认 8 盏）。当 m_renderer.demoLightCount()
+    // 改了，只取前 N 盏。颜色：HSV 环绕；intensity：m_renderer.demoLightIntensity()。
+    m_renderer.demoLights().clear();
     glm::vec3 mn = m_scene.aabbMin;
     glm::vec3 mx = m_scene.aabbMax;
     if (glm::length(mx - mn) < 1e-3f) {
@@ -884,14 +883,14 @@ void App::rebuildDemoLights() {
         {1.0f, 0.8f, 0.4f},   // 橙
         {0.8f, 0.4f, 1.0f},   // 玫红
     };
-    int n = std::clamp(m_demoLightCount, 0, 8);
+    int n = std::clamp(m_renderer.demoLightCount(), 0, 8);
     for (int i = 0; i < n; ++i) {
         PointLightCpu L{};
         L.pos = corners[i];
         L.radius = 0.0f;
         L.color = colors[i];
-        L.intensity = m_demoLightIntensity;
-        m_demoLights.push_back(L);
+        L.intensity = m_renderer.demoLightIntensity();
+        m_renderer.demoLights().push_back(L);
     }
 }
 
@@ -932,7 +931,7 @@ void App::bakePrt() {
 
         // 2. voxelize：写 mip 0
         m_renderer.vxgiVoxelize().record(cmd, m_scene, m_sceneGpu,
-            m_vxgiGridMin, m_vxgiCellSize, kVxgiResolution);
+            m_renderer.vxgiGridMin(), m_renderer.vxgiCellSize(), m_renderer.kVxgiResolution);
 
         // 3. mipmap：内部把 src mip 转 SHADER_READ_ONLY，dst 保持 GENERAL。
         m_renderer.vxgiMipmap().record(cmd, m_renderer.vxgi());
@@ -979,8 +978,8 @@ void App::bakePrt() {
 
         // 6. prt_bake compute（写 SH16 16 系数 → 5 atlas）
         m_renderer.prtBake().record(cmd,
-            m_prtGridMin, m_prtCellSize, kPrtResolution,
-            m_vxgiGridMin, m_vxgiCellSize, kVxgiResolution,
+            m_renderer.prtGridMin(), m_renderer.prtCellSize(), m_renderer.kPrtResolution,
+            m_renderer.vxgiGridMin(), m_renderer.vxgiCellSize(), m_renderer.kVxgiResolution,
             64);
 
         // 7. prtTransfer A/B/C/D/E: GENERAL → SHADER_READ_ONLY（lighting 读）
@@ -995,7 +994,7 @@ void App::bakePrt() {
             vkCmdPipelineBarrier2(cmd, &pdi);
         }
     });
-    std::printf("[PRT] bake complete (%u^3 cells, 64 rays/cell)\n", kPrtResolution);
+    std::printf("[PRT] bake complete (%u^3 cells, 64 rays/cell)\n", m_renderer.kPrtResolution);
 }
 
 void App::bootstrapSsgiTemporal() {
@@ -1048,12 +1047,12 @@ void App::buildUI() {
                     m_dtMs, m_fpsAvg, m_renderer.gpuMs());
         ImGui::SameLine(); ImGui::TextDisabled("  F2: benchmark");
 
-        if (m_benchRunning) {
+        if (m_renderer.benchRunning()) {
             ImGui::SameLine();
             ImGui::TextColored(ImVec4(1,1,0,1), "  [%d/%d] GI=%d AA=%d AO=%d %s",
-                (int)m_benchResults.size(), 156,
-                m_benchGi, m_benchAa, m_benchAo,
-                m_benchCollecting ? "collecting..." : "warming...");
+                (int)m_renderer.benchResults().size(), 156,
+                m_renderer.benchGi(), m_renderer.benchAa(), m_renderer.benchAo(),
+                m_renderer.benchCollecting() ? "collecting..." : "warming...");
         }
 
         if (ImGui::BeginTabBar("MainTabs")) {
@@ -1105,10 +1104,10 @@ void App::buildUI() {
             uint32_t fi = 0; // show most recent frame's data
             float* ms = m_renderer.passTimes(fi);
             float maxMs = 0.02f; // min bar width
-            for (uint32_t i = kTsGBuffer; i <= kTsEnd; ++i)
+            for (uint32_t i = m_renderer.kTsGBuffer; i <= m_renderer.kTsEnd; ++i)
                 if (ms[i] > maxMs) maxMs = ms[i];
 
-            for (uint32_t i = kTsGBuffer; i <= kTsAA; ++i) {
+            for (uint32_t i = m_renderer.kTsGBuffer; i <= m_renderer.kTsAA; ++i) {
                 const char* name = m_renderer.passNames()[i];
                 float t = ms[i];
                 ImGui::Text("%-10s", name); ImGui::SameLine(80);
@@ -1288,7 +1287,7 @@ void App::buildUI() {
         ImGui::DragFloat("GTGI radius (px)", &m_renderer.gtgi().radiusPixels, 1.0f, 4.0f, 256.0f);
         ImGui::DragFloat("GTGI falloff", &m_renderer.gtgi().falloff, 0.1f, 0.5f, 50.0f);
 
-        if (m_rtSupported) {
+        if (m_renderer.rtSupported()) {
             ImGui::Separator();
             ImGui::Text("RT GI (Hardware Ray Tracing)");
             ImGui::Text("RT GI %s (switch GI to 'RayTracing')",
@@ -1318,7 +1317,7 @@ void App::buildUI() {
                     const char* itemLabel = giLabel(i, itemBuf, sizeof(itemBuf));
                     bool sel = (i == m_currentGiIndex);
                     if (ImGui::Selectable(itemLabel, sel)) {
-                        if (kGis[i].requiresRt && !m_rtSupported) {
+                        if (kGis[i].requiresRt && !m_renderer.rtSupported()) {
                             ImGui::OpenPopup("RT not supported");
                         } else {
                             m_currentGiIndex = i;
@@ -1343,31 +1342,31 @@ void App::buildUI() {
         ImGui::Separator();
 
         ImGui::Text("LPV (Light Propagation Volumes, 32^3)");
-        ImGui::Checkbox("LPV enabled",     &m_lpvEnabled);
+        ImGui::Checkbox("LPV enabled",     &m_renderer.lpvEnabled());
         ImGui::SliderInt("LPV iterations", &m_renderer.lpvProp().iterations, 0, 16);
         ImGui::DragFloat("LPV amplifier",  &m_renderer.lpvProp().occlusionAmplifier, 0.05f, 0.0f, 5.0f);
         ImGui::DragFloat("LPV GV occlusion", &m_renderer.lpvProp().gvOcclusionStrength, 0.05f, 0.0f, 5.0f);
         ImGui::Text("LPV cell=%.2f gridMin=(%.1f %.1f %.1f)",
-                    m_lpvCellSize, m_lpvGridMin.x, m_lpvGridMin.y, m_lpvGridMin.z);
+                    m_renderer.lpvCellSize(), m_renderer.lpvGridMin().x, m_renderer.lpvGridMin().y, m_renderer.lpvGridMin().z);
         ImGui::Separator();
 
         ImGui::Text("VXGI (Voxel Cone Tracing, 128^3)");
-        ImGui::Checkbox("VXGI enabled", &m_vxgiEnabled);
+        ImGui::Checkbox("VXGI enabled", &m_renderer.vxgiEnabled());
         ImGui::Text("VXGI cell=%.3f mipLevels=%u",
-                    m_vxgiCellSize, m_renderer.vxgi().mipLevels());
-        ImGui::Checkbox("VXGI multi-bounce relight", &m_vxgiRelightEnabled);
-        ImGui::SliderFloat("Relight bounce strength", &m_vxgiRelightStrength,
+                    m_renderer.vxgiCellSize(), m_renderer.vxgi().mipLevels());
+        ImGui::Checkbox("VXGI multi-bounce relight", &m_renderer.vxgiRelightEnabled());
+        ImGui::SliderFloat("Relight bounce strength", &m_renderer.vxgiRelightStrength(),
                            0.0f, 4.0f, "%.2f");
         ImGui::Separator();
 
         ImGui::Text("DDGI (Dynamic Diffuse GI)");
-        ImGui::Checkbox("DDGI enabled", &m_ddgiEnabled);
-        if (m_rtSupported) {
-            ImGui::Checkbox("NDGI enabled (neural GI)", &m_ndgiEnabled);
+        ImGui::Checkbox("DDGI enabled", &m_renderer.ddgiEnabled());
+        if (m_renderer.rtSupported()) {
+            ImGui::Checkbox("NDGI enabled (neural GI)", &m_renderer.ndgiEnabled());
         }
         ImGui::Text("spacing=(%.1f %.1f %.1f) origin=(%.1f %.1f %.1f)",
-                    m_ddgiSpacing.x, m_ddgiSpacing.y, m_ddgiSpacing.z,
-                    m_ddgiOrigin.x, m_ddgiOrigin.y, m_ddgiOrigin.z);
+                    m_renderer.ddgiSpacing().x, m_renderer.ddgiSpacing().y, m_renderer.ddgiSpacing().z,
+                    m_renderer.ddgiOrigin().x, m_renderer.ddgiOrigin().y, m_renderer.ddgiOrigin().z);
         ImGui::Separator();
 
         ImGui::Text("SDFGI (Signed Distance Field GI)");
@@ -1381,29 +1380,29 @@ void App::buildUI() {
         ImGui::Separator();
 
         ImGui::Text("PRT (Precomputed Radiance Transfer, 32^3)");
-        ImGui::Checkbox("PRT enabled", &m_prtEnabled);
+        ImGui::Checkbox("PRT enabled", &m_renderer.prtEnabled());
         const char* shLabels[] = {
             "SH4  (order-1, 4 coefs)",
             "SH9  (order-2, 9 coefs)",
             "SH16 (order-3, 16 coefs)"
         };
-        ImGui::Combo("PRT SH order", &m_prtShOrder, shLabels, 3);
-        if (m_prtShOrder < 0) m_prtShOrder = 0;
-        if (m_prtShOrder > 2) m_prtShOrder = 2;
-        ImGui::Text("PRT cell=%.2f baked=%s", m_prtCellSize, m_prtBaked ? "yes" : "no");
-        if (ImGui::Button("Re-bake PRT")) m_prtBaked = false;
+        ImGui::Combo("PRT SH order", &m_renderer.prtShOrder(), shLabels, 3);
+        if (m_renderer.prtShOrder() < 0) m_renderer.prtShOrder() = 0;
+        if (m_renderer.prtShOrder() > 2) m_renderer.prtShOrder() = 2;
+        ImGui::Text("PRT cell=%.2f baked=%s", m_renderer.prtCellSize(), m_renderer.prtBaked() ? "yes" : "no");
+        if (ImGui::Button("Re-bake PRT")) m_renderer.prtBaked() = false;
         ImGui::Separator();
 
-        bool restirUsingRt = m_rtSupported && m_rtGiBound && m_renderer.restirPass().enabled;
+        bool restirUsingRt = m_renderer.rtSupported() && m_renderer.rtGiBound() && m_renderer.restirPass().enabled;
         ImGui::Text("ReSTIR DI (%s)",
                     restirUsingRt ? "HW RT visibility" : "voxel visibility");
         ImGui::Text("ReSTIR %s (switch GI to 'ReSTIR DI')",
                     m_renderer.restirPass().enabled ? "active" : "off");
-        if (ImGui::SliderInt("ReSTIR demo lights", &m_demoLightCount, 0, 8)) {
-            rebuildDemoLights();
+        if (ImGui::SliderInt("ReSTIR demo lights", &m_renderer.demoLightCount(), 0, 8)) {
+            m_renderer.rebuildDemoLights(m_scene);
         }
-        if (ImGui::DragFloat("ReSTIR light intensity", &m_demoLightIntensity, 0.1f, 0.0f, 50.0f)) {
-            rebuildDemoLights();
+        if (ImGui::DragFloat("ReSTIR light intensity", &m_renderer.demoLightIntensity(), 0.1f, 0.0f, 50.0f)) {
+            m_renderer.rebuildDemoLights(m_scene);
         }
         ImGui::SliderInt("ReSTIR M (candidates)", &m_renderer.restirPass().numCandidates, 1, 32);
         ImGui::SliderInt("ReSTIR K (neighbors)", &m_renderer.restirPass().numNeighbors, 0, 8);
@@ -1414,8 +1413,8 @@ void App::buildUI() {
 
         ImGui::Text("Lumen-lite (Screen Probes)");
         ImGui::Text("Lumen %s (switch GI to 'Lumen-lite')",
-                    m_lumenEnabled ? "active" : "off");
-        if (m_lumenEnabled) {
+                    m_renderer.lumenEnabled() ? "active" : "off");
+        if (m_renderer.lumenEnabled()) {
             ImGui::Text("Probe grid: %d x %d (%d probes, %d rays each)",
                         m_renderer.lumen().probeGridW(), m_renderer.lumen().probeGridH(),
                         m_renderer.lumen().probeCount(), (int)LumenResources::kRaysPerProbe);
@@ -1427,7 +1426,7 @@ void App::buildUI() {
                                1.0f, 500.0f, "%.1f");
             ImGui::SliderFloat("Temporal alpha", &m_renderer.lumenFilter().temporalAlpha,
                                0.0f, 0.98f, "%.2f");
-            ImGui::Combo("Debug mode", &m_lumenDebugMode,
+            ImGui::Combo("Debug mode", &m_renderer.lumenDebugMode(),
                          "Normal\0SH DC only\0Probe colors\0Const radiance\0Fixed SH\0Clear only\0");
         }
 
@@ -1435,7 +1434,7 @@ void App::buildUI() {
         }
 
         // ===== Tab 5: Benchmark (only if data available) =====
-        if (!m_benchResults.empty() && ImGui::BeginTabItem("Benchmark")) {
+        if (!m_renderer.benchResults().empty() && ImGui::BeginTabItem("Benchmark")) {
 
         static const char* kGiNames[] = {
             "None", "IBL", "SSGI", "RSM", "LPV", "VXGI", "PRT",
@@ -1449,7 +1448,7 @@ void App::buildUI() {
             std::vector<float> fpsByGi(13, 0);
             std::vector<int>   cntByGi(13, 0);
             float maxFps = 1;
-            for (auto& r : m_benchResults) {
+            for (auto& r : m_renderer.benchResults()) {
                 fpsByGi[r.gi] += r.fps;
                 cntByGi[r.gi]++;
             }
@@ -1471,7 +1470,7 @@ void App::buildUI() {
             std::vector<float> fpsByAa(4, 0);
             std::vector<int>   cntByAa(4, 0);
             float maxFps = 1;
-            for (auto& r : m_benchResults) {
+            for (auto& r : m_renderer.benchResults()) {
                 fpsByAa[r.aa] += r.fps;
                 cntByAa[r.aa]++;
             }
@@ -1493,7 +1492,7 @@ void App::buildUI() {
             std::vector<float> gpuByGi(13, 0);
             std::vector<int>   cntByGi(13, 0);
             float maxGpu = 1;
-            for (auto& r : m_benchResults) {
+            for (auto& r : m_renderer.benchResults()) {
                 gpuByGi[r.gi] += r.gpuMs;
                 cntByGi[r.gi]++;
             }
@@ -1539,7 +1538,7 @@ void App::buildUI() {
 void App::writeTimestamp(VkCommandBuffer cmd, uint32_t slot) {
     vkCmdWriteTimestamp2(cmd, VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT,
                          m_renderer.timestampPool(),
-                         m_currentFrameInFlight * kTimestampSlots + slot);
+                         m_currentFrameInFlight * m_renderer.kTimestampSlots + slot);
 }
 
 void App::buildPipelineTable() {
@@ -1568,39 +1567,39 @@ void App::buildPipelineTable() {
     m_renderer.pipeline().setEnabled("ScreenGI-Clear", !screenGiOn);
 
     // === Phase 1.83: VXGI chain ===
-    bool needVoxelGrid = !fwd && (m_vxgiEnabled || m_ddgiEnabled || m_renderer.sdfgiPass().enabled
-                       || m_lumenEnabled || m_renderer.restirPass().enabled);
+    bool needVoxelGrid = !fwd && (m_renderer.vxgiEnabled() || m_renderer.ddgiEnabled() || m_renderer.sdfgiPass().enabled
+                       || m_renderer.lumenEnabled() || m_renderer.restirPass().enabled);
     m_renderer.pipeline().setEnabled("VXGI-Chain", needVoxelGrid);
     m_renderer.pipeline().setEnabled("VXGI-Bootstrap", !needVoxelGrid);
-    m_renderer.pipeline().setEnabled("VXGI-Relight", m_vxgiRelightEnabled && needVoxelGrid);
-    m_renderer.pipeline().setEnabled("VXGI-6Axis", m_lumenEnabled && m_vxgiSixAxisInited && needVoxelGrid);
+    m_renderer.pipeline().setEnabled("VXGI-Relight", m_renderer.vxgiRelightEnabled() && needVoxelGrid);
+    m_renderer.pipeline().setEnabled("VXGI-6Axis", m_renderer.lumenEnabled() && m_renderer.vxgiSixAxisInited() && needVoxelGrid);
 
     // === Phase 1.835: SDFGI ===
     m_renderer.pipeline().setEnabled("SDFGI", !fwd && m_renderer.sdfgiPass().enabled);
 
     // === Phase 1.836: RT GI ===
-    m_renderer.pipeline().setEnabled("RTGI", !fwd && m_rtGiBound && m_giIndexApplied == 10);
-    m_renderer.pipeline().setEnabled("RTGI-Clear", !fwd && m_rtGiInited && !(m_rtGiBound && m_giIndexApplied == 10));
+    m_renderer.pipeline().setEnabled("RTGI", !fwd && m_renderer.rtGiBound() && m_giIndexApplied == 10);
+    m_renderer.pipeline().setEnabled("RTGI-Clear", !fwd && m_renderer.rtGiInited() && !(m_renderer.rtGiBound() && m_giIndexApplied == 10));
 
     // === Phase 1.837: ReSTIR DI ===
     m_renderer.pipeline().setEnabled("ReSTIR", !fwd && m_renderer.restirPass().enabled);
     m_renderer.pipeline().setEnabled("ReSTIR-Clear", !fwd && !m_renderer.restirPass().enabled);
 
     // === Phase 1.84: DDGI ===
-    m_renderer.pipeline().setEnabled("DDGI", !fwd && m_ddgiEnabled);
-    m_renderer.pipeline().setEnabled("DDGI-Bootstrap", !fwd && !m_ddgiEnabled);
-    m_renderer.pipeline().setEnabled("NDGI", m_ndgiEnabled && m_rtSupported);
+    m_renderer.pipeline().setEnabled("DDGI", !fwd && m_renderer.ddgiEnabled());
+    m_renderer.pipeline().setEnabled("DDGI-Bootstrap", !fwd && !m_renderer.ddgiEnabled());
+    m_renderer.pipeline().setEnabled("NDGI", m_renderer.ndgiEnabled() && m_renderer.rtSupported());
 
     // === Phase 1.845: Lumen-lite ===
-    m_renderer.pipeline().setEnabled("Lumen-Probe", !fwd && m_lumenEnabled && m_lumenDebugMode != 5);
-    m_renderer.pipeline().setEnabled("Lumen-Filter", !fwd && m_lumenEnabled && m_lumenDebugMode != 5);
-    m_renderer.pipeline().setEnabled("Lumen-Gather", !fwd && m_lumenEnabled && m_lumenDebugMode != 5);
-    m_renderer.pipeline().setEnabled("Lumen-DebugClear", !fwd && m_lumenEnabled && m_lumenDebugMode == 5);
-    m_renderer.pipeline().setEnabled("Lumen-Clear", !fwd && !m_lumenEnabled);
+    m_renderer.pipeline().setEnabled("Lumen-Probe", !fwd && m_renderer.lumenEnabled() && m_renderer.lumenDebugMode() != 5);
+    m_renderer.pipeline().setEnabled("Lumen-Filter", !fwd && m_renderer.lumenEnabled() && m_renderer.lumenDebugMode() != 5);
+    m_renderer.pipeline().setEnabled("Lumen-Gather", !fwd && m_renderer.lumenEnabled() && m_renderer.lumenDebugMode() != 5);
+    m_renderer.pipeline().setEnabled("Lumen-DebugClear", !fwd && m_renderer.lumenEnabled() && m_renderer.lumenDebugMode() == 5);
+    m_renderer.pipeline().setEnabled("Lumen-Clear", !fwd && !m_renderer.lumenEnabled());
 
     // === Phase 1.85: LPV ===
-    m_renderer.pipeline().setEnabled("LPV", !fwd && m_lpvEnabled);
-    m_renderer.pipeline().setEnabled("LPV-Bootstrap", !fwd && !m_lpvEnabled);
+    m_renderer.pipeline().setEnabled("LPV", !fwd && m_renderer.lpvEnabled());
+    m_renderer.pipeline().setEnabled("LPV-Bootstrap", !fwd && !m_renderer.lpvEnabled());
 
     // === Phase 1.8: RSM Sample ===
     m_renderer.pipeline().setEnabled("RSM-Sample", !fwd && m_renderer.rsmSample().enabled);
@@ -1630,7 +1629,7 @@ void App::registerPipelineSteps() {
         .name = "Forward",
         .phase = "PrePass",
         .enabled = false,
-        .timestampSlot = kTsGBuffer,
+        .timestampSlot = m_renderer.kTsGBuffer,
         .record = [this](VkCommandBuffer cmd) {
             // hdrColor → COLOR_ATTACHMENT, depth → DEPTH_ATTACHMENT
             transitionImage(cmd, m_renderer.rt().hdrColor.image(), VK_IMAGE_ASPECT_COLOR_BIT,
@@ -1662,11 +1661,11 @@ void App::registerPipelineSteps() {
                 VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                 VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
 
-            writeTimestamp(cmd, kTsGBuffer);
-            writeTimestamp(cmd, kTsAO);
-            writeTimestamp(cmd, kTsVoxelGI);
-            writeTimestamp(cmd, kTsLighting);
-            writeTimestamp(cmd, kTsSkybox);
+            m_renderer.writeTimestamp(cmd, m_renderer.kTsGBuffer);
+            m_renderer.writeTimestamp(cmd, m_renderer.kTsAO);
+            m_renderer.writeTimestamp(cmd, m_renderer.kTsVoxelGI);
+            m_renderer.writeTimestamp(cmd, m_renderer.kTsLighting);
+            m_renderer.writeTimestamp(cmd, m_renderer.kTsSkybox);
         }
     });
 
@@ -1676,7 +1675,7 @@ void App::registerPipelineSteps() {
     m_renderer.pipeline().addStep({
         .name = "GBuffer",
         .phase = "PrePass",
-        .timestampSlot = kTsGBuffer,
+        .timestampSlot = m_renderer.kTsGBuffer,
         .record = [this](VkCommandBuffer cmd) {
             // MSAA images → attachment layout
             auto toColorAttach = [&](VkImage img) {
@@ -1728,7 +1727,7 @@ void App::registerPipelineSteps() {
                 VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                 VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
 
-            writeTimestamp(cmd, kTsGBuffer);
+            m_renderer.writeTimestamp(cmd, m_renderer.kTsGBuffer);
         }
     });
 
@@ -1930,7 +1929,7 @@ void App::registerPipelineSteps() {
         .name = "TS-AO",
         .phase = "AO",
         .record = [this](VkCommandBuffer cmd) {
-            writeTimestamp(cmd, kTsAO);
+            m_renderer.writeTimestamp(cmd, m_renderer.kTsAO);
         }
     });
 
@@ -1972,7 +1971,7 @@ void App::registerPipelineSteps() {
 
             // 2. Voxelize: scatter all primitives to mip 0
             m_renderer.vxgiVoxelize().record(cmd, m_scene, m_sceneGpu,
-                m_vxgiGridMin, m_vxgiCellSize, kVxgiResolution);
+                m_renderer.vxgiGridMin(), m_renderer.vxgiCellSize(), m_renderer.kVxgiResolution);
 
             // 3. Inject: RSM flux → voxel mip 0 RGB
             {
@@ -1990,7 +1989,7 @@ void App::registerPipelineSteps() {
                 vdi.imageMemoryBarrierCount = 1; vdi.pImageMemoryBarriers = &vbar;
                 vkCmdPipelineBarrier2(cmd, &vdi);
             }
-            m_renderer.vxgiInject().record(cmd, kVxgiResolution, m_vxgiGridMin, m_vxgiCellSize);
+            m_renderer.vxgiInject().record(cmd, m_renderer.kVxgiResolution, m_renderer.vxgiGridMin(), m_renderer.vxgiCellSize());
 
             // 4. Mipmap: iterate src mip i → dst mip i+1
             m_renderer.vxgiMipmap().record(cmd, m_renderer.vxgi());
@@ -2038,7 +2037,7 @@ void App::registerPipelineSteps() {
         .phase = "GI",
         .enabled = false,
         .record = [this](VkCommandBuffer cmd) {
-            int bounces = m_lumenEnabled ? 3 : 1;
+            int bounces = m_renderer.lumenEnabled() ? 3 : 1;
 
             auto transImg = [&](VkImage img, VkImageLayout oldL, VkImageLayout newL,
                                 VkPipelineStageFlags2 srcS, VkAccessFlags2 srcA,
@@ -2072,7 +2071,7 @@ void App::registerPipelineSteps() {
                 VkImageCopy region{};
                 region.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
                 region.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-                region.extent = {kVxgiResolution, kVxgiResolution, kVxgiResolution};
+                region.extent = {m_renderer.kVxgiResolution, m_renderer.kVxgiResolution, m_renderer.kVxgiResolution};
                 vkCmdCopyImage(cmd,
                     srcImg, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                     m_renderer.vxgi().image().image(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
@@ -2092,9 +2091,9 @@ void App::registerPipelineSteps() {
                 VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
                 VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                 VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
-            m_renderer.vxgiRelight().record(cmd, m_renderer.vxgiRelight().voxelSet(), kVxgiResolution,
-                m_renderer.vxgi().mipLevels(), m_vxgiCellSize, m_vxgiGridMin,
-                m_vxgiRelightStrength);
+            m_renderer.vxgiRelight().record(cmd, m_renderer.vxgiRelight().voxelSet(), m_renderer.kVxgiResolution,
+                m_renderer.vxgi().mipLevels(), m_renderer.vxgiCellSize(), m_renderer.vxgiGridMin(),
+                m_renderer.vxgiRelightStrength());
 
             if (bounces >= 2) {
                 transImg(m_renderer.vxgi().relightScratch().image(),
@@ -2110,9 +2109,9 @@ void App::registerPipelineSteps() {
                     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                     VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
                 // Bounce 2: read scratch → write scratch2
-                m_renderer.vxgiRelight().record(cmd, m_renderer.vxgiRelight().pingSet0(), kVxgiResolution,
-                    m_renderer.vxgi().mipLevels(), m_vxgiCellSize, m_vxgiGridMin,
-                    m_vxgiRelightStrength);
+                m_renderer.vxgiRelight().record(cmd, m_renderer.vxgiRelight().pingSet0(), m_renderer.kVxgiResolution,
+                    m_renderer.vxgi().mipLevels(), m_renderer.vxgiCellSize(), m_renderer.vxgiGridMin(),
+                    m_renderer.vxgiRelightStrength());
 
                 if (bounces >= 3) {
                     transImg(m_renderer.vxgi().relightScratch2().image(),
@@ -2130,9 +2129,9 @@ void App::registerPipelineSteps() {
                         VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                         VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
                     // Bounce 3: read scratch2 → write scratch
-                    m_renderer.vxgiRelight().record(cmd, m_renderer.vxgiRelight().pingSet1(), kVxgiResolution,
-                        m_renderer.vxgi().mipLevels(), m_vxgiCellSize, m_vxgiGridMin,
-                        m_vxgiRelightStrength);
+                    m_renderer.vxgiRelight().record(cmd, m_renderer.vxgiRelight().pingSet1(), m_renderer.kVxgiResolution,
+                        m_renderer.vxgi().mipLevels(), m_renderer.vxgiCellSize(), m_renderer.vxgiGridMin(),
+                        m_renderer.vxgiRelightStrength());
                     blitScratchToVoxel(m_renderer.vxgi().relightScratch().image());
                 } else {
                     blitScratchToVoxel(m_renderer.vxgi().relightScratch2().image());
@@ -2149,13 +2148,13 @@ void App::registerPipelineSteps() {
         .phase = "GI",
         .enabled = false,
         .record = [this](VkCommandBuffer cmd) {
-            VkImageLayout axisOldL = m_lumenAtlasInited
+            VkImageLayout axisOldL = m_renderer.lumenAtlasInited()
                 ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
                 : VK_IMAGE_LAYOUT_UNDEFINED;
-            VkPipelineStageFlags2 axisSrcS = m_lumenAtlasInited
+            VkPipelineStageFlags2 axisSrcS = m_renderer.lumenAtlasInited()
                 ? VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT
                 : VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
-            VkAccessFlags2 axisSrcA = m_lumenAtlasInited
+            VkAccessFlags2 axisSrcA = m_renderer.lumenAtlasInited()
                 ? VK_ACCESS_2_SHADER_SAMPLED_READ_BIT : 0u;
 
             auto transAxisToGeneral = [&](VkImage img) {
@@ -2175,8 +2174,8 @@ void App::registerPipelineSteps() {
             transAxisToGeneral(m_renderer.vxgi().sixAxisY().image());
             transAxisToGeneral(m_renderer.vxgi().sixAxisZ().image());
 
-            m_renderer.vxgi6Axis().record(cmd, kVxgiResolution, m_renderer.vxgi().mipLevels(),
-                m_vxgiCellSize, m_vxgiGridMin, m_vxgiRelightStrength);
+            m_renderer.vxgi6Axis().record(cmd, m_renderer.kVxgiResolution, m_renderer.vxgi().mipLevels(),
+                m_renderer.vxgiCellSize(), m_renderer.vxgiGridMin(), m_renderer.vxgiRelightStrength());
 
             auto transAxisToSRO = [&](VkImage img) {
                 VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
@@ -2231,7 +2230,7 @@ void App::registerPipelineSteps() {
         .phase = "GI",
         .enabled = false,
         .record = [this](VkCommandBuffer cmd) {
-            if (!m_sdfgiBootstrapped) {
+            if (!m_renderer.sdfgiBootstrapped()) {
                 auto bootstrapToGeneral = [&](VkImage img) {
                     VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
                     b.srcStageMask = VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
@@ -2249,7 +2248,7 @@ void App::registerPipelineSteps() {
                 bootstrapToGeneral(m_renderer.sdfgi().seedA().image());
                 bootstrapToGeneral(m_renderer.sdfgi().seedB().image());
                 bootstrapToGeneral(m_renderer.sdfgi().udf().image());
-                m_sdfgiBootstrapped = true;
+                m_renderer.sdfgiBootstrapped() = true;
             }
             transitionImage(cmd, m_renderer.rt().ssgi.image(), VK_IMAGE_ASPECT_COLOR_BIT,
                 VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
@@ -2259,7 +2258,7 @@ void App::registerPipelineSteps() {
                 VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                 VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
 
-            m_renderer.sdfgiPass().record(cmd, m_renderer.sdfgi(), m_renderer.rt(), m_frameIndex,
+            m_renderer.sdfgiPass().record(cmd, m_renderer.sdfgi(), m_renderer.rt(), m_renderer.frameIndex(),
                 m_renderer.sdfgiPass().seedThreshold, m_renderer.sdfgiPass().maxDistCells,
                 (uint32_t)m_renderer.sdfgiPass().numRays,
                 (uint32_t)m_renderer.sdfgiPass().maxSteps,
@@ -2329,8 +2328,8 @@ void App::registerPipelineSteps() {
         .phase = "GI",
         .enabled = false,
         .record = [this](VkCommandBuffer cmd) {
-            m_renderer.restir().updateLights(m_demoLights);
-            if (!m_restirBootstrapped) {
+            m_renderer.restir().updateLights(m_renderer.demoLights());
+            if (!m_renderer.restirBootstrapped()) {
                 auto bootstrapToGeneral = [&](VkImage img) {
                     VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
                     b.srcStageMask = VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
@@ -2347,22 +2346,22 @@ void App::registerPipelineSteps() {
                 };
                 bootstrapToGeneral(m_renderer.restir().reservoirA().image());
                 bootstrapToGeneral(m_renderer.restir().reservoirB().image());
-                m_restirBootstrapped = true;
+                m_renderer.restirBootstrapped() = true;
             }
-            VkImageLayout restirOld = m_restirOutInited
+            VkImageLayout restirOld = m_renderer.restirOutInited()
                 ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
                 : VK_IMAGE_LAYOUT_UNDEFINED;
             transitionImage(cmd, m_renderer.rt().restir.image(), VK_IMAGE_ASPECT_COLOR_BIT,
                 restirOld, VK_IMAGE_LAYOUT_GENERAL,
-                m_restirOutInited ? VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT
+                m_renderer.restirOutInited() ? VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT
                                    : VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT,
-                m_restirOutInited ? VK_ACCESS_2_SHADER_SAMPLED_READ_BIT : 0,
+                m_renderer.restirOutInited() ? VK_ACCESS_2_SHADER_SAMPLED_READ_BIT : 0,
                 VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                 VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
-            m_restirOutInited = true;
+            m_renderer.restirOutInited() = true;
 
-            uint32_t numLights = (uint32_t)m_demoLights.size();
-            bool useRtVis = m_rtSupported && m_rtGiBound;
+            uint32_t numLights = (uint32_t)m_renderer.demoLights().size();
+            bool useRtVis = m_renderer.rtSupported() && m_renderer.rtGiBound();
             m_renderer.restirPass().record(cmd, m_renderer.restir(), m_renderer.rt(),
                 numLights,
                 (uint32_t)m_renderer.restirPass().numCandidates,
@@ -2370,7 +2369,7 @@ void App::registerPipelineSteps() {
                 m_renderer.restirPass().spatialRadius,
                 (uint32_t)m_renderer.restirPass().shadowSteps,
                 m_renderer.restirPass().intensityScale,
-                m_frameIndex,
+                m_renderer.frameIndex(),
                 useRtVis);
 
             transitionImage(cmd, m_renderer.rt().restir.image(), VK_IMAGE_ASPECT_COLOR_BIT,
@@ -2388,14 +2387,14 @@ void App::registerPipelineSteps() {
         .phase = "GI",
         .enabled = false,
         .record = [this](VkCommandBuffer cmd) {
-            VkImageLayout restirOld = m_restirOutInited
+            VkImageLayout restirOld = m_renderer.restirOutInited()
                 ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
                 : VK_IMAGE_LAYOUT_UNDEFINED;
             transitionImage(cmd, m_renderer.rt().restir.image(), VK_IMAGE_ASPECT_COLOR_BIT,
                 restirOld, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                m_restirOutInited ? VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT
+                m_renderer.restirOutInited() ? VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT
                                    : VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT,
-                m_restirOutInited ? VK_ACCESS_2_SHADER_SAMPLED_READ_BIT : 0,
+                m_renderer.restirOutInited() ? VK_ACCESS_2_SHADER_SAMPLED_READ_BIT : 0,
                 VK_PIPELINE_STAGE_2_CLEAR_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
             VkClearColorValue zero{};
             VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
@@ -2407,7 +2406,7 @@ void App::registerPipelineSteps() {
                 VK_PIPELINE_STAGE_2_CLEAR_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
                 VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                 VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
-            m_restirOutInited = true;
+            m_renderer.restirOutInited() = true;
         }
     });
 
@@ -2434,12 +2433,12 @@ void App::registerPipelineSteps() {
                 vkCmdPipelineBarrier2(cmd, &di);
             };
 
-            VkImageLayout oldAtlasL = m_ddgiAtlasInited
+            VkImageLayout oldAtlasL = m_renderer.ddgiAtlasInited()
                 ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
                 : VK_IMAGE_LAYOUT_UNDEFINED;
-            VkAccessFlags2 srcAcc = m_ddgiAtlasInited
+            VkAccessFlags2 srcAcc = m_renderer.ddgiAtlasInited()
                 ? VK_ACCESS_2_SHADER_SAMPLED_READ_BIT : 0;
-            VkPipelineStageFlags2 srcStg = m_ddgiAtlasInited
+            VkPipelineStageFlags2 srcStg = m_renderer.ddgiAtlasInited()
                 ? VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT
                 : VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
 
@@ -2454,10 +2453,10 @@ void App::registerPipelineSteps() {
                 VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                 VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
 
-            float jitterRot = float((m_frameIndex % 360) * 0.0174532925);
-            m_renderer.ddgiPass().record(cmd, m_renderer.ddgi(), m_ddgiOrigin, m_ddgiSpacing,
-                m_vxgiGridMin, m_vxgiCellSize, kVxgiResolution,
-                jitterRot, m_frameIndex);
+            float jitterRot = float((m_renderer.frameIndex() % 360) * 0.0174532925);
+            m_renderer.ddgiPass().record(cmd, m_renderer.ddgi(), m_renderer.ddgiOrigin(), m_renderer.ddgiSpacing(),
+                m_renderer.vxgiGridMin(), m_renderer.vxgiCellSize(), m_renderer.kVxgiResolution,
+                jitterRot, m_renderer.frameIndex());
 
             barrierAtlas(m_renderer.ddgi().irradiance().image(),
                 VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
@@ -2471,7 +2470,7 @@ void App::registerPipelineSteps() {
                 VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
                 VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                 VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
-            m_ddgiAtlasInited = true;
+            m_renderer.ddgiAtlasInited() = true;
         }
     });
 
@@ -2504,7 +2503,7 @@ void App::registerPipelineSteps() {
                 VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
                 VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                 VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
-            m_ddgiAtlasInited = true;
+            m_renderer.ddgiAtlasInited() = true;
         }
     });
 
@@ -2516,13 +2515,13 @@ void App::registerPipelineSteps() {
         .phase = "GI",
         .enabled = false,
         .record = [this](VkCommandBuffer cmd) {
-            VkImageLayout oldL = m_lumenOutInited
+            VkImageLayout oldL = m_renderer.lumenOutInited()
                 ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
                 : VK_IMAGE_LAYOUT_UNDEFINED;
-            VkPipelineStageFlags2 srcS = m_lumenOutInited
+            VkPipelineStageFlags2 srcS = m_renderer.lumenOutInited()
                 ? VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT
                 : VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
-            VkAccessFlags2 srcA = m_lumenOutInited
+            VkAccessFlags2 srcA = m_renderer.lumenOutInited()
                 ? VK_ACCESS_2_SHADER_SAMPLED_READ_BIT : 0u;
             transitionImage(cmd, m_renderer.rt().lumenGI.image(), VK_IMAGE_ASPECT_COLOR_BIT,
                 oldL, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
@@ -2540,7 +2539,7 @@ void App::registerPipelineSteps() {
                 VK_PIPELINE_STAGE_2_CLEAR_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
                 VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                 VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
-            m_lumenOutInited = true;
+            m_renderer.lumenOutInited() = true;
         }
     });
 
@@ -2549,22 +2548,22 @@ void App::registerPipelineSteps() {
         .phase = "GI",
         .enabled = false,
         .record = [this](VkCommandBuffer cmd) {
-            if (!m_lumenProbeInited) {
+            if (!m_renderer.lumenProbeInited()) {
                 m_renderer.lumenProbe().init(*m_device);
                 m_renderer.lumenProbe().bindResources(*m_device, m_renderer.lumen(), m_renderer.rtAS(), m_sceneGpu,
                                                 m_renderer.vxgi(), m_renderer.rt(), m_renderer.gbuffer().frameUboHandle(),
-                                                m_vxgiSixAxisInited);
-                m_lumenProbeInited = true;
+                                                m_renderer.vxgiSixAxisInited());
+                m_renderer.lumenProbeInited() = true;
             }
             // Transition probe + filtered atlas to GENERAL
             {
-                VkImageLayout oldL = m_lumenAtlasInited
+                VkImageLayout oldL = m_renderer.lumenAtlasInited()
                     ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
                     : VK_IMAGE_LAYOUT_UNDEFINED;
-                VkPipelineStageFlags2 srcS = m_lumenAtlasInited
+                VkPipelineStageFlags2 srcS = m_renderer.lumenAtlasInited()
                     ? VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT
                     : VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
-                VkAccessFlags2 srcA = m_lumenAtlasInited
+                VkAccessFlags2 srcA = m_renderer.lumenAtlasInited()
                     ? VK_ACCESS_2_SHADER_SAMPLED_READ_BIT : 0u;
                 auto transToGeneral = [&](VkImage img) {
                     VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
@@ -2581,11 +2580,11 @@ void App::registerPipelineSteps() {
                 };
                 transToGeneral(m_renderer.lumen().probeAtlas().image());
                 transToGeneral(m_renderer.lumen().filteredAtlas().image());
-                m_lumenAtlasInited = true;
+                m_renderer.lumenAtlasInited() = true;
             }
-            m_renderer.lumenProbe().record(cmd, m_renderer.lumen(), m_frameIndex,
-                                     m_lumenDebugMode >= 3 ? (uint32_t)m_lumenDebugMode - 1u
-                                                           : (m_vxgiSixAxisInited ? 1u : 0u));
+            m_renderer.lumenProbe().record(cmd, m_renderer.lumen(), m_renderer.frameIndex(),
+                                     m_renderer.lumenDebugMode() >= 3 ? (uint32_t)m_renderer.lumenDebugMode() - 1u
+                                                           : (m_renderer.vxgiSixAxisInited() ? 1u : 0u));
 
             // ProbeAtlas GENERAL → SR_O for filter
             {
@@ -2610,7 +2609,7 @@ void App::registerPipelineSteps() {
         .phase = "GI",
         .enabled = false,
         .record = [this](VkCommandBuffer cmd) {
-            if (!m_lumenFilterInited) {
+            if (!m_renderer.lumenFilterInited()) {
                 VkImageMemoryBarrier2 pb{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
                 pb.srcStageMask = VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
                 pb.srcAccessMask = 0;
@@ -2627,7 +2626,7 @@ void App::registerPipelineSteps() {
                 m_renderer.lumenFilter().init(*m_device);
                 m_renderer.lumenFilter().bindResources(*m_device, m_renderer.lumen(), m_renderer.rt(),
                                                  m_renderer.gbuffer().frameUboHandle());
-                m_lumenFilterInited = true;
+                m_renderer.lumenFilterInited() = true;
             }
             m_renderer.lumenFilter().record(cmd, m_renderer.lumen(), m_renderer.rt());
 
@@ -2680,19 +2679,19 @@ void App::registerPipelineSteps() {
         .phase = "GI",
         .enabled = false,
         .record = [this](VkCommandBuffer cmd) {
-            if (!m_lumenGatherInited) {
+            if (!m_renderer.lumenGatherInited()) {
                 m_renderer.lumenGather().init(*m_device);
                 m_renderer.lumenGather().bindResources(*m_device, m_renderer.lumen(), m_renderer.rt(),
                                                  m_renderer.gbuffer().frameUboHandle(), true);
-                m_lumenGatherInited = true;
+                m_renderer.lumenGatherInited() = true;
             }
             {
-                VkImageLayout oldL = m_lumenOutInited
+                VkImageLayout oldL = m_renderer.lumenOutInited()
                     ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
                     : VK_IMAGE_LAYOUT_UNDEFINED;
-                VkAccessFlags2 srcA = m_lumenOutInited
+                VkAccessFlags2 srcA = m_renderer.lumenOutInited()
                     ? VK_ACCESS_2_SHADER_SAMPLED_READ_BIT : 0;
-                VkPipelineStageFlags2 srcS = m_lumenOutInited
+                VkPipelineStageFlags2 srcS = m_renderer.lumenOutInited()
                     ? VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT
                     : VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
                 VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
@@ -2708,7 +2707,7 @@ void App::registerPipelineSteps() {
                 vkCmdPipelineBarrier2(cmd, &di);
             }
             m_renderer.lumenGather().record(cmd, m_renderer.lumen(), m_renderer.rt(),
-                                     (uint32_t)m_lumenDebugMode);
+                                     (uint32_t)m_renderer.lumenDebugMode());
 
             {
                 VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
@@ -2724,7 +2723,7 @@ void App::registerPipelineSteps() {
                 di.imageMemoryBarrierCount = 1; di.pImageMemoryBarriers = &b;
                 vkCmdPipelineBarrier2(cmd, &di);
             }
-            m_lumenOutInited = true;
+            m_renderer.lumenOutInited() = true;
         }
     });
 
@@ -2733,13 +2732,13 @@ void App::registerPipelineSteps() {
         .phase = "GI",
         .enabled = false,
         .record = [this](VkCommandBuffer cmd) {
-            VkImageLayout oldL = m_lumenOutInited
+            VkImageLayout oldL = m_renderer.lumenOutInited()
                 ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
                 : VK_IMAGE_LAYOUT_UNDEFINED;
-            VkPipelineStageFlags2 srcS = m_lumenOutInited
+            VkPipelineStageFlags2 srcS = m_renderer.lumenOutInited()
                 ? VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT
                 : VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
-            VkAccessFlags2 srcA = m_lumenOutInited
+            VkAccessFlags2 srcA = m_renderer.lumenOutInited()
                 ? VK_ACCESS_2_SHADER_SAMPLED_READ_BIT : 0;
             transitionImage(cmd, m_renderer.rt().lumenGI.image(), VK_IMAGE_ASPECT_COLOR_BIT,
                 oldL, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
@@ -2755,7 +2754,7 @@ void App::registerPipelineSteps() {
                 VK_PIPELINE_STAGE_2_CLEAR_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
                 VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                 VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
-            m_lumenOutInited = true;
+            m_renderer.lumenOutInited() = true;
         }
     });
 
@@ -2767,7 +2766,7 @@ void App::registerPipelineSteps() {
         .phase = "GI",
         .enabled = false,
         .record = [this](VkCommandBuffer cmd) {
-            m_renderer.lpvInject().record(cmd, kLpvResolution, m_lpvGridMin, m_lpvCellSize);
+            m_renderer.lpvInject().record(cmd, m_renderer.kLpvResolution, m_renderer.lpvGridMin(), m_renderer.lpvCellSize());
 
             transitionImage(cmd, m_renderer.lpv().gv().image(), VK_IMAGE_ASPECT_COLOR_BIT,
                 VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
@@ -2805,7 +2804,7 @@ void App::registerPipelineSteps() {
                     VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
 
                 m_renderer.lpvProp().record(cmd, m_renderer.lpv().curIdx(),
-                                 kLpvResolution, m_renderer.lpvProp().occlusionAmplifier,
+                                 m_renderer.kLpvResolution, m_renderer.lpvProp().occlusionAmplifier,
                                  m_renderer.lpvProp().gvOcclusionStrength);
                 m_renderer.lpv().swap();
             }
@@ -2891,13 +2890,13 @@ void App::registerPipelineSteps() {
         .enabled = false,
         .record = [this](VkCommandBuffer cmd) {
             // 延迟到第一帧：此时 bindResources 已执行，descriptor 已就绪
-            if (!m_ndgiInited) {
+            if (!m_renderer.ndgiInited()) {
                 m_renderer.ndgiPass().initWeights(cmd);
-                m_ndgiInited = true;
+                m_renderer.ndgiInited() = true;
             }
-            m_renderer.ndgiPass().record(cmd, m_renderer.ndgi(), m_frameIndex,
-                m_ddgiOrigin, m_ddgiSpacing);
-            m_renderer.ndgiPass().recordTraining(cmd, m_renderer.ndgi(), m_frameIndex);
+            m_renderer.ndgiPass().record(cmd, m_renderer.ndgi(), m_renderer.frameIndex(),
+                m_renderer.ddgiOrigin(), m_renderer.ddgiSpacing());
+            m_renderer.ndgiPass().recordTraining(cmd, m_renderer.ndgi(), m_renderer.frameIndex());
         }
     });
 
@@ -2906,7 +2905,7 @@ void App::registerPipelineSteps() {
         .name = "TS-GI",
         .phase = "GI",
         .record = [this](VkCommandBuffer cmd) {
-            writeTimestamp(cmd, kTsVoxelGI);
+            m_renderer.writeTimestamp(cmd, m_renderer.kTsVoxelGI);
         }
     });
 
@@ -2916,7 +2915,7 @@ void App::registerPipelineSteps() {
     m_renderer.pipeline().addStep({
         .name = "Lighting",
         .phase = "Shading",
-        .timestampSlot = kTsLighting,
+        .timestampSlot = m_renderer.kTsLighting,
         .record = [this](VkCommandBuffer cmd) {
             transitionImage(cmd, m_renderer.rt().hdrColor.image(), VK_IMAGE_ASPECT_COLOR_BIT,
                 VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
@@ -2924,7 +2923,7 @@ void App::registerPipelineSteps() {
                 VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                 VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
             m_renderer.lighting().record(cmd, m_renderer.rt());
-            writeTimestamp(cmd, kTsLighting);
+            m_renderer.writeTimestamp(cmd, m_renderer.kTsLighting);
         }
     });
 
@@ -2987,7 +2986,7 @@ void App::registerPipelineSteps() {
                 VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                 VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
 
-            writeTimestamp(cmd, kTsSkybox);
+            m_renderer.writeTimestamp(cmd, m_renderer.kTsSkybox);
         }
     });
 }
@@ -3026,7 +3025,7 @@ void App::run() {
             startBenchmark();
         }
 
-        if (m_benchRunning) {
+        if (m_renderer.benchRunning()) {
             tickBenchmark(dt);
         } else {
             applyGiSelection();     // user-driven GI switch from UI dropdown
@@ -3035,9 +3034,9 @@ void App::run() {
         // M8 PRT 一次性 bake：scene 切换 / 第一帧时执行；oneShot 内部
         // waitIdle 不会让 main loop 卡顿，但这一帧会有明显停顿（visible
         // 给用户的预期：PRT 模式或场景切换时短暂等待）。
-        if (!m_prtBaked) {
+        if (!m_renderer.prtBaked()) {
             bakePrt();
-            m_prtBaked = true;
+            m_renderer.prtBaked() = true;
         }
 
         auto frame = m_swap->acquireNextFrame();
@@ -3055,8 +3054,8 @@ void App::run() {
                 while (i > 0) { f /= (float)base; r += f * (float)(i % base); i /= base; }
                 return r;
             };
-            float jx = (halton((int)m_frameIndex, 2) - 0.5f) * 2.0f;
-            float jy = (halton((int)m_frameIndex, 3) - 0.5f) * 2.0f;
+            float jx = (halton((int)m_renderer.frameIndex(), 2) - 0.5f) * 2.0f;
+            float jy = (halton((int)m_renderer.frameIndex(), 3) - 0.5f) * 2.0f;
             m_jitter = glm::vec2(jx / m_renderer.rt().extent.width, jy / m_renderer.rt().extent.height);
         } else {
             m_jitter = glm::vec2(0.0f);
@@ -3091,19 +3090,19 @@ void App::run() {
         // M6 LPV：lpvCounts.x=gridResolution, .y=lpvEnabled。
         // lpvGridMinCell.xyz=gridMin, .w=cellSize（在 applySceneSelection
         // 里按 AABB 重算）。lighting.slang 用这两个把 worldPos → grid UV。
-        ubo.lpvCounts = glm::ivec4((int)kLpvResolution, m_lpvEnabled ? 1 : 0, 0, 0);
-        ubo.lpvGridMinCell = glm::vec4(m_lpvGridMin, m_lpvCellSize);
+        ubo.lpvCounts = glm::ivec4((int)m_renderer.kLpvResolution, m_renderer.lpvEnabled() ? 1 : 0, 0, 0);
+        ubo.lpvGridMinCell = glm::vec4(m_renderer.lpvGridMin(), m_renderer.lpvCellSize());
         // M7 VXGI：vxgiCounts.x=gridResolution, .y=enabled, .z=mipLevels。
-        ubo.vxgiCounts = glm::ivec4((int)kVxgiResolution, m_vxgiEnabled ? 1 : 0,
+        ubo.vxgiCounts = glm::ivec4((int)m_renderer.kVxgiResolution, m_renderer.vxgiEnabled() ? 1 : 0,
                                      (int)m_renderer.vxgi().mipLevels(), 0);
-        ubo.vxgiGridMinCell = glm::vec4(m_vxgiGridMin, m_vxgiCellSize);
+        ubo.vxgiGridMinCell = glm::vec4(m_renderer.vxgiGridMin(), m_renderer.vxgiCellSize());
         // M8 PRT：把 sun 投到 SH order-1。lightSH[k] = I·color · Y_k(d_sun)。
         // d_sun 取"从 surface 到 sun"的方向 = -sunDirNormalized（与
         // lighting.slang 一致）。
-        ubo.prtCounts = glm::ivec4((int)kPrtResolution,
-                                    (m_prtEnabled && m_prtBaked) ? 1 : 0,
-                                    m_prtShOrder, 0);
-        ubo.prtGridMinCell = glm::vec4(m_prtGridMin, m_prtCellSize);
+        ubo.prtCounts = glm::ivec4((int)m_renderer.kPrtResolution,
+                                    (m_renderer.prtEnabled() && m_renderer.prtBaked()) ? 1 : 0,
+                                    m_renderer.prtShOrder(), 0);
+        ubo.prtGridMinCell = glm::vec4(m_renderer.prtGridMin(), m_renderer.prtCellSize());
         {
             glm::vec3 dToSun = -glm::normalize(m_sunDir);
             float x = dToSun.x, y = dToSun.y, z = dToSun.z;
@@ -3151,12 +3150,12 @@ void App::run() {
         ubo.ddgiCounts = glm::ivec4((int)DdgiResources::kProbesX,
                                      (int)DdgiResources::kProbesY,
                                      (int)DdgiResources::kProbesZ,
-                                     m_ndgiEnabled ? 2 : (m_ddgiEnabled ? 1 : 0));
-        ubo.ddgiOrigin = glm::vec4(m_ddgiOrigin, 0);
-        ubo.ddgiSpacing = glm::vec4(m_ddgiSpacing, 0);
+                                     m_renderer.ndgiEnabled() ? 2 : (m_renderer.ddgiEnabled() ? 1 : 0));
+        ubo.ddgiOrigin = glm::vec4(m_renderer.ddgiOrigin(), 0);
+        ubo.ddgiSpacing = glm::vec4(m_renderer.ddgiSpacing(), 0);
         ubo.ddgiOctaSizes = glm::ivec4((int)DdgiResources::kOctaIrr,
                                         (int)DdgiResources::kOctaDist, 0, 0);
-        ubo.lumenCounts   = glm::ivec4(m_lumenEnabled ? 1 : 0, 0, 0, 0);
+        ubo.lumenCounts   = glm::ivec4(m_renderer.lumenEnabled() ? 1 : 0, 0, 0, 0);
         m_renderer.gbuffer().updateFrame(ubo);
         m_renderer.forward().updateFrame(ubo);
         m_renderer.skybox().updateFrame(ubo.invViewProj, m_camera.position);
@@ -3177,19 +3176,19 @@ void App::run() {
 
         // A.2：先读上次这个 in-flight 的结果（acquireNextFrame 已经
         // wait-fence，老 query 安全），再 reset 写新 query。
-        uint32_t qBase = frame.frameInFlight * kTimestampSlots;
+        uint32_t qBase = frame.frameInFlight * m_renderer.kTimestampSlots;
 
         // Read back previous frame's per-pass timestamps
         if (m_renderer.timestampValid(frame.frameInFlight)) {
-            uint64_t ts[kTimestampSlots] = {};
+            uint64_t ts[m_renderer.kTimestampSlots] = {};
             VkResult r = vkGetQueryPoolResults(m_device->device(), m_renderer.timestampPool(),
-                qBase, kTimestampSlots, sizeof(ts), ts, sizeof(uint64_t),
+                qBase, m_renderer.kTimestampSlots, sizeof(ts), ts, sizeof(uint64_t),
                 VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT);
             if (r == VK_SUCCESS) {
                 float period = m_device->timestampPeriod() * 1e-6f;
                 float total = 0;
                 float* dst = m_renderer.passTimes(frame.frameInFlight);
-                for (uint32_t i = 1; i < kTimestampSlots; ++i) {
+                for (uint32_t i = 1; i < m_renderer.kTimestampSlots; ++i) {
                     if (ts[i] > ts[i-1]) {
                         float ms = float(ts[i] - ts[i-1]) * period;
                         dst[i] = dst[i] * 0.9f + ms * 0.1f;
@@ -3210,9 +3209,9 @@ void App::run() {
         m_currentInvViewProj = ubo.invViewProj;
 
         // Reset + write start timestamp
-        vkCmdResetQueryPool(cmd, m_renderer.timestampPool(), qBase, kTimestampSlots);
+        vkCmdResetQueryPool(cmd, m_renderer.timestampPool(), qBase, m_renderer.kTimestampSlots);
         vkCmdWriteTimestamp2(cmd, VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT,
-                             m_renderer.timestampPool(), qBase + kTsStart);
+                             m_renderer.timestampPool(), qBase + m_renderer.kTsStart);
 
         // ============================================================
         // 构建管线表并执行所有内部渲染 Pass
@@ -3250,7 +3249,7 @@ void App::run() {
                     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
                 m_renderer.tonemap().bindOutput(*m_device, m_renderer.rt().aaHdr.view(), m_currentFrameInFlight);
                 m_renderer.tonemap().record(cmd, m_renderer.rt(), m_currentFrameInFlight, true, 1.0f);
-                writeTimestamp(cmd, kTsTonemap);
+                m_renderer.writeTimestamp(cmd, m_renderer.kTsTonemap);
 
                 transitionImage(cmd, m_renderer.rt().aaHdr.image(), VK_IMAGE_ASPECT_COLOR_BIT,
                     VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
@@ -3295,7 +3294,7 @@ void App::run() {
                     m_renderer.smaa().bindOutput(*m_device, m_currentSwapView);
                     m_renderer.smaa().record(cmd, m_renderer.rt());
                 }
-                writeTimestamp(cmd, kTsAA);
+                m_renderer.writeTimestamp(cmd, m_renderer.kTsAA);
             } else {
                 // No AA: tonemap writes directly to swapchain
                 transitionImage(cmd, m_currentSwapImage, VK_IMAGE_ASPECT_COLOR_BIT,
@@ -3304,8 +3303,8 @@ void App::run() {
                     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
                 m_renderer.tonemap().bindOutput(*m_device, m_currentSwapView, m_currentFrameInFlight);
                 m_renderer.tonemap().record(cmd, m_renderer.rt(), m_currentFrameInFlight, true, 1.0f);
-                writeTimestamp(cmd, kTsTonemap);
-                writeTimestamp(cmd, kTsAA);
+                m_renderer.writeTimestamp(cmd, m_renderer.kTsTonemap);
+                m_renderer.writeTimestamp(cmd, m_renderer.kTsAA);
             }
 
             // Transition swapchain to COLOR_ATTACHMENT for ImGui
@@ -3325,7 +3324,7 @@ void App::run() {
                     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
                 m_renderer.tonemap().bindOutput(*m_device, m_renderer.rt().aaHdr.view(), m_currentFrameInFlight);
                 m_renderer.tonemap().record(cmd, m_renderer.rt(), m_currentFrameInFlight);
-                writeTimestamp(cmd, kTsTonemap);
+                m_renderer.writeTimestamp(cmd, m_renderer.kTsTonemap);
 
                 transitionImage(cmd, m_renderer.rt().aaHdr.image(), VK_IMAGE_ASPECT_COLOR_BIT,
                     VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
@@ -3338,12 +3337,12 @@ void App::run() {
                     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
 
                 if (m_aaMethod == AAMethod::TAA) {
-                    if (m_aaHistoryNeedsInit) {
+                    if (m_renderer.aaHistoryNeedsInit()) {
                         transitionImage(cmd, m_renderer.rt().aaHistory.image(), VK_IMAGE_ASPECT_COLOR_BIT,
                             VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                             VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
                             VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
-                        m_aaHistoryNeedsInit = false;
+                        m_renderer.aaHistoryNeedsInit() = false;
                     }
                     transitionImage(cmd, m_renderer.rt().depth.image(), VK_IMAGE_ASPECT_DEPTH_BIT,
                         VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
@@ -3385,7 +3384,7 @@ void App::run() {
                     m_renderer.smaa().bindResources(*m_device, m_renderer.rt());
                     m_renderer.smaa().record(cmd, m_renderer.rt());
                 }
-                writeTimestamp(cmd, kTsAA);
+                m_renderer.writeTimestamp(cmd, m_renderer.kTsAA);
 
                 // Barrier: ldrTonemap GENERAL → TRANSFER_SRC for blit
                 transitionImage(cmd, m_renderer.rt().ldrTonemap.image(), VK_IMAGE_ASPECT_COLOR_BIT,
@@ -3400,8 +3399,8 @@ void App::run() {
                     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
                 m_renderer.tonemap().bindOutput(*m_device, m_renderer.rt().ldrTonemap.view(), m_currentFrameInFlight);
                 m_renderer.tonemap().record(cmd, m_renderer.rt(), m_currentFrameInFlight);
-                writeTimestamp(cmd, kTsTonemap);
-                writeTimestamp(cmd, kTsAA);
+                m_renderer.writeTimestamp(cmd, m_renderer.kTsTonemap);
+                m_renderer.writeTimestamp(cmd, m_renderer.kTsAA);
 
                 // Barrier: ldrTonemap GENERAL → TRANSFER_SRC for blit
                 transitionImage(cmd, m_renderer.rt().ldrTonemap.image(), VK_IMAGE_ASPECT_COLOR_BIT,
@@ -3436,7 +3435,7 @@ void App::run() {
 
         // Phase 5: ImGui overlay + present transition
 
-        writeTimestamp(cmd, kTsEnd);
+        m_renderer.writeTimestamp(cmd, m_renderer.kTsEnd);
 
         m_renderer.imgui().render(cmd, m_currentSwapView, m_currentSwapExtent);
 

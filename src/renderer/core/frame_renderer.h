@@ -55,6 +55,8 @@ class Device;
 
 class FrameRenderer {
 public:
+    struct BenchResult { int gi, aa, ao; float fps, gpuMs; };
+
     void init(Device& d, VkCommandPool pool, VkExtent2D extent,
               VkSampleCountFlagBits msaaSamples, bool rtSupported,
               VkFormat swapchainFmt, GLFWwindow* window);
@@ -309,7 +311,6 @@ private:
     float m_demoLightIntensity = 8.0f;
 
     // Benchmark
-    struct BenchResult { int gi, aa, ao; float fps, gpuMs; };
     bool m_benchRunning = false;
     int  m_benchGi = 0, m_benchAa = 0, m_benchAo = 0;
     float m_benchTimer = 0;
