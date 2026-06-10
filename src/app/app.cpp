@@ -58,7 +58,7 @@ inline const char* giLabel(int i, char* buf, size_t bufSize) {
     return buf;
 }
 
-constexpr const char* kStatePath = "assets/ini/scene_state.ini";
+constexpr const char* kStatePath = "assets/scene_state.ini";
 
 struct PersistedAll {
     std::map<std::string, SceneState> scenes;
