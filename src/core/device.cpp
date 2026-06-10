@@ -66,6 +66,13 @@ Device::Device(Window& window, bool enableValidation) {
         m_features.rayQuery = true;
     }
 
+    // Enable Mesh Shader extension
+    bool meshShaderAvail = false;
+    if (m_features.meshShader) {
+        m_physicalDevice.enable_extension_if_present(VK_EXT_MESH_SHADER_EXTENSION_NAME);
+        meshShaderAvail = true;
+    }
+
     VkPhysicalDeviceAccelerationStructureFeaturesKHR asFeat{
         VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR};
     VkPhysicalDeviceRayQueryFeaturesKHR rqFeat{
@@ -83,6 +90,18 @@ Device::Device(Window& window, bool enableValidation) {
     } else {
         std::printf("[device] HW ray tracing NOT available (AS=%d RQ=%d DH=%d)\n",
                     hasAccelStruct, hasRayQuery, hasDeferredHost);
+    }
+
+    // Mesh Shader: chain feature struct after RT features
+    VkPhysicalDeviceMeshShaderFeaturesEXT msFeat{
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_FEATURES_EXT};
+    if (meshShaderAvail) {
+        msFeat.meshShader = VK_TRUE;
+        msFeat.taskShader = VK_TRUE;
+        db.add_pNext(&msFeat);
+        std::printf("[device] Mesh Shader enabled (EXT_mesh_shader)\n");
+    } else {
+        std::printf("[device] Mesh Shader NOT available\n");
     }
 
     auto devRet = db.build();

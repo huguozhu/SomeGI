@@ -208,6 +208,11 @@ public:
     // RT
     bool rtSupported() const { return m_rtSupported; }
 
+    // Mesh Shader
+    bool meshShaderSupported() const { return m_meshShaderSupported; }
+    bool useMeshShader()       const { return m_useMeshShader; }
+    void setUseMeshShader(bool v);
+
     // Constants
     static constexpr uint32_t kLpvResolution  = 32;
     static constexpr uint32_t kVxgiResolution = 128;
@@ -308,6 +313,8 @@ private:
     bool m_rtGiInited = false;
     bool m_rtGiBound = false;
     bool m_rtSupported = false;
+    bool m_meshShaderSupported = false;
+    bool m_useMeshShader = false;
 
     // Grid geometry
     glm::vec3 m_lpvGridMin{0};

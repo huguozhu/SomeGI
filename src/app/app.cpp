@@ -963,6 +963,19 @@ void App::buildUI() {
             ImGui::TextDisabled("OFF (CPU Fill)");
         ImGui::Text("  Draws: %u total | indirect (%u culled)", m_drawCount, m_culledDrawCount);
         ImGui::TextDisabled("  3 indirect calls/frame");
+
+        // Mesh Shader toggle（Phase 1 实现中，默认关闭）
+        bool meshSupported = m_renderer.meshShaderSupported();
+        if (meshSupported) {
+            bool useMs = m_renderer.useMeshShader();
+            if (ImGui::Checkbox("Mesh Shader (EXT_mesh_shader)", &useMs)) {
+                m_renderer.setUseMeshShader(useMs);
+                m_pipelineDirty = true;
+            }
+        } else {
+            ImGui::TextDisabled("Mesh Shader (GPU not supported)");
+        }
+
         ImGui::Text("GPU Profile");
         {
             uint32_t fi = 0; // show most recent frame's data

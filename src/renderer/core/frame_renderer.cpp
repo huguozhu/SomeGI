@@ -11,6 +11,7 @@ void FrameRenderer::init(Device& d, VkCommandPool pool, VkExtent2D extent,
     m_device = &d;
     m_pool   = pool;
     m_rtSupported = rtSupported;
+    m_meshShaderSupported = d.features().meshShader;
 
     // Timestamp query pool
     {
@@ -411,6 +412,11 @@ void FrameRenderer::rebuildDemoLights(const SceneCpu& cpu) {
         L.color=cls[i];L.intensity=m_demoLightIntensity;
         m_demoLights.push_back(L);
     }
+}
+
+void FrameRenderer::setUseMeshShader(bool v) {
+    m_useMeshShader = v;
+    // Phase 1 后续：各 pass 内部切换 pipeline（VS ↔ MS）
 }
 
 void FrameRenderer::registerPipelineSteps() { /* TODO: migrate from App */ }
