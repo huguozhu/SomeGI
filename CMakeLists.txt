@@ -162,9 +162,29 @@ if(GLSLANG_EXE)
         DEPENDS "${CMAKE_SOURCE_DIR}/shaders/forward/forward_mesh_no_task.frag.glsl"
         COMMENT "glslang frag: forward_mesh_no_task.frag.glsl"
     )
+    # Task Shader
+    add_custom_command(
+        OUTPUT "${MESH_SHADER_DIR}/gbuffer_task.spv"
+        COMMAND ${GLSLANG_EXE} --target-env vulkan1.3 -S task
+            "${CMAKE_SOURCE_DIR}/shaders/gbuffer/gbuffer_task.glsl"
+            -o "${MESH_SHADER_DIR}/gbuffer_task.spv"
+        DEPENDS "${CMAKE_SOURCE_DIR}/shaders/gbuffer/gbuffer_task.glsl"
+        COMMENT "glslang task: gbuffer_task.glsl"
+    )
+    # Mesh Shader with Task Payload
+    add_custom_command(
+        OUTPUT "${MESH_SHADER_DIR}/gbuffer_mesh_task_mesh.spv"
+        COMMAND ${GLSLANG_EXE} --target-env vulkan1.3 -S mesh
+            "${CMAKE_SOURCE_DIR}/shaders/gbuffer/gbuffer_mesh_task_mesh.glsl"
+            -o "${MESH_SHADER_DIR}/gbuffer_mesh_task_mesh.spv"
+        DEPENDS "${CMAKE_SOURCE_DIR}/shaders/gbuffer/gbuffer_mesh_task_mesh.glsl"
+        COMMENT "glslang mesh: gbuffer_mesh_task_mesh.glsl"
+    )
     add_custom_target(glslang_mesh_shaders DEPENDS
         "${MESH_SHADER_DIR}/gbuffer_mesh_no_task_mesh.spv"
         "${MESH_SHADER_DIR}/gbuffer_mesh_no_task_frag.spv"
+        "${MESH_SHADER_DIR}/gbuffer_task.spv"
+        "${MESH_SHADER_DIR}/gbuffer_mesh_task_mesh.spv"
         "${FORWARD_MESH_DIR}/forward_mesh_no_task_mesh.spv"
         "${FORWARD_MESH_DIR}/forward_mesh_no_task_frag.spv"
     )

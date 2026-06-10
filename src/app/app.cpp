@@ -2949,9 +2949,6 @@ void App::buildFrameUBO(FrameUBO& ubo) {
 void App::recordIndirectDraws(VkCommandBuffer cmd, uint32_t frameInFlight, const glm::mat4& viewProj) {
     if (m_drawCount == 0) return;
 
-    // Mesh Shader 路径：当前 pipeline 均无 Task Shader，始终走 compute culling
-    // （build Hi-Z 在 compute culling 中处理）
-
     if (m_useGpuCulling) {
         // Build Hi-Z from previous frame's depth (only if occlusion enabled)
         if (m_useHiZOcclusion) m_renderer.hizPass().record(cmd, m_renderer.rt());

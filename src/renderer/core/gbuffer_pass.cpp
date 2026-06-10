@@ -64,8 +64,8 @@ void GBufferPass::init(Device& d,
 
     // ── Mesh Shader descriptor set layout（set=0，bindings 0-11）────
     {
-        // 所有 Task-only 绑定同时声明 MESH stage，保证无 Task Shader 时 layout 仍有效
         const VkShaderStageFlags kTS = VK_SHADER_STAGE_TASK_BIT_EXT | VK_SHADER_STAGE_MESH_BIT_EXT;
+        bool hasTask = d.features().taskShader;
         std::array<VkDescriptorSetLayoutBinding, 12> mb{};
         mb[0] = {0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, kTS, nullptr};
         mb[1] = {1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, kTS, nullptr};  // MeshGroup 映射
@@ -78,7 +78,6 @@ void GBufferPass::init(Device& d,
         mb[10]= {10, VK_DESCRIPTOR_TYPE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
         mb[11]= {11, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, m_maxTextures, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
 
-        // 纹理数组 binding 设 PARTIALLY_BOUND（与 VS 路径对齐）
         std::array<VkDescriptorBindingFlags, 12> mbf{};
         mbf[11] = VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT;
         VkDescriptorSetLayoutBindingFlagsCreateInfo mbfci{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO};
@@ -89,9 +88,11 @@ void GBufferPass::init(Device& d,
         li.bindingCount = (uint32_t)mb.size(); li.pBindings = mb.data();
         VK_CHECK(vkCreateDescriptorSetLayout(d.device(), &li, nullptr, &m_meshSetLayout));
 
+        uint32_t storageCount = 5u;   // bindings 0,1,7,8,9
+        uint32_t uniformCount = 1u;   // binding 6
         std::array<VkDescriptorPoolSize, 4> mps{{
-            {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 5},  // bindings 0,1,7,8,9
-            {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1},  // binding 6
+            {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, storageCount},
+            {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, uniformCount},
             {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, m_maxTextures + 4},
             {VK_DESCRIPTOR_TYPE_SAMPLER, 1},
         }};
@@ -212,16 +213,17 @@ void GBufferPass::buildMeshPipeline() {
     VK_CHECK(vkCreatePipelineLayout(d.device(), &plci, nullptr, &m_meshPipelineLayout));
 
     auto sd = shaderDir();
-    // glslang 编译的 GLSL mesh shader（Slang 不生成 OpSetMeshOutputsEXT）
+    // Intel 驱动 Task Shader 运行时 crash，始终用 no-task 路径
     bool hasTask = false;
-    ShaderModule meshMod(d, sd / "gbuffer" / "gbuffer_mesh_no_task_mesh.spv");
+    ShaderModule meshMod(d, sd / "gbuffer/gbuffer_mesh_no_task_mesh.spv");
     ShaderModule fragMod(d, sd / "gbuffer" / "gbuffer_mesh_no_task_frag.spv");
-    ShaderModule taskMod;  // 不使用
+    ShaderModule taskMod;
+    if (hasTask) taskMod = ShaderModule(d, sd / "gbuffer" / "gbuffer_task.spv");
 
     std::vector<VkPipelineShaderStageCreateInfo> si;
     if (hasTask) {
         VkPipelineShaderStageCreateInfo s{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
-        s.stage = VK_SHADER_STAGE_TASK_BIT_EXT; s.module = taskMod.handle(); s.pName = "ts_main";
+        s.stage = VK_SHADER_STAGE_TASK_BIT_EXT; s.module = taskMod.handle(); s.pName = "main";
         si.push_back(s);
     }
     {
@@ -500,7 +502,6 @@ void GBufferPass::record(VkCommandBuffer cmd, const RenderTargets& rt,
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
             m_meshPipelineLayout, 0, 1, &m_meshSet, 0, nullptr);
         // Task Shader 可用时按 64-thread group 分配；无 Task 时每 draw 一个 mesh group
-        // 当前 pipeline 不含 Task Shader，始终用 workgroup 映射表
         uint32_t groups = m_meshGroupCount;
         m_device->vkCmdDrawMeshTasksEXT(cmd, groups, 1, 1);
     } else {
