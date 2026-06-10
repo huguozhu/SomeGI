@@ -24,6 +24,7 @@ void ImGuiPass::init(Device& d, GLFWwindow* window, VkFormat swapchainFormat, ui
 
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
+    ImGui::GetIO().IniFilename = "assets/ini/imgui.ini";
     ImGui::StyleColorsDark();
 
     ImGui_ImplGlfw_InitForVulkan(window, true);
