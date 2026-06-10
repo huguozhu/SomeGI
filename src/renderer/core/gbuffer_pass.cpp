@@ -61,6 +61,47 @@ void GBufferPass::init(Device& d,
                         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
 
     buildPipeline();
+
+    // ── Mesh Shader descriptor set layout（set=0，bindings 0-11）────
+    {
+        std::array<VkDescriptorSetLayoutBinding, 12> mb{};
+        mb[0] = {0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1,
+                 VK_SHADER_STAGE_TASK_BIT_EXT | VK_SHADER_STAGE_MESH_BIT_EXT, nullptr};
+        mb[1] = {1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_TASK_BIT_EXT, nullptr};
+        for (uint32_t i = 0; i < 4; ++i)
+            mb[2+i] = {2+i, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_TASK_BIT_EXT, nullptr};
+        mb[6] = {6, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1,
+                 VK_SHADER_STAGE_MESH_BIT_EXT | VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
+        mb[7] = {7, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_MESH_BIT_EXT, nullptr};
+        mb[8] = {8, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_MESH_BIT_EXT, nullptr};
+        mb[9] = {9, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
+        mb[10]= {10, VK_DESCRIPTOR_TYPE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
+        mb[11]= {11, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, m_maxTextures, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
+
+        VkDescriptorSetLayoutCreateInfo li{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+        li.bindingCount = (uint32_t)mb.size(); li.pBindings = mb.data();
+        VK_CHECK(vkCreateDescriptorSetLayout(d.device(), &li, nullptr, &m_meshSetLayout));
+
+        std::array<VkDescriptorPoolSize, 4> mps{{
+            {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 4},
+            {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 2},
+            {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, m_maxTextures + 4},
+            {VK_DESCRIPTOR_TYPE_SAMPLER, 1},
+        }};
+        VkDescriptorPoolCreateInfo pci{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+        pci.maxSets = 1; pci.poolSizeCount = (uint32_t)mps.size(); pci.pPoolSizes = mps.data();
+        VK_CHECK(vkCreateDescriptorPool(d.device(), &pci, nullptr, &m_meshPool));
+
+        VkDescriptorSetAllocateInfo dai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+        dai.descriptorPool = m_meshPool; dai.descriptorSetCount = 1; dai.pSetLayouts = &m_meshSetLayout;
+        VK_CHECK(vkAllocateDescriptorSets(d.device(), &dai, &m_meshSet));
+
+        m_cullUbo = Buffer(d, sizeof(glm::vec4)*6 + sizeof(glm::vec2) + sizeof(uint32_t)*2,
+            VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    }
+
+    buildMeshPipeline();
 }
 
 void GBufferPass::buildPipeline() {
@@ -149,17 +190,114 @@ void GBufferPass::destroyPipeline() {
     if (!m_device) return;
     if (m_pipeline)       vkDestroyPipeline(m_device->device(), m_pipeline, nullptr);
     if (m_pipelineLayout) vkDestroyPipelineLayout(m_device->device(), m_pipelineLayout, nullptr);
+    if (m_meshPipeline)   vkDestroyPipeline(m_device->device(), m_meshPipeline, nullptr);
+    if (m_meshPipelineLayout) vkDestroyPipelineLayout(m_device->device(), m_meshPipelineLayout, nullptr);
     m_pipeline = VK_NULL_HANDLE; m_pipelineLayout = VK_NULL_HANDLE;
+    m_meshPipeline = VK_NULL_HANDLE; m_meshPipelineLayout = VK_NULL_HANDLE;
+}
+
+void GBufferPass::buildMeshPipeline() {
+    auto& d = *m_device;
+    m_meshPipelineLayout = VK_NULL_HANDLE;
+
+    VkPipelineLayoutCreateInfo plci{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+    plci.setLayoutCount = 1; plci.pSetLayouts = &m_meshSetLayout;
+    VK_CHECK(vkCreatePipelineLayout(d.device(), &plci, nullptr, &m_meshPipelineLayout));
+
+    auto sd = shaderDir();
+    ShaderModule taskMod(d, sd / "gbuffer" / "gbuffer_mesh.spv");
+    ShaderModule meshMod(d, sd / "gbuffer" / "gbuffer_mesh.spv");
+    ShaderModule fragMod(d, sd / "gbuffer" / "gbuffer_mesh.spv");
+
+    VkPipelineShaderStageCreateInfo stages[3]{};
+    stages[0] = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
+    stages[0].stage  = VK_SHADER_STAGE_TASK_BIT_EXT;
+    stages[0].module = taskMod.handle(); stages[0].pName = "ts_main";
+    stages[1] = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
+    stages[1].stage  = VK_SHADER_STAGE_MESH_BIT_EXT;
+    stages[1].module = meshMod.handle(); stages[1].pName = "ms_main";
+    stages[2] = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
+    stages[2].stage  = VK_SHADER_STAGE_FRAGMENT_BIT;
+    stages[2].module = fragMod.handle(); stages[2].pName = "ps_main";
+
+    VkPipelineVertexInputStateCreateInfo vi{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
+    vi.vertexBindingDescriptionCount = 0; vi.vertexAttributeDescriptionCount = 0;
+
+    VkPipelineInputAssemblyStateCreateInfo ia{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
+    ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+
+    VkPipelineViewportStateCreateInfo vp{VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};
+    vp.viewportCount = 1; vp.scissorCount = 1;
+
+    VkPipelineRasterizationStateCreateInfo rs{VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
+    rs.cullMode = VK_CULL_MODE_BACK_BIT;
+    rs.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+    rs.lineWidth = 1.0f;
+
+    VkPipelineMultisampleStateCreateInfo ms{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
+    ms.rasterizationSamples = m_msaaSamples;
+
+    VkPipelineDepthStencilStateCreateInfo ds{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
+    ds.depthTestEnable = VK_TRUE; ds.depthWriteEnable = VK_TRUE;
+    ds.depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
+
+    std::array<VkPipelineColorBlendAttachmentState, 3> ba{};
+    for (auto& a : ba) a.colorWriteMask = 0xF;
+    VkPipelineColorBlendStateCreateInfo cb{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
+    cb.attachmentCount = 3; cb.pAttachments = ba.data();
+
+    VkDynamicState dyn[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+    VkPipelineDynamicStateCreateInfo dyni{VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};
+    dyni.dynamicStateCount = 2; dyni.pDynamicStates = dyn;
+
+    std::array<VkFormat, 3> colorFmts{m_rt0Fmt, m_rt1Fmt, m_rt2Fmt};
+    VkPipelineRenderingCreateInfo rci{VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO};
+    rci.colorAttachmentCount = 3; rci.pColorAttachmentFormats = colorFmts.data();
+    rci.depthAttachmentFormat = m_depthFmt;
+
+    VkGraphicsPipelineCreateInfo gpci{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
+    gpci.pNext = &rci;
+    gpci.stageCount = 3; gpci.pStages = stages;
+    gpci.pVertexInputState = &vi; gpci.pInputAssemblyState = &ia;
+    gpci.pViewportState = &vp; gpci.pRasterizationState = &rs;
+    gpci.pMultisampleState = &ms; gpci.pDepthStencilState = &ds;
+    gpci.pColorBlendState = &cb; gpci.pDynamicState = &dyni;
+    gpci.layout = m_meshPipelineLayout;
+    VK_CHECK(vkCreateGraphicsPipelines(d.device(), VK_NULL_HANDLE, 1, &gpci, nullptr, &m_meshPipeline));
+}
+
+void GBufferPass::setMeshShaderEnabled(bool v) {
+    m_useMeshShader = v;
+}
+
+void GBufferPass::bindHiZViews(VkImageView mip1, VkImageView mip2, VkImageView mip3, VkImageView mip4) {
+    auto hiZInfo = [](VkImageView v) {
+        VkDescriptorImageInfo i{};
+        i.imageView = v; i.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL; return i;
+    };
+    VkDescriptorImageInfo hz1 = hiZInfo(mip1), hz2 = hiZInfo(mip2), hz3 = hiZInfo(mip3), hz4 = hiZInfo(mip4);
+    std::array<VkWriteDescriptorSet, 4> w{};
+    for (uint32_t i = 0; i < 4; ++i) {
+        w[i] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+        w[i].dstSet = m_meshSet; w[i].dstBinding = 2 + i; w[i].descriptorCount = 1;
+        w[i].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+        w[i].pImageInfo = (i==0?&hz1:i==1?&hz2:i==2?&hz3:&hz4);
+    }
+    vkUpdateDescriptorSets(m_device->device(), 4, w.data(), 0, nullptr);
 }
 
 void GBufferPass::destroy() {
     if (!m_device) return;
     destroyPipeline();
     auto dev = m_device->device();
-    if (m_pool)      vkDestroyDescriptorPool(dev, m_pool, nullptr);
-    if (m_setLayout) vkDestroyDescriptorSetLayout(dev, m_setLayout, nullptr);
+    if (m_pool)          vkDestroyDescriptorPool(dev, m_pool, nullptr);
+    if (m_setLayout)     vkDestroyDescriptorSetLayout(dev, m_setLayout, nullptr);
+    if (m_meshPool)      vkDestroyDescriptorPool(dev, m_meshPool, nullptr);
+    if (m_meshSetLayout) vkDestroyDescriptorSetLayout(dev, m_meshSetLayout, nullptr);
     m_pool = VK_NULL_HANDLE; m_setLayout = VK_NULL_HANDLE;
+    m_meshPool = VK_NULL_HANDLE; m_meshSetLayout = VK_NULL_HANDLE;
     m_frameUbo.reset();
+    m_cullUbo.reset();
     m_device = nullptr;
 }
 

@@ -2,6 +2,7 @@ add_library(somegi_renderer_core OBJECT
     render_targets.cpp
     barrier_manager.cpp
     render_pipeline.cpp
+    mesh_pipeline.cpp
     gbuffer_pass.cpp
     forward_pass.cpp
     lighting_pass.cpp

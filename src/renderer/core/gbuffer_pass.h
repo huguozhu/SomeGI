@@ -31,8 +31,15 @@ public:
 
     void setMsaaSamples(VkSampleCountFlagBits samples);
 
+    // Mesh Shader 双模式
+    void setMeshShaderEnabled(bool v);
+    bool meshShaderEnabled() const { return m_useMeshShader; }
+    // 绑定 Hi-Z mip views 到 mesh descriptor set（每帧调用，在 Task Shader 前）
+    void bindHiZViews(VkImageView mip1, VkImageView mip2, VkImageView mip3, VkImageView mip4);
+
 private:
     void buildPipeline();
+    void buildMeshPipeline();    // 构建 mesh pipeline + set=0 layout
     void destroyPipeline();
 
     Device* m_device = nullptr;
@@ -42,12 +49,21 @@ private:
     VkFormat m_depthFmt = VK_FORMAT_UNDEFINED;
     VkSampleCountFlagBits m_msaaSamples = VK_SAMPLE_COUNT_1_BIT;
 
+    // VS 路径
     VkDescriptorSetLayout m_setLayout = VK_NULL_HANDLE;
     VkPipelineLayout m_pipelineLayout = VK_NULL_HANDLE;
     VkPipeline m_pipeline = VK_NULL_HANDLE;
-
     VkDescriptorPool m_pool = VK_NULL_HANDLE;
     VkDescriptorSet m_set = VK_NULL_HANDLE;
+
+    // Mesh Shader 路径
+    bool m_useMeshShader = false;
+    VkPipelineLayout m_meshPipelineLayout = VK_NULL_HANDLE;
+    VkPipeline m_meshPipeline = VK_NULL_HANDLE;
+    VkDescriptorSetLayout m_meshSetLayout = VK_NULL_HANDLE;
+    VkDescriptorPool m_meshPool = VK_NULL_HANDLE;
+    VkDescriptorSet m_meshSet = VK_NULL_HANDLE;
+    Buffer m_cullUbo;                  // Task Shader CullUniforms UBO
 
     Buffer m_frameUbo;
     uint32_t m_maxTextures = 0;
