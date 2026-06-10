@@ -41,6 +41,7 @@
 #include "renderer/gi/lumen/lumen_probe_pass.h"
 #include "renderer/gi/lumen/lumen_gather_pass.h"
 #include "renderer/gi/lumen/lumen_filter_pass.h"
+#include "renderer/shadow/shadow_pass.h"
 #include "renderer/core/barrier_manager.h"
 #include "renderer/core/render_pipeline.h"
 #include "renderer/culling/frustum_cull_pass.h"
@@ -80,6 +81,9 @@ public:
     // 根据 GI 技术索引设置内部各 pass 的启用标志（替代 App 直接修改 bool）
     void applyGiSelection(int giIndex);
 
+    // 根据 shadow 算法索引设置阴影方法
+    void applyShadowSelection(int idx);
+
     // 根据 scene AABB 计算并设置 LPV/VXGI/PRT/DDGI 四种 GI 网格参数
     void setupGiGrids(const glm::vec3& aabbMin, const glm::vec3& aabbMax);
 
@@ -114,6 +118,7 @@ public:
     NdgiResources&       ndgi()        { return m_ndgi; }
     NdgiPass&            ndgiPass()    { return m_ndgiPass; }
     LightingPass&        lighting()    { return m_lighting; }
+    ShadowPass&          shadow()      { return m_shadow; }
     SsaoPass&            ssao()        { return m_ssao; }
     GtaoPass&            gtao()        { return m_gtao; }
     SsrPass&             ssr()         { return m_ssr; }
@@ -266,6 +271,7 @@ private:
     NdgiResources   m_ndgi;
     NdgiPass        m_ndgiPass;
     LightingPass    m_lighting;
+    ShadowPass      m_shadow;
     SsaoPass        m_ssao;
     GtaoPass        m_gtao;
     SsrPass         m_ssr;

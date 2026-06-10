@@ -77,8 +77,12 @@ void FrameRenderer::init(Device& d, VkCommandPool pool, VkExtent2D extent,
     m_ndgiPass.init(d, rtSupported);
     m_ndgiInited = false;
 
+    std::printf("[init] shadow pass...\n");
+    m_shadow.init(d, {2048, 2048}, extent);
+
     std::printf("[init] lighting pass...\n");
     m_lighting.init(d);
+    m_lighting.bindShadowMask(d, m_shadow.shadowMask().view());
     m_lighting.bindFrame(d, m_rt, m_gbuffer.frameUboHandle(),
                          m_lpv.current(), m_vxgi, m_prt, m_ddgi,
                          m_ddgi.probeStates().handle());
@@ -230,6 +234,7 @@ void FrameRenderer::destroy() {
     m_rsmSample.destroy();
     m_rsmGeom.destroy();
     m_gbuffer.destroy();
+    m_shadow.destroy();
     m_envIbl.destroy(*m_device);
     m_rt.destroy();
     if (m_timestampPool) vkDestroyQueryPool(m_device->device(), m_timestampPool, nullptr);
@@ -427,6 +432,15 @@ void FrameRenderer::setUseMeshShader(bool v) {
     m_useMeshShader = v;
     m_gbuffer.setMeshShaderEnabled(v);
     m_forward.setMeshShaderEnabled(v);
+}
+
+void FrameRenderer::applyShadowSelection(int idx) {
+    if (idx < 0 || idx >= kShadowCount) idx = 1;
+    m_shadow.setMethod((ShadowMethod)idx);
+    // 更新 lighting 端的 shadow mask image view（shader 同一张 Image）
+    if (m_device) {
+        m_lighting.bindShadowMask(*m_device, m_shadow.shadowMask().view());
+    }
 }
 
 void FrameRenderer::registerPipelineSteps() { /* TODO: migrate from App */ }

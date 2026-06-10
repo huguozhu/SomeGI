@@ -36,6 +36,9 @@ public:
                    const PrtResources& prt, const DdgiResources& ddgi,
                    VkBuffer ddgiProbeStatesBuf);
 
+    // 绑定 shadowMask（set=0, binding=33） —— R8_UNORM, 1=lit, 0=shadow
+    void bindShadowMask(Device& d, VkImageView shadowMaskView);
+
     // 更新 set=0 中的 NDGI MLP 权重 binding (27-32)
     void setNdgiWeights(Device& d,
         VkBuffer w1, VkBuffer b1, VkBuffer w2, VkBuffer b2,
@@ -61,6 +64,7 @@ private:
     VkDescriptorPool m_pool = VK_NULL_HANDLE;
     VkDescriptorSet m_set = VK_NULL_HANDLE;
     VkSampler m_lpvSampler = VK_NULL_HANDLE;
+    VkImageView m_shadowMaskView = VK_NULL_HANDLE;
     Buffer m_dummyBuf;
 
     // Pipeline

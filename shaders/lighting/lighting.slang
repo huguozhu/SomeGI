@@ -56,6 +56,7 @@ import gi.ndgi.ndgi_infer; // NDGI: neural irradiance cache
 [[vk::binding(25, 0)]] Texture2D<float4> gRtGI;                  // M9 RT GI：rgb=入射 radiance，a=hit?1:0
 [[vk::binding(26, 0)]] Texture2D<float4> gLumenGI;              // L.5 Lumen-lite gather 输出
 // NDGI: MLP 权重 bindings 27-32 由 import ndgi_infer 提供
+[[vk::binding(33, 0)]] Texture2D<float> gShadowMask;   // R8_UNORM: 1=lit, 0=shadow
 
 struct LightingPC {
     uint2  outSize;
@@ -149,6 +150,10 @@ void cs_main(uint3 dt : SV_DispatchThreadID) {
     float3 L = normalize(-gFrame.sunDir.xyz);
     float3 sun = directBRDF(N, V, L, albedo, metallic, roughness) *
                  gFrame.sunColor_intensity.rgb * gFrame.sunColor_intensity.w;
+
+    // 阴影遮罩（R8_UNORM: 1=lit, 0=shadow）
+    float shadow = gShadowMask.Load(int3(pix, 0)).x;
+    sun *= shadow;
 
     // 间接光分两条路径：
     //   counts.z = 1（IBL / SSGI）：走 IBL 拆分式 + SSR/SSGI 混合，是 M4 主路径。

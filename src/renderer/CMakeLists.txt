@@ -1,4 +1,5 @@
 add_subdirectory(core)
+add_subdirectory(shadow)
 add_subdirectory(culling)
 add_subdirectory(ao)
 add_subdirectory(screenspace)
@@ -16,6 +17,7 @@ add_subdirectory(gi/lumen)
 add_library(somegi_renderer STATIC
     $<TARGET_OBJECTS:somegi_renderer_culling>
     $<TARGET_OBJECTS:somegi_renderer_core>
+    $<TARGET_OBJECTS:somegi_renderer_shadow>
     $<TARGET_OBJECTS:somegi_renderer_ao>
     $<TARGET_OBJECTS:somegi_renderer_screenspace>
     $<TARGET_OBJECTS:somegi_renderer_rsm>

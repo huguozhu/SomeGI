@@ -238,6 +238,9 @@ App::App() {
     std::printf("[init] apply GI selection...\n");
     applyGiSelection();
 
+    std::printf("[init] apply shadow selection...\n");
+    applyShadowSelection();
+
     // Tonemap with scene sampler
     m_renderer.tonemap().init(*m_device, m_sceneGpu.linearSampler);
     m_renderer.tonemap().bindTargets(*m_device, m_renderer.rt());
@@ -390,6 +393,13 @@ void App::applySceneSelection() {
     m_renderer.forward().bindScene(*m_device, m_sceneGpu, (uint32_t)m_sceneGpu.images.size());
     m_renderer.rsmGeom().bindScene(*m_device, m_sceneGpu, (uint32_t)m_sceneGpu.images.size());
     m_renderer.vxgiVoxelize().bindScene(*m_device, m_sceneGpu, (uint32_t)m_sceneGpu.images.size(), m_renderer.vxgi());
+
+    // 绑定场景数据到阴影 pass
+    m_renderer.shadow().bindScene(*m_device, m_sceneGpu);
+    m_renderer.shadow().setSceneAabb(m_scene.aabbMin, m_scene.aabbMax);
+    m_renderer.shadow().setSunDir(m_sunDir);
+    m_renderer.lighting().bindShadowMask(*m_device, m_renderer.shadow().shadowMask().view());
+
     if (m_sceneIndexApplied >= 0) {
         // Tonemap pass cached the old sampler; old one was destroyed above.
         m_renderer.tonemap().destroy();
@@ -593,6 +603,20 @@ void App::applyGiSelection() {
     m_giIndexApplied = effective;
     std::printf("[GI] applied technique index=%d (UI=%d)\n",
                 m_giIndexApplied, m_currentGiIndex);
+}
+
+void App::applyShadowSelection() {
+    if (m_currentShadowIndex == m_shadowIndexApplied) return;
+    if (m_currentShadowIndex < 0 || m_currentShadowIndex >= kShadowCount) {
+        m_currentShadowIndex = 1; return;
+    }
+    if (!kShadows[m_currentShadowIndex].implemented) {
+        m_currentShadowIndex = 1; return;
+    }
+    m_renderer.applyShadowSelection(m_currentShadowIndex);
+    m_shadowIndexApplied = m_currentShadowIndex;
+    std::printf("[Shadow] applied method index=%d (%s)\n",
+                m_shadowIndexApplied, kShadows[m_shadowIndexApplied].name);
 }
 
 void App::startBenchmark() {
@@ -955,6 +979,20 @@ void App::buildUI() {
         ImGui::Separator();
 
         ImGui::Separator();
+        ImGui::Text("Shadow");
+        {
+            int idx = m_currentShadowIndex;
+            if (idx < 0 || idx >= kShadowCount) idx = 0;
+            if (ImGui::BeginCombo("Shadow Method", kShadows[idx].name)) {
+                for (int i = 0; i < kShadowCount; ++i) {
+                    if (!kShadows[i].implemented) continue;
+                    bool sel = (i == m_currentShadowIndex);
+                    if (ImGui::Selectable(kShadows[i].name, sel)) m_currentShadowIndex = i;
+                    if (sel) ImGui::SetItemDefaultFocus();
+                }
+                ImGui::EndCombo();
+            }
+        }
         ImGui::Separator();
         ImGui::Checkbox("GPU Frustum Culling", &m_useGpuCulling);
         ImGui::SameLine();
@@ -1437,6 +1475,19 @@ void App::buildPipelineTable() {
 
 void App::registerPipelineSteps() {
     m_renderer.pipeline().clear();
+
+    // ============================
+    // Phase 0: Shadow Pass（PrePass 最前面，生成 shadowMask）
+    // ============================
+    m_renderer.pipeline().addStep({
+        .name = "Shadow",
+        .phase = "PrePass",
+        .record = [this](VkCommandBuffer cmd) {
+            m_renderer.shadow().record(cmd, m_renderer.rt(),
+                m_renderer.gbuffer().frameUboHandle(),
+                m_sceneGpu, m_indirectBufSun.handle(), m_drawCount);
+        }
+    });
 
     // ============================
     // Phase 0: RSM 几何（sun-view MRT）
@@ -3277,6 +3328,7 @@ void App::run() {
             tickBenchmark(dt);
         } else {
             applyGiSelection();
+            applyShadowSelection();
         }
         if (!m_renderer.prtBaked()) {
             bakePrt();
@@ -3354,6 +3406,11 @@ void App::run() {
 
         // ---- GPU-driven indirect draws ----
         recordIndirectDraws(cmd, frame.frameInFlight, ubo.viewProj);
+
+        // ---- Shadow: 更新 sun 方向 + 绑定每帧资源 ----
+        m_renderer.shadow().setSunDir(m_sunDir);
+        m_renderer.shadow().bindFrameResources(*m_device,
+            m_renderer.gbuffer().frameUboHandle(), m_renderer.rt().depth.view());
 
         // ---- Execute render pipeline ----
         buildPipelineTable();

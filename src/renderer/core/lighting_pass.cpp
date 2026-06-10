@@ -51,7 +51,7 @@ void LightingPass::init(Device& d) {
     // 22/23: gPrtTransferD/E (sampled 3D image, RGBA16F) — B.10 SH16
     // 24: gRestir         (sampled 2D image, RGBA16F) — C.4 ReSTIR DI
     // 25: gRtGI           (sampled 2D image, RGBA16F) — M9 RT GI
-    std::array<VkDescriptorSetLayoutBinding, 33> b{};
+    std::array<VkDescriptorSetLayoutBinding, 34> b{};
     b[0]  = {0,  VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
     b[1]  = {1,  VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,  1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
     b[2]  = {2,  VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,  1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
@@ -85,6 +85,7 @@ void LightingPass::init(Device& d) {
     b[30] = {30, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}; // NDGI B2
     b[31] = {31, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}; // NDGI W3
     b[32] = {32, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}; // NDGI B3
+    b[33] = {33, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,  1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}; // shadowMask
 
     VkDescriptorSetLayoutCreateInfo li{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
     li.bindingCount = (uint32_t)b.size(); li.pBindings = b.data();
@@ -92,7 +93,7 @@ void LightingPass::init(Device& d) {
 
     std::array<VkDescriptorPoolSize, 5> ps{{
         {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1},
-        {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 23},
+        {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 24},
         {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,  1},
         {VK_DESCRIPTOR_TYPE_SAMPLER,        1},
         {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 7},  // +6 NDGI weights
@@ -233,6 +234,17 @@ void LightingPass::bindIblResources(Device& d, const IblResources& ibl) {
     std::memcpy(m_iblParamsUbo.mapped(), &params, sizeof(params));
 }
 
+void LightingPass::bindShadowMask(Device& d, VkImageView shadowMaskView) {
+    m_shadowMaskView = shadowMaskView;
+    VkDescriptorImageInfo info{};
+    info.imageView = shadowMaskView;
+    info.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    VkWriteDescriptorSet w{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+    w.dstSet = m_set; w.dstBinding = 33; w.descriptorCount = 1;
+    w.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE; w.pImageInfo = &info;
+    vkUpdateDescriptorSets(d.device(), 1, &w, 0, nullptr);
+}
+
 void LightingPass::destroy() {
     if (!m_device) return;
     destroyPipeline();
@@ -292,7 +304,7 @@ void LightingPass::bindFrame(Device& d, const RenderTargets& rt, VkBuffer frameU
     hd.imageView = rt.hdrColor.view();
     hd.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
 
-    std::array<VkWriteDescriptorSet, 33> w{};
+    std::array<VkWriteDescriptorSet, 34> w{};
     // ... (w[0] through w[24] are set as before)
     w[0] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
     w[0].dstSet = m_set; w[0].dstBinding = 0; w[0].descriptorCount = 1;
@@ -338,6 +350,14 @@ void LightingPass::bindFrame(Device& d, const RenderTargets& rt, VkBuffer frameU
         w[i].dstSet = m_set; w[i].dstBinding = i; w[i].descriptorCount = 1;
         w[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; w[i].pBufferInfo = &dummyInfo;
     }
+
+    // shadowMask (binding 33)
+    VkDescriptorImageInfo shadowInfo{};
+    shadowInfo.imageView = m_shadowMaskView;
+    shadowInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    w[33] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+    w[33].dstSet = m_set; w[33].dstBinding = 33; w[33].descriptorCount = 1;
+    w[33].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE; w[33].pImageInfo = &shadowInfo;
 
     vkUpdateDescriptorSets(d.device(), (uint32_t)w.size(), w.data(), 0, nullptr);
 }
