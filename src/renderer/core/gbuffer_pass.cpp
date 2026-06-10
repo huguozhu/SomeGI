@@ -90,8 +90,8 @@ void GBufferPass::init(Device& d,
         VK_CHECK(vkCreateDescriptorSetLayout(d.device(), &li, nullptr, &m_meshSetLayout));
 
         std::array<VkDescriptorPoolSize, 4> mps{{
-            {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 4},
-            {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 2},
+            {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 5},  // bindings 0,1,7,8,9
+            {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1},  // binding 6
             {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, m_maxTextures + 4},
             {VK_DESCRIPTOR_TYPE_SAMPLER, 1},
         }};
@@ -408,8 +408,6 @@ void GBufferPass::buildMeshGroups(const std::vector<DrawEntry>& entries) {
         }
     }
     m_meshGroupCount = (uint32_t)groups.size();
-    std::printf("[mesh] buildMeshGroups: %zu draws -> %u groups\n",
-        entries.size(), m_meshGroupCount);
     if (m_meshGroupCount == 0) return;
     m_meshGroupBuf = Buffer(*m_device, m_meshGroupCount * sizeof(MeshGroup),
         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
@@ -453,7 +451,7 @@ void GBufferPass::record(VkCommandBuffer cmd, const RenderTargets& rt,
         color[i].imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
         color[i].loadOp      = VK_ATTACHMENT_LOAD_OP_CLEAR;
         color[i].storeOp     = VK_ATTACHMENT_STORE_OP_STORE;
-        color[i].clearValue.color = {{1, 0, 0, 1}};  // 红色背景诊断
+        color[i].clearValue.color = {{0, 0, 0, 0}};
     }
     color[0].imageView = useMsaa ? rt.gAlbedoMetalMs.view() : rt.gAlbedoMetal.view();
     color[1].imageView = useMsaa ? rt.gNormalRoughMs.view() : rt.gNormalRough.view();

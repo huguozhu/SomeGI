@@ -55,13 +55,12 @@ layout(triangles) out;
 layout(max_vertices=MAX_VERTS, max_primitives=MAX_TRIS) out;
 
 void main() {
-    // 诊断：仅渲染 ≤ MAX_TRIS 三角形的小 draw，排除拆分问题
-    uint drawIndex = gl_WorkGroupID.x;
-    if (drawIndex >= 103u) { SetMeshOutputsEXT(0u,0u); return; }
+    MeshGroup grp = gGroups.groups[gl_WorkGroupID.x];
+    uint drawIndex = grp.drawIndex;
     DrawData dd = gDrawData.draws[drawIndex];
-    uint triCount = dd.indexCount / 3u;
-    if (triCount > MAX_TRIS) { SetMeshOutputsEXT(0u,0u); return; }
-    uint triOffset = 0u;
+    uint totalTris = dd.indexCount / 3u;
+    uint triOffset = grp.triOffset;
+    uint triCount = min(totalTris - triOffset, MAX_TRIS);
     uint vtxCount = min(triCount * 3u, MAX_VERTS);
     mat3 n3 = mat3(dd.modelMatrix);
 

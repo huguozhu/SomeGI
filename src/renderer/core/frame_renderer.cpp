@@ -439,7 +439,7 @@ void FrameRenderer::buildPipelineTable(const PipelineConfig& cfg) {
     m_pipeline.setEnabled("GBuffer",  !fwd);
     m_pipeline.setEnabled("Lighting", !fwd);
     m_pipeline.setEnabled("Forward",  fwd);
-    m_pipeline.setEnabled("Skybox",   false);  // 诊断：关 skybox，红色背景
+    m_pipeline.setEnabled("Skybox",   true);
     m_pipeline.setEnabled("Copy-hdrPrev", true);
 
     // AO 互斥：SSAO / GTAO / Clear
