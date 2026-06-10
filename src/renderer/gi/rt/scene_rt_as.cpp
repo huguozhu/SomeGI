@@ -146,7 +146,7 @@ void SceneRtAS::build(Device& d, VkCommandPool pool,
     auto bufSRC   = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
 
     m_blasBuf = Buffer(d, totalAccelSize, bufACCEL, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-    m_scratchBuf = Buffer(d, maxScratchSize, bufSRC, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    m_scratchBuf = Buffer(d, maxScratchSize, bufSRC, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, 128);
     VkDeviceAddress scratchAddr = m_scratchBuf.deviceAddress();
 
     // ---- Step 4: create BLAS objects + query device addresses ----
@@ -282,7 +282,7 @@ void SceneRtAS::build(Device& d, VkCommandPool pool,
     if (tlasSizes.buildScratchSize > maxScratchSize) {
         m_scratchBuf.reset();
         m_scratchBuf = Buffer(d, tlasSizes.buildScratchSize, bufSRC,
-                              VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+                              VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, 128);
         scratchAddr = m_scratchBuf.deviceAddress();
     }
 

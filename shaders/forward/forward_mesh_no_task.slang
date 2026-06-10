@@ -12,7 +12,7 @@ import ibl_eval;
 [[vk::binding(10,0)]] SamplerState gLinear;
 [[vk::binding(11,0)]] Texture2D gTextures[];
 
-#define VERTEX_FLOATS 14
+#define VERTEX_FLOATS 12
 #define MAX_VERTS 192
 #define MAX_TRIS  64
 

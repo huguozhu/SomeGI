@@ -25,7 +25,7 @@ import mesh_common;
 
 // ── set=1: IBL（由 ibl_eval 定义 binding 0-4）───────────────
 
-#define VERTEX_FLOATS 14
+#define VERTEX_FLOATS 12  // sizeof(Vertex)=48 bytes, 12 floats packed
 #define MAX_VERTS 192
 #define MAX_TRIS  64
 

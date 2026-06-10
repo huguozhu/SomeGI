@@ -5,7 +5,8 @@
 namespace somegi {
 
 Buffer::Buffer(Device& d, VkDeviceSize size, VkBufferUsageFlags usage,
-               VkMemoryPropertyFlags memProps) : m_device(&d), m_size(size) {
+               VkMemoryPropertyFlags memProps, VkDeviceSize alignment)
+               : m_device(&d), m_size(size) {
     VkBufferCreateInfo ci{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
     ci.size = size;
     ci.usage = usage | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
@@ -19,9 +20,39 @@ Buffer::Buffer(Device& d, VkDeviceSize size, VkBufferUsageFlags usage,
                   | VMA_ALLOCATION_CREATE_MAPPED_BIT;
     }
 
-    VmaAllocationInfo ai{};
-    VK_CHECK(vmaCreateBuffer(d.allocator(), &ci, &aci, &m_buffer, &m_allocation, &ai));
-    m_mapped = ai.pMappedData;
+    if (alignment > 0) {
+        // 手动创建 buffer + vkAllocateMemory，保证设备地址对齐
+        VK_CHECK(vkCreateBuffer(d.device(), &ci, nullptr, &m_buffer));
+        VkMemoryRequirements mr;
+        vkGetBufferMemoryRequirements(d.device(), m_buffer, &mr);
+        if (alignment > mr.alignment) mr.alignment = alignment;
+        VkMemoryAllocateFlagsInfo maiFlags{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_FLAGS_INFO};
+        maiFlags.flags = VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT;
+        VkMemoryAllocateInfo mai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+        mai.pNext = &maiFlags;
+        mai.allocationSize = mr.size;
+        // 查找 DEVICE_LOCAL + 对齐的内存类型
+        VkPhysicalDeviceMemoryProperties mp;
+        vkGetPhysicalDeviceMemoryProperties(d.physicalDevice(), &mp);
+        uint32_t typeIndex = UINT32_MAX;
+        for (uint32_t i = 0; i < mp.memoryTypeCount; ++i) {
+            if ((mr.memoryTypeBits & (1u << i)) &&
+                (mp.memoryTypes[i].propertyFlags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT)) {
+                typeIndex = i; break;
+            }
+        }
+        mai.memoryTypeIndex = typeIndex;
+        VkDeviceMemory mem;
+        VK_CHECK(vkAllocateMemory(d.device(), &mai, nullptr, &mem));
+        VK_CHECK(vkBindBufferMemory(d.device(), m_buffer, mem, 0));
+        m_allocation = nullptr;   // 非 VMA 管理
+        m_manualMem = mem;       // reset() 中手动清理
+        m_mapped = nullptr;
+    } else {
+        VmaAllocationInfo ai{};
+        VK_CHECK(vmaCreateBuffer(d.allocator(), &ci, &aci, &m_buffer, &m_allocation, &ai));
+        m_mapped = ai.pMappedData;
+    }
 
     VkBufferDeviceAddressInfo bdai{VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO};
     bdai.buffer = m_buffer;
@@ -41,7 +72,13 @@ void Buffer::swap(Buffer& o) noexcept {
 
 void Buffer::reset() {
     if (m_device && m_buffer) {
-        vmaDestroyBuffer(m_device->allocator(), m_buffer, m_allocation);
+        if (m_manualMem) {
+            vkDestroyBuffer(m_device->device(), m_buffer, nullptr);
+            vkFreeMemory(m_device->device(), m_manualMem, nullptr);
+            m_manualMem = VK_NULL_HANDLE;
+        } else {
+            vmaDestroyBuffer(m_device->allocator(), m_buffer, m_allocation);
+        }
     }
     m_device = nullptr;
     m_buffer = VK_NULL_HANDLE;

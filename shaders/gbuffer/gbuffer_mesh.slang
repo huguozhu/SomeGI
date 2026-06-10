@@ -32,7 +32,7 @@ import mesh_common;
 
 // ── Constants ───────────────────────────────────────────────────
 // Vertex SSBO 布局: 14 floats per vertex (pos+normal+tangent+uv = 3+3+4+2=12→14 padded)
-#define VERTEX_FLOATS 14
+#define VERTEX_FLOATS 12  // sizeof(Vertex)=48 bytes, 12 floats packed
 #define MAX_VERTS 192   // 最多 64 个三角形
 #define MAX_TRIS  64
 

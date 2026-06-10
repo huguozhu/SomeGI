@@ -5,6 +5,7 @@
 #include "renderer/core/render_targets.h"
 #include "renderer/core/frame_ubo.h"
 #include "gi/ibl_baker.h"                 // IblResources
+#include "scene/draw_list.h"             // DrawEntry
 #include <glm/glm.hpp>
 
 namespace somegi {
@@ -36,6 +37,9 @@ public:
     // 绑定 Hi-Z mip views 到 mesh descriptor set（每帧 Task Shader 前调用）
     void bindHiZViews(VkImageView mip1, VkImageView mip2, VkImageView mip3, VkImageView mip4);
     // 更新 Task Shader 的 CullUbo
+    void buildMeshGroups(const std::vector<DrawEntry>& entries);
+    uint32_t meshGroupCount() const { return m_meshGroupCount; }
+
     void updateCullUbo(const glm::mat4& viewProj, const glm::vec4 frustum[6],
                        uint32_t drawCount, uint32_t hizMaxMip,
                        uint32_t screenW, uint32_t screenH);
@@ -69,6 +73,8 @@ private:
     VkDescriptorPool m_meshPool = VK_NULL_HANDLE;
     VkDescriptorSet m_meshSet = VK_NULL_HANDLE;
     Buffer m_cullUbo;
+    Buffer m_meshGroupBuf;
+    uint32_t m_meshGroupCount = 0;
 
     Buffer m_frameUbo;
     uint32_t m_maxTextures = 0;

@@ -123,6 +123,42 @@ if(SHADER_SOURCES AND SLANGC_EXE)
 
 endif()
 
+# ---- glslang mesh shader compilation (Slang doesn't emit OpSetMeshOutputsEXT) ----
+find_program(GLSLANG_EXE glslangValidator HINTS ${VULKAN_SDK_BIN})
+if(GLSLANG_EXE)
+    set(MESH_SHADER_DIR "${CMAKE_BINARY_DIR}/shaders/gbuffer")
+    file(MAKE_DIRECTORY ${MESH_SHADER_DIR})
+    add_custom_command(
+        OUTPUT "${MESH_SHADER_DIR}/gbuffer_mesh_no_task_mesh.spv"
+        COMMAND ${GLSLANG_EXE} --target-env vulkan1.3 -S mesh
+            "${CMAKE_SOURCE_DIR}/shaders/gbuffer/gbuffer_mesh_no_task.glsl"
+            -o "${MESH_SHADER_DIR}/gbuffer_mesh_no_task_mesh.spv"
+        DEPENDS "${CMAKE_SOURCE_DIR}/shaders/gbuffer/gbuffer_mesh_no_task.glsl"
+        COMMENT "glslang mesh: gbuffer_mesh_no_task.glsl"
+    )
+    add_custom_command(
+        OUTPUT "${MESH_SHADER_DIR}/gbuffer_mesh_no_task_frag.spv"
+        COMMAND ${GLSLANG_EXE} --target-env vulkan1.3 -S frag
+            "${CMAKE_SOURCE_DIR}/shaders/gbuffer/gbuffer_mesh_no_task.frag.glsl"
+            -o "${MESH_SHADER_DIR}/gbuffer_mesh_no_task_frag.spv"
+        DEPENDS "${CMAKE_SOURCE_DIR}/shaders/gbuffer/gbuffer_mesh_no_task.frag.glsl"
+        COMMENT "glslang frag: gbuffer_mesh_no_task.frag.glsl"
+    )
+    add_custom_target(glslang_mesh_shaders DEPENDS
+        "${MESH_SHADER_DIR}/gbuffer_mesh_no_task_mesh.spv"
+        "${MESH_SHADER_DIR}/gbuffer_mesh_no_task_frag.spv"
+    )
+    if(TARGET somegi_shaders)
+        add_dependencies(somegi_shaders glslang_mesh_shaders)
+    endif()
+    if(TARGET SomeGI)
+        add_dependencies(SomeGI glslang_mesh_shaders)
+    endif()
+    message(STATUS "glslangValidator   : ${GLSLANG_EXE}")
+else()
+    message(WARNING "glslangValidator not found, mesh shader compilation disabled")
+endif()
+
 # ---- Project ----
 add_subdirectory(src/core)
 add_subdirectory(src/scene)

@@ -13,7 +13,7 @@ import gbuffer_layout;
 [[vk::binding(10,0)]] SamplerState gLinear;
 [[vk::binding(11,0)]] Texture2D gTextures[];
 
-#define VERTEX_FLOATS 14
+#define VERTEX_FLOATS 12  // sizeof(Vertex)=48 bytes = 12 floats packed
 #define MAX_VERTS 192
 #define MAX_TRIS  64
 

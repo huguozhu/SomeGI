@@ -362,6 +362,9 @@ void App::applySceneSelection() {
         m_drawCount = (uint32_t)m_drawEntries.size();
         m_sceneGpu.drawCount = m_drawCount;
         std::printf("[scene] draw list: %u entries\n", m_drawCount);
+        // 构建 mesh workgroup 映射（大 draw 拆分到多个 group）
+        m_renderer.gbuffer().buildMeshGroups(m_drawEntries);
+        m_renderer.forward().buildMeshGroups(m_drawEntries);
         m_sceneGpu.drawDataBuffer.reset();
         m_sceneGpu.drawDataBuffer = Buffer(*m_device, m_drawCount * sizeof(DrawEntry),
             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
@@ -2947,8 +2950,9 @@ void App::buildFrameUBO(FrameUBO& ubo) {
 void App::recordIndirectDraws(VkCommandBuffer cmd, uint32_t frameInFlight, const glm::mat4& viewProj) {
     if (m_drawCount == 0) return;
 
-    // Mesh Shader 路径：Task Shader 内部做 cull，无需 compute cull dispatch
-    if (m_renderer.useMeshShader()) {
+    // Mesh Shader 路径：无 Task Shader 时仍需 compute cull；有 Task 时跳过
+    bool msNoTask = m_renderer.useMeshShader() && !m_renderer.taskShaderSupported();
+    if (m_renderer.useMeshShader() && m_renderer.taskShaderSupported()) {
         if (m_useHiZOcclusion) {
             m_renderer.hizPass().record(cmd, m_renderer.rt());
             // 绑定 Hi-Z 到各 pass 的 mesh descriptor set

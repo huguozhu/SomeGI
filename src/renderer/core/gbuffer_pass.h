@@ -4,6 +4,7 @@
 #include "scene/scene.h"
 #include "renderer/core/render_targets.h"
 #include "renderer/core/frame_ubo.h"   // for FrameUBO type
+#include "scene/draw_list.h"          // for DrawEntry
 
 namespace somegi {
 class Device;
@@ -23,6 +24,10 @@ public:
     void bindDrawData(Device& d, VkBuffer drawDataBuf);
     void updateFrame(const FrameUBO& ubo);
     // 更新 Task Shader 的 CullUbo（Mesh Shader 路径每帧调用）
+    // 构建 mesh workgroup 映射表（每 draw 可能拆成多个 group）
+    void buildMeshGroups(const std::vector<DrawEntry>& entries);
+    uint32_t meshGroupCount() const { return m_meshGroupCount; }
+
     void updateCullUbo(const glm::mat4& viewProj, const glm::vec4 frustum[6],
                        uint32_t drawCount, uint32_t hizMaxMip,
                        uint32_t screenW, uint32_t screenH);
@@ -68,6 +73,8 @@ private:
     VkDescriptorPool m_meshPool = VK_NULL_HANDLE;
     VkDescriptorSet m_meshSet = VK_NULL_HANDLE;
     Buffer m_cullUbo;                  // Task Shader CullUniforms UBO
+    Buffer m_meshGroupBuf;             // MeshGroup 映射 SSBO
+    uint32_t m_meshGroupCount = 0;
 
     Buffer m_frameUbo;
     uint32_t m_maxTextures = 0;

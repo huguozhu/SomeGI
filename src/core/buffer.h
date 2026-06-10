@@ -12,7 +12,8 @@ class Buffer {
 public:
     Buffer() = default;
     Buffer(Device& d, VkDeviceSize size, VkBufferUsageFlags usage,
-           VkMemoryPropertyFlags memProps);
+           VkMemoryPropertyFlags memProps,
+           VkDeviceSize alignment = 0);  // 非 0 用于 AS scratch 等需大对齐的场景
     ~Buffer();
 
     Buffer(const Buffer&) = delete;
@@ -35,6 +36,7 @@ private:
     VkDeviceSize m_size = 0;
     VkDeviceAddress m_address = 0;
     void* m_mapped = nullptr;
+    VkDeviceMemory m_manualMem = VK_NULL_HANDLE;  // 非 VMA 路径的手动分配 memory
 };
 
 }

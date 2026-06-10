@@ -66,7 +66,7 @@ void ForwardPass::init(Device& d, VkFormat colorFmt, VkFormat depthFmt, uint32_t
         const VkShaderStageFlags kTS = VK_SHADER_STAGE_TASK_BIT_EXT | VK_SHADER_STAGE_MESH_BIT_EXT;
         std::array<VkDescriptorSetLayoutBinding, 12> mb{};
         mb[0] = {0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, kTS, nullptr};
-        mb[1] = {1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, kTS, nullptr};
+        mb[1] = {1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, kTS, nullptr};  // MeshGroup 映射
         for (uint32_t i = 0; i < 4; ++i)
             mb[2+i] = {2+i, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, kTS, nullptr};
         mb[6] = {6, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, kTS | VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
@@ -76,7 +76,13 @@ void ForwardPass::init(Device& d, VkFormat colorFmt, VkFormat depthFmt, uint32_t
         mb[10]= {10, VK_DESCRIPTOR_TYPE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
         mb[11]= {11, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, m_maxTextures, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
 
+        std::array<VkDescriptorBindingFlags, 12> mbf{};
+        mbf[11] = VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT;
+        VkDescriptorSetLayoutBindingFlagsCreateInfo mbfci{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO};
+        mbfci.bindingCount = (uint32_t)mbf.size(); mbfci.pBindingFlags = mbf.data();
+
         VkDescriptorSetLayoutCreateInfo li{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+        li.pNext = &mbfci;
         li.bindingCount = (uint32_t)mb.size(); li.pBindings = mb.data();
         VK_CHECK(vkCreateDescriptorSetLayout(d.device(), &li, nullptr, &m_meshSetLayout));
 
@@ -193,8 +199,8 @@ void ForwardPass::buildMeshPipeline() {
     VK_CHECK(vkCreatePipelineLayout(d.device(), &plci, nullptr, &m_meshPipelineLayout));
 
     auto sd = shaderDir();
-    bool hasTask = d.features().taskShader;
-    auto spvPath = hasTask ? (sd / "forward" / "forward_mesh.spv") : (sd / "forward" / "forward_mesh_no_task.spv");
+    bool hasTask = false;  // Slang task shader bug 绕过
+    auto spvPath = (sd / "forward" / "forward_mesh_no_task.spv");
     ShaderModule meshMod(d, spvPath);
     ShaderModule fragMod(d, spvPath);
     ShaderModule taskMod;
@@ -253,6 +259,28 @@ void ForwardPass::bindHiZViews(VkImageView mip1, VkImageView mip2, VkImageView m
     std::array<VkWriteDescriptorSet, 4> w{};
     for (uint32_t i=0;i<4;++i) { w[i]={VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET}; w[i].dstSet=m_meshSet; w[i].dstBinding=2+i; w[i].descriptorCount=1; w[i].descriptorType=VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE; w[i].pImageInfo=&h[i]; }
     vkUpdateDescriptorSets(m_device->device(),4,w.data(),0,nullptr);
+}
+
+void ForwardPass::buildMeshGroups(const std::vector<DrawEntry>& entries) {
+    struct MeshGroup { uint32_t drawIndex; uint32_t triOffset; };
+    constexpr uint32_t kMaxTris = 85;
+    std::vector<MeshGroup> groups;
+    for (uint32_t d = 0; d < (uint32_t)entries.size(); ++d) {
+        uint32_t totalTris = entries[d].indexCount / 3;
+        for (uint32_t offset = 0; offset < totalTris; offset += kMaxTris)
+            groups.push_back({d, offset});
+    }
+    m_meshGroupCount = (uint32_t)groups.size();
+    if (m_meshGroupCount == 0) return;
+    m_meshGroupBuf = Buffer(*m_device, m_meshGroupCount * sizeof(MeshGroup),
+        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    std::memcpy(m_meshGroupBuf.mapped(), groups.data(), m_meshGroupCount * sizeof(MeshGroup));
+    VkDescriptorBufferInfo gi{m_meshGroupBuf.handle(), 0, VK_WHOLE_SIZE};
+    VkWriteDescriptorSet w{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+    w.dstSet = m_meshSet; w.dstBinding = 1; w.descriptorCount = 1;
+    w.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; w.pBufferInfo = &gi;
+    vkUpdateDescriptorSets(m_device->device(), 1, &w, 0, nullptr);
 }
 
 void ForwardPass::updateCullUbo(const glm::mat4& viewProj, const glm::vec4 frustum[6],
@@ -462,7 +490,7 @@ void ForwardPass::record(VkCommandBuffer cmd, const RenderTargets& rt,
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
             m_meshPipelineLayout, 0, 2, msSets, 0, nullptr);
         bool hasTask = m_device->features().taskShader;
-        uint32_t groups = hasTask ? ((drawCount + 63) / 64) : drawCount;
+        uint32_t groups = hasTask ? ((drawCount + 63) / 64) : m_meshGroupCount;
         m_device->vkCmdDrawMeshTasksEXT(cmd, groups, 1, 1);
     } else {
         // ── VS 路径 ──

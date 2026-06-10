@@ -68,7 +68,7 @@ void GBufferPass::init(Device& d,
         const VkShaderStageFlags kTS = VK_SHADER_STAGE_TASK_BIT_EXT | VK_SHADER_STAGE_MESH_BIT_EXT;
         std::array<VkDescriptorSetLayoutBinding, 12> mb{};
         mb[0] = {0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, kTS, nullptr};
-        mb[1] = {1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, kTS, nullptr};
+        mb[1] = {1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, kTS, nullptr};  // MeshGroup 映射
         for (uint32_t i = 0; i < 4; ++i)
             mb[2+i] = {2+i, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, kTS, nullptr};
         mb[6] = {6, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, kTS | VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
@@ -78,7 +78,14 @@ void GBufferPass::init(Device& d,
         mb[10]= {10, VK_DESCRIPTOR_TYPE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
         mb[11]= {11, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, m_maxTextures, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
 
+        // 纹理数组 binding 设 PARTIALLY_BOUND（与 VS 路径对齐）
+        std::array<VkDescriptorBindingFlags, 12> mbf{};
+        mbf[11] = VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT;
+        VkDescriptorSetLayoutBindingFlagsCreateInfo mbfci{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO};
+        mbfci.bindingCount = (uint32_t)mbf.size(); mbfci.pBindingFlags = mbf.data();
+
         VkDescriptorSetLayoutCreateInfo li{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+        li.pNext = &mbfci;
         li.bindingCount = (uint32_t)mb.size(); li.pBindings = mb.data();
         VK_CHECK(vkCreateDescriptorSetLayout(d.device(), &li, nullptr, &m_meshSetLayout));
 
@@ -205,13 +212,11 @@ void GBufferPass::buildMeshPipeline() {
     VK_CHECK(vkCreatePipelineLayout(d.device(), &plci, nullptr, &m_meshPipelineLayout));
 
     auto sd = shaderDir();
-    // 根据 GPU 实际能力选择 SPV：有 Task Shader 用原版，无则用 mesh+frag 专用版
-    bool hasTask = d.features().taskShader;
-    auto spvPath = hasTask ? (sd / "gbuffer" / "gbuffer_mesh.spv") : (sd / "gbuffer" / "gbuffer_mesh_no_task.spv");
-    ShaderModule meshMod(d, spvPath);
-    ShaderModule fragMod(d, spvPath);
-    ShaderModule taskMod;
-    if (hasTask) taskMod = ShaderModule(d, spvPath);
+    // glslang 编译的 GLSL mesh shader（Slang 不生成 OpSetMeshOutputsEXT）
+    bool hasTask = false;
+    ShaderModule meshMod(d, sd / "gbuffer" / "gbuffer_mesh_no_task_mesh.spv");
+    ShaderModule fragMod(d, sd / "gbuffer" / "gbuffer_mesh_no_task_frag.spv");
+    ShaderModule taskMod;  // 不使用
 
     std::vector<VkPipelineShaderStageCreateInfo> si;
     if (hasTask) {
@@ -221,12 +226,12 @@ void GBufferPass::buildMeshPipeline() {
     }
     {
         VkPipelineShaderStageCreateInfo s{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
-        s.stage = VK_SHADER_STAGE_MESH_BIT_EXT; s.module = meshMod.handle(); s.pName = "ms_main";
+        s.stage = VK_SHADER_STAGE_MESH_BIT_EXT; s.module = meshMod.handle(); s.pName = "main";
         si.push_back(s);
     }
     {
         VkPipelineShaderStageCreateInfo s{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
-        s.stage = VK_SHADER_STAGE_FRAGMENT_BIT; s.module = fragMod.handle(); s.pName = "ps_main";
+        s.stage = VK_SHADER_STAGE_FRAGMENT_BIT; s.module = fragMod.handle(); s.pName = "main";
         si.push_back(s);
     }
 
@@ -352,7 +357,7 @@ void GBufferPass::bindScene(Device& d, const SceneGpu& gpu, uint32_t textureCoun
     if (m_useMeshShader) {
     VkDescriptorBufferInfo vbInfo{gpu.vertexBuffer.handle(), 0, VK_WHOLE_SIZE};
     VkDescriptorBufferInfo ibInfo{gpu.indexBuffer.handle(), 0, VK_WHOLE_SIZE};
-    std::array<VkWriteDescriptorSet, 7> mw{};
+    std::array<VkWriteDescriptorSet, 6> mw{};  // bindings 6-11
     mw[0] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
     mw[0].dstSet=m_meshSet;mw[0].dstBinding=6;mw[0].descriptorCount=1;
     mw[0].descriptorType=VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;mw[0].pBufferInfo=&uboInfo;
@@ -392,6 +397,32 @@ void GBufferPass::bindDrawData(Device& d, VkBuffer drawDataBuf) {
     }
 }
 // 更新 Task Shader 的 CullUbo（每帧调用）
+void GBufferPass::buildMeshGroups(const std::vector<DrawEntry>& entries) {
+    struct MeshGroup { uint32_t drawIndex; uint32_t triOffset; };
+    constexpr uint32_t kMaxTris = 85;
+    std::vector<MeshGroup> groups;
+    for (uint32_t d = 0; d < (uint32_t)entries.size(); ++d) {
+        uint32_t totalTris = entries[d].indexCount / 3;
+        for (uint32_t offset = 0; offset < totalTris; offset += kMaxTris) {
+            groups.push_back({d, offset});
+        }
+    }
+    m_meshGroupCount = (uint32_t)groups.size();
+    std::printf("[mesh] buildMeshGroups: %zu draws -> %u groups\n",
+        entries.size(), m_meshGroupCount);
+    if (m_meshGroupCount == 0) return;
+    m_meshGroupBuf = Buffer(*m_device, m_meshGroupCount * sizeof(MeshGroup),
+        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    std::memcpy(m_meshGroupBuf.mapped(), groups.data(), m_meshGroupCount * sizeof(MeshGroup));
+    // 写入 mesh descriptor set binding 1
+    VkDescriptorBufferInfo gi{m_meshGroupBuf.handle(), 0, VK_WHOLE_SIZE};
+    VkWriteDescriptorSet w{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+    w.dstSet = m_meshSet; w.dstBinding = 1; w.descriptorCount = 1;
+    w.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; w.pBufferInfo = &gi;
+    vkUpdateDescriptorSets(m_device->device(), 1, &w, 0, nullptr);
+}
+
 void GBufferPass::updateCullUbo(const glm::mat4& viewProj, const glm::vec4 frustum[6],
                                  uint32_t drawCount, uint32_t hizMaxMip,
                                  uint32_t screenW, uint32_t screenH) {
@@ -422,7 +453,7 @@ void GBufferPass::record(VkCommandBuffer cmd, const RenderTargets& rt,
         color[i].imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
         color[i].loadOp      = VK_ATTACHMENT_LOAD_OP_CLEAR;
         color[i].storeOp     = VK_ATTACHMENT_STORE_OP_STORE;
-        color[i].clearValue.color = {{0, 0, 0, 0}};
+        color[i].clearValue.color = {{1, 0, 0, 1}};  // 红色背景诊断
     }
     color[0].imageView = useMsaa ? rt.gAlbedoMetalMs.view() : rt.gAlbedoMetal.view();
     color[1].imageView = useMsaa ? rt.gNormalRoughMs.view() : rt.gNormalRough.view();
@@ -472,7 +503,7 @@ void GBufferPass::record(VkCommandBuffer cmd, const RenderTargets& rt,
             m_meshPipelineLayout, 0, 1, &m_meshSet, 0, nullptr);
         // Task Shader 可用时按 64-thread group 分配；无 Task 时每 draw 一个 mesh group
         bool hasTask = m_device->features().taskShader;
-        uint32_t groups = hasTask ? ((drawCount + 63) / 64) : drawCount;
+        uint32_t groups = hasTask ? ((drawCount + 63) / 64) : m_meshGroupCount;
         m_device->vkCmdDrawMeshTasksEXT(cmd, groups, 1, 1);
     } else {
         // ── VS 路径：传统 vertex/index buffer ──
