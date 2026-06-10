@@ -83,6 +83,21 @@ Device::Device(Window& window, bool enableValidation) {
     m_features.meshShader = meshShaderAvail;
     m_features.taskShader = taskShaderAvail;
 
+    // 查询 Mesh Shader 属性限制
+    if (meshShaderAvail) {
+        VkPhysicalDeviceMeshShaderPropertiesEXT meshProps{
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_PROPERTIES_EXT};
+        VkPhysicalDeviceProperties2 p2{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
+        p2.pNext = &meshProps;
+        vkGetPhysicalDeviceProperties2(m_physicalDevice.physical_device, &p2);
+        m_features.maxMeshOutputVertices   = meshProps.maxMeshOutputVertices;
+        m_features.maxMeshOutputPrimitives = meshProps.maxMeshOutputPrimitives;
+        m_features.maxMeshWorkGroupSize    = meshProps.maxMeshWorkGroupSize[0];
+        std::printf("[device] Mesh limits: maxVerts=%u maxPrims=%u maxWG=%u\n",
+            meshProps.maxMeshOutputVertices, meshProps.maxMeshOutputPrimitives,
+            meshProps.maxMeshWorkGroupSize[0]);
+    }
+
     VkPhysicalDeviceAccelerationStructureFeaturesKHR asFeat{
         VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR};
     VkPhysicalDeviceRayQueryFeaturesKHR rqFeat{

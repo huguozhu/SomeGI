@@ -16,6 +16,10 @@ struct DeviceFeatures {
     bool taskShader = false;   // VK_EXT_mesh_shader: Task Shader 支持
     bool accelStruct = false;
     bool rayQuery = false;
+    // Mesh Shader 属性限制（查询自 VkPhysicalDeviceMeshShaderPropertiesEXT）
+    uint32_t maxMeshOutputVertices = 256;
+    uint32_t maxMeshOutputPrimitives = 256;
+    uint32_t maxMeshWorkGroupSize = 128;
 };
 
 class Device {

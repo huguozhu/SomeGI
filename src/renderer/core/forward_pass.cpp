@@ -261,7 +261,12 @@ void ForwardPass::bindHiZViews(VkImageView mip1, VkImageView mip2, VkImageView m
 
 void ForwardPass::buildMeshGroups(const std::vector<DrawEntry>& entries) {
     struct MeshGroup { uint32_t drawIndex; uint32_t triOffset; };
-    constexpr uint32_t kMaxTris = 85;
+    constexpr uint32_t kShaderMaxTris = 85;
+    uint32_t kMaxTris = kShaderMaxTris;
+    if (m_device) {
+        uint32_t gpuLimit = m_device->features().maxMeshOutputPrimitives;
+        if (gpuLimit < kMaxTris) kMaxTris = gpuLimit;
+    }
     std::vector<MeshGroup> groups;
     for (uint32_t d = 0; d < (uint32_t)entries.size(); ++d) {
         uint32_t totalTris = entries[d].indexCount / 3;
