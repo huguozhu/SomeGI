@@ -12,7 +12,8 @@ class Window;
 
 struct DeviceFeatures {
     bool rayTracing = false;
-    bool meshShader = false;
+    bool meshShader = false;   // VK_EXT_mesh_shader: Mesh Shader 支持
+    bool taskShader = false;   // VK_EXT_mesh_shader: Task Shader 支持
     bool accelStruct = false;
     bool rayQuery = false;
 };

@@ -52,7 +52,7 @@ Device::Device(Window& window, bool enableValidation) {
             if (e == VK_KHR_RAY_QUERY_EXTENSION_NAME)               hasRayQuery    = true;
             if (e == VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME) hasDeferredHost = true;
             if (e == VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME)    m_features.rayTracing = true;
-            if (e == VK_EXT_MESH_SHADER_EXTENSION_NAME)             m_features.meshShader = true;
+            if (e == VK_EXT_MESH_SHADER_EXTENSION_NAME)             m_features.meshShader = true;  // 仅表示扩展可用，实际能力待查
         }
     }
 
@@ -66,12 +66,22 @@ Device::Device(Window& window, bool enableValidation) {
         m_features.rayQuery = true;
     }
 
-    // Enable Mesh Shader extension
-    bool meshShaderAvail = false;
+    // Enable Mesh Shader extension + query actual feature support
+    bool meshShaderAvail = false, taskShaderAvail = false;
     if (m_features.meshShader) {
-        m_physicalDevice.enable_extension_if_present(VK_EXT_MESH_SHADER_EXTENSION_NAME);
-        meshShaderAvail = true;
+        VkPhysicalDeviceMeshShaderFeaturesEXT meshQuery{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_FEATURES_EXT};
+        VkPhysicalDeviceFeatures2 f2{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
+        f2.pNext = &meshQuery;
+        vkGetPhysicalDeviceFeatures2(m_physicalDevice.physical_device, &f2);
+        meshShaderAvail = meshQuery.meshShader == VK_TRUE;
+        taskShaderAvail = meshQuery.taskShader == VK_TRUE;
+        std::printf("[device] Mesh Shader query: mesh=%d task=%d\n", meshShaderAvail, taskShaderAvail);
     }
+    if (meshShaderAvail) {
+        m_physicalDevice.enable_extension_if_present(VK_EXT_MESH_SHADER_EXTENSION_NAME);
+    }
+    m_features.meshShader = meshShaderAvail;
+    m_features.taskShader = taskShaderAvail;
 
     VkPhysicalDeviceAccelerationStructureFeaturesKHR asFeat{
         VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR};
@@ -92,14 +102,14 @@ Device::Device(Window& window, bool enableValidation) {
                     hasAccelStruct, hasRayQuery, hasDeferredHost);
     }
 
-    // Mesh Shader: chain feature struct after RT features
+    // Mesh Shader: chain feature struct，仅启用 GPU 实际支持的特性
     VkPhysicalDeviceMeshShaderFeaturesEXT msFeat{
         VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_FEATURES_EXT};
-    if (meshShaderAvail) {
-        msFeat.meshShader = VK_TRUE;
-        msFeat.taskShader = VK_TRUE;
+    if (meshShaderAvail || taskShaderAvail) {
+        msFeat.meshShader = meshShaderAvail ? VK_TRUE : VK_FALSE;
+        msFeat.taskShader = taskShaderAvail ? VK_TRUE : VK_FALSE;
         db.add_pNext(&msFeat);
-        std::printf("[device] Mesh Shader enabled (EXT_mesh_shader)\n");
+        std::printf("[device] Mesh Shader: mesh=%d task=%d\n", meshShaderAvail, taskShaderAvail);
     } else {
         std::printf("[device] Mesh Shader NOT available\n");
     }

@@ -12,6 +12,7 @@ void FrameRenderer::init(Device& d, VkCommandPool pool, VkExtent2D extent,
     m_pool   = pool;
     m_rtSupported = rtSupported;
     m_meshShaderSupported = d.features().meshShader;
+    m_taskShaderSupported = d.features().taskShader;
 
     // Timestamp query pool
     {
@@ -175,6 +176,14 @@ void FrameRenderer::init(Device& d, VkCommandPool pool, VkExtent2D extent,
     m_cullPass.init(d, 4096);
     m_hizPass.init(d, extent);
     registerPipelineSteps();
+
+    // Mesh Shader：支持时默认启用
+    if (m_meshShaderSupported) {
+        m_useMeshShader = true;
+        m_gbuffer.setMeshShaderEnabled(true);
+        std::printf("[init] Mesh Shader enabled by default\n");
+    }
+
     std::printf("[init] all renderer passes set up.\n");
 }
 

@@ -64,16 +64,16 @@ void GBufferPass::init(Device& d,
 
     // ── Mesh Shader descriptor set layout（set=0，bindings 0-11）────
     {
+        // 所有 Task-only 绑定同时声明 MESH stage，保证无 Task Shader 时 layout 仍有效
+        const VkShaderStageFlags kTS = VK_SHADER_STAGE_TASK_BIT_EXT | VK_SHADER_STAGE_MESH_BIT_EXT;
         std::array<VkDescriptorSetLayoutBinding, 12> mb{};
-        mb[0] = {0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1,
-                 VK_SHADER_STAGE_TASK_BIT_EXT | VK_SHADER_STAGE_MESH_BIT_EXT, nullptr};
-        mb[1] = {1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_TASK_BIT_EXT, nullptr};
+        mb[0] = {0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, kTS, nullptr};
+        mb[1] = {1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, kTS, nullptr};
         for (uint32_t i = 0; i < 4; ++i)
-            mb[2+i] = {2+i, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_TASK_BIT_EXT, nullptr};
-        mb[6] = {6, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1,
-                 VK_SHADER_STAGE_MESH_BIT_EXT | VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
-        mb[7] = {7, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_MESH_BIT_EXT, nullptr};
-        mb[8] = {8, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_MESH_BIT_EXT, nullptr};
+            mb[2+i] = {2+i, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, kTS, nullptr};
+        mb[6] = {6, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, kTS | VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
+        mb[7] = {7, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, kTS, nullptr};
+        mb[8] = {8, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, kTS, nullptr};
         mb[9] = {9, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
         mb[10]= {10, VK_DESCRIPTOR_TYPE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
         mb[11]= {11, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, m_maxTextures, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
@@ -205,20 +205,30 @@ void GBufferPass::buildMeshPipeline() {
     VK_CHECK(vkCreatePipelineLayout(d.device(), &plci, nullptr, &m_meshPipelineLayout));
 
     auto sd = shaderDir();
-    ShaderModule taskMod(d, sd / "gbuffer" / "gbuffer_mesh.spv");
-    ShaderModule meshMod(d, sd / "gbuffer" / "gbuffer_mesh.spv");
-    ShaderModule fragMod(d, sd / "gbuffer" / "gbuffer_mesh.spv");
+    // 根据 GPU 实际能力选择 SPV：有 Task Shader 用原版，无则用 mesh+frag 专用版
+    bool hasTask = d.features().taskShader;
+    auto spvPath = hasTask ? (sd / "gbuffer" / "gbuffer_mesh.spv") : (sd / "gbuffer" / "gbuffer_mesh_no_task.spv");
+    ShaderModule meshMod(d, spvPath);
+    ShaderModule fragMod(d, spvPath);
+    ShaderModule taskMod;
+    if (hasTask) taskMod = ShaderModule(d, spvPath);
 
-    VkPipelineShaderStageCreateInfo stages[3]{};
-    stages[0] = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
-    stages[0].stage  = VK_SHADER_STAGE_TASK_BIT_EXT;
-    stages[0].module = taskMod.handle(); stages[0].pName = "ts_main";
-    stages[1] = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
-    stages[1].stage  = VK_SHADER_STAGE_MESH_BIT_EXT;
-    stages[1].module = meshMod.handle(); stages[1].pName = "ms_main";
-    stages[2] = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
-    stages[2].stage  = VK_SHADER_STAGE_FRAGMENT_BIT;
-    stages[2].module = fragMod.handle(); stages[2].pName = "ps_main";
+    std::vector<VkPipelineShaderStageCreateInfo> si;
+    if (hasTask) {
+        VkPipelineShaderStageCreateInfo s{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
+        s.stage = VK_SHADER_STAGE_TASK_BIT_EXT; s.module = taskMod.handle(); s.pName = "ts_main";
+        si.push_back(s);
+    }
+    {
+        VkPipelineShaderStageCreateInfo s{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
+        s.stage = VK_SHADER_STAGE_MESH_BIT_EXT; s.module = meshMod.handle(); s.pName = "ms_main";
+        si.push_back(s);
+    }
+    {
+        VkPipelineShaderStageCreateInfo s{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
+        s.stage = VK_SHADER_STAGE_FRAGMENT_BIT; s.module = fragMod.handle(); s.pName = "ps_main";
+        si.push_back(s);
+    }
 
     VkPipelineVertexInputStateCreateInfo vi{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
     vi.vertexBindingDescriptionCount = 0; vi.vertexAttributeDescriptionCount = 0;
@@ -257,7 +267,7 @@ void GBufferPass::buildMeshPipeline() {
 
     VkGraphicsPipelineCreateInfo gpci{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
     gpci.pNext = &rci;
-    gpci.stageCount = 3; gpci.pStages = stages;
+    gpci.stageCount = (uint32_t)si.size(); gpci.pStages = si.data();
     gpci.pVertexInputState = &vi; gpci.pInputAssemblyState = &ia;
     gpci.pViewportState = &vp; gpci.pRasterizationState = &rs;
     gpci.pMultisampleState = &ms; gpci.pDepthStencilState = &ds;
@@ -460,8 +470,10 @@ void GBufferPass::record(VkCommandBuffer cmd, const RenderTargets& rt,
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_meshPipeline);
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
             m_meshPipelineLayout, 0, 1, &m_meshSet, 0, nullptr);
-        uint32_t taskGroups = (drawCount + 63) / 64;  // 64 threads per task group
-        m_device->vkCmdDrawMeshTasksEXT(cmd, taskGroups, 1, 1);
+        // Task Shader 可用时按 64-thread group 分配；无 Task 时每 draw 一个 mesh group
+        bool hasTask = m_device->features().taskShader;
+        uint32_t groups = hasTask ? ((drawCount + 63) / 64) : drawCount;
+        m_device->vkCmdDrawMeshTasksEXT(cmd, groups, 1, 1);
     } else {
         // ── VS 路径：传统 vertex/index buffer ──
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipeline);

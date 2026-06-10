@@ -210,6 +210,7 @@ public:
 
     // Mesh Shader
     bool meshShaderSupported() const { return m_meshShaderSupported; }
+    bool taskShaderSupported() const { return m_taskShaderSupported; }
     bool useMeshShader()       const { return m_useMeshShader; }
     void setUseMeshShader(bool v);
 
@@ -314,6 +315,7 @@ private:
     bool m_rtGiBound = false;
     bool m_rtSupported = false;
     bool m_meshShaderSupported = false;
+    bool m_taskShaderSupported = false;
     bool m_useMeshShader = false;
 
     // Grid geometry

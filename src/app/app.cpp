@@ -232,6 +232,9 @@ App::App() {
                                 m_renderer.envIbl().linear);
     m_renderer.lighting().bindIblResources(*m_device, m_renderer.envIbl());
     m_renderer.forward().bindIblResources(*m_device, m_renderer.envIbl());
+    // Mesh Shader 默认启用时，ForwardPass 在 IBL 就位后创建 mesh pipeline
+    if (m_renderer.useMeshShader())
+        m_renderer.forward().setMeshShaderEnabled(true);
 
     std::printf("[init] apply GI selection...\n");
     applyGiSelection();
@@ -964,11 +967,13 @@ void App::buildUI() {
         ImGui::Text("  Draws: %u total | indirect (%u culled)", m_drawCount, m_culledDrawCount);
         ImGui::TextDisabled("  3 indirect calls/frame");
 
-        // Mesh Shader toggle（Phase 1 实现中，默认关闭）
+        // Mesh Shader toggle（根据 GPU 实际能力显示可用特性）
         bool meshSupported = m_renderer.meshShaderSupported();
-        if (meshSupported) {
+        bool taskSupported = m_renderer.taskShaderSupported();
+        if (meshSupported || taskSupported) {
             bool useMs = m_renderer.useMeshShader();
-            if (ImGui::Checkbox("Mesh Shader (EXT_mesh_shader)", &useMs)) {
+            const char* label = taskSupported ? "Mesh Shader (Mesh + Task)" : "Mesh Shader (Mesh only)";
+            if (ImGui::Checkbox(label, &useMs)) {
                 m_renderer.setUseMeshShader(useMs);
                 m_pipelineDirty = true;
             }
