@@ -199,12 +199,10 @@ void ForwardPass::buildMeshPipeline() {
     VK_CHECK(vkCreatePipelineLayout(d.device(), &plci, nullptr, &m_meshPipelineLayout));
 
     auto sd = shaderDir();
-    bool hasTask = false;  // Slang task shader bug 绕过
-    auto spvPath = (sd / "forward" / "forward_mesh_no_task.spv");
-    ShaderModule meshMod(d, spvPath);
-    ShaderModule fragMod(d, spvPath);
-    ShaderModule taskMod;
-    if (hasTask) taskMod = ShaderModule(d, spvPath);
+    bool hasTask = false;
+    ShaderModule meshMod(d, sd / "forward" / "forward_mesh_no_task_mesh.spv");
+    ShaderModule fragMod(d, sd / "forward" / "forward_mesh_no_task_frag.spv");
+    ShaderModule taskMod;  // UNUSED: hasTask always false
 
     std::vector<VkPipelineShaderStageCreateInfo> si;
     if (hasTask) {
@@ -214,12 +212,12 @@ void ForwardPass::buildMeshPipeline() {
     }
     {
         VkPipelineShaderStageCreateInfo s{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
-        s.stage = VK_SHADER_STAGE_MESH_BIT_EXT; s.module = meshMod.handle(); s.pName = "ms_main";
+        s.stage = VK_SHADER_STAGE_MESH_BIT_EXT; s.module = meshMod.handle(); s.pName = "main";
         si.push_back(s);
     }
     {
         VkPipelineShaderStageCreateInfo s{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
-        s.stage = VK_SHADER_STAGE_FRAGMENT_BIT; s.module = fragMod.handle(); s.pName = "ps_main";
+        s.stage = VK_SHADER_STAGE_FRAGMENT_BIT; s.module = fragMod.handle(); s.pName = "main";
         si.push_back(s);
     }
 
