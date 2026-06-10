@@ -68,6 +68,7 @@ void Buffer::swap(Buffer& o) noexcept {
     std::swap(m_size, o.m_size);
     std::swap(m_address, o.m_address);
     std::swap(m_mapped, o.m_mapped);
+    std::swap(m_manualMem, o.m_manualMem);
 }
 
 void Buffer::reset() {

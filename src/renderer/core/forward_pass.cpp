@@ -489,8 +489,7 @@ void ForwardPass::record(VkCommandBuffer cmd, const RenderTargets& rt,
         VkDescriptorSet msSets[2] = {m_meshSet, m_iblSet};
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
             m_meshPipelineLayout, 0, 2, msSets, 0, nullptr);
-        bool hasTask = m_device->features().taskShader;
-        uint32_t groups = hasTask ? ((drawCount + 63) / 64) : m_meshGroupCount;
+        uint32_t groups = m_meshGroupCount;
         m_device->vkCmdDrawMeshTasksEXT(cmd, groups, 1, 1);
     } else {
         // ── VS 路径 ──

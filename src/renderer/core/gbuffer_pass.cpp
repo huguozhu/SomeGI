@@ -500,8 +500,8 @@ void GBufferPass::record(VkCommandBuffer cmd, const RenderTargets& rt,
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
             m_meshPipelineLayout, 0, 1, &m_meshSet, 0, nullptr);
         // Task Shader 可用时按 64-thread group 分配；无 Task 时每 draw 一个 mesh group
-        bool hasTask = m_device->features().taskShader;
-        uint32_t groups = hasTask ? ((drawCount + 63) / 64) : m_meshGroupCount;
+        // 当前 pipeline 不含 Task Shader，始终用 workgroup 映射表
+        uint32_t groups = m_meshGroupCount;
         m_device->vkCmdDrawMeshTasksEXT(cmd, groups, 1, 1);
     } else {
         // ── VS 路径：传统 vertex/index buffer ──
