@@ -416,7 +416,8 @@ void FrameRenderer::rebuildDemoLights(const SceneCpu& cpu) {
 
 void FrameRenderer::setUseMeshShader(bool v) {
     m_useMeshShader = v;
-    // Phase 1 后续：各 pass 内部切换 pipeline（VS ↔ MS）
+    m_gbuffer.setMeshShaderEnabled(v);
+    m_forward.setMeshShaderEnabled(v);
 }
 
 void FrameRenderer::registerPipelineSteps() { /* TODO: migrate from App */ }

@@ -2942,6 +2942,27 @@ void App::buildFrameUBO(FrameUBO& ubo) {
 void App::recordIndirectDraws(VkCommandBuffer cmd, uint32_t frameInFlight, const glm::mat4& viewProj) {
     if (m_drawCount == 0) return;
 
+    // Mesh Shader 路径：Task Shader 内部做 cull，无需 compute cull dispatch
+    if (m_renderer.useMeshShader()) {
+        if (m_useHiZOcclusion) {
+            m_renderer.hizPass().record(cmd, m_renderer.rt());
+            // 绑定 Hi-Z 到各 pass 的 mesh descriptor set
+            m_renderer.gbuffer().bindHiZViews(
+                m_renderer.hizPass().mip1View(), m_renderer.hizPass().mip2View(),
+                m_renderer.hizPass().mip3View(), m_renderer.hizPass().mip4View());
+            m_renderer.forward().bindHiZViews(
+                m_renderer.hizPass().mip1View(), m_renderer.hizPass().mip2View(),
+                m_renderer.hizPass().mip3View(), m_renderer.hizPass().mip4View());
+        }
+        // Sun indirect buf for RSM（RSM 暂用 VS 路径或直通 Task Shader）
+        auto* sunCmds = (VkDrawIndexedIndirectCommand*)m_indirectBufSun.mapped();
+        for (uint32_t i = 0; i < m_drawCount; ++i) {
+            const auto& e = m_drawEntries[i];
+            sunCmds[i] = {e.indexCount, 1, e.firstIndex, e.vertexOffset, i};
+        }
+        return;  // 跳过 compute cull + indirect barrier
+    }
+
     if (m_useGpuCulling) {
         // Build Hi-Z from previous frame's depth (only if occlusion enabled)
         if (m_useHiZOcclusion) m_renderer.hizPass().record(cmd, m_renderer.rt());
