@@ -101,7 +101,7 @@ void GBufferPass::init(Device& d,
             VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
     }
 
-    buildMeshPipeline();
+    // buildMeshPipeline() 延迟到 setMeshShaderEnabled(true) 调用时，避免 Intel IGC 在 init 阶段崩溃
 }
 
 void GBufferPass::buildPipeline() {
@@ -267,6 +267,9 @@ void GBufferPass::buildMeshPipeline() {
 }
 
 void GBufferPass::setMeshShaderEnabled(bool v) {
+    if (v && m_meshPipeline == VK_NULL_HANDLE) {
+        buildMeshPipeline();  // 首次启用时才创建（Intel IGC 可能崩溃）
+    }
     m_useMeshShader = v;
 }
 
@@ -335,7 +338,8 @@ void GBufferPass::bindScene(Device& d, const SceneGpu& gpu, uint32_t textureCoun
 
     vkUpdateDescriptorSets(d.device(), (uint32_t)w.size(), w.data(), 0, nullptr);
 
-    // ── 同时写入 Mesh Shader 的 set=0 描述符 ──
+    // ── Mesh Shader 的 set=0 描述符（仅在启用 mesh 时写入，避免 Intel 驱动崩溃）──
+    if (m_useMeshShader) {
     VkDescriptorBufferInfo vbInfo{gpu.vertexBuffer.handle(), 0, VK_WHOLE_SIZE};
     VkDescriptorBufferInfo ibInfo{gpu.indexBuffer.handle(), 0, VK_WHOLE_SIZE};
     std::array<VkWriteDescriptorSet, 7> mw{};
@@ -359,6 +363,7 @@ void GBufferPass::bindScene(Device& d, const SceneGpu& gpu, uint32_t textureCoun
     mw[5].descriptorType=VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;mw[5].pImageInfo=imgs.data();
     // DrawData (binding 0) 在 bindDrawData 中写入
     vkUpdateDescriptorSets(d.device(), (uint32_t)mw.size(), mw.data(), 0, nullptr);
+    } // if (m_useMeshShader)
 }
 
 void GBufferPass::bindDrawData(Device& d, VkBuffer drawDataBuf) {
@@ -369,10 +374,12 @@ void GBufferPass::bindDrawData(Device& d, VkBuffer drawDataBuf) {
     w.descriptorType=VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;w.pBufferInfo=&dd;
     vkUpdateDescriptorSets(d.device(),1,&w,0,nullptr);
     // Mesh 路径 binding 0（同一 buffer，不同 binding）
-    VkWriteDescriptorSet mw{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-    mw.dstSet=m_meshSet;mw.dstBinding=0;mw.descriptorCount=1;
-    mw.descriptorType=VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;mw.pBufferInfo=&dd;
-    vkUpdateDescriptorSets(d.device(),1,&mw,0,nullptr);
+    if (m_useMeshShader) {
+        VkWriteDescriptorSet mw{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+        mw.dstSet=m_meshSet;mw.dstBinding=0;mw.descriptorCount=1;
+        mw.descriptorType=VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;mw.pBufferInfo=&dd;
+        vkUpdateDescriptorSets(d.device(),1,&mw,0,nullptr);
+    }
 }
 // 更新 Task Shader 的 CullUbo（每帧调用）
 void GBufferPass::updateCullUbo(const glm::mat4& viewProj, const glm::vec4 frustum[6],

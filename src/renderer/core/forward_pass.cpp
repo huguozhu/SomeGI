@@ -321,7 +321,7 @@ void ForwardPass::bindIblResources(Device& d, const IblResources& ibl) {
 
     // 创建 IBL set=1 后构建 pipeline
     buildPipeline();
-    buildMeshPipeline();
+    // buildMeshPipeline() 延迟到 setMeshShaderEnabled(true) 时创建
 }
 
 void ForwardPass::destroy() {
@@ -376,7 +376,8 @@ void ForwardPass::bindScene(Device& d, const SceneGpu& gpu, uint32_t textureCoun
 
     vkUpdateDescriptorSets(d.device(), (uint32_t)w.size(), w.data(), 0, nullptr);
 
-    // ── 同时写入 Mesh Shader set=0 描述符 ──
+    // ── Mesh Shader set=0 描述符（仅在启用时写入，避免 Intel 驱动崩溃）──
+    if (m_useMeshShader) {
     VkDescriptorBufferInfo vbInfo{gpu.vertexBuffer.handle(), 0, VK_WHOLE_SIZE};
     VkDescriptorBufferInfo ibInfo{gpu.indexBuffer.handle(), 0, VK_WHOLE_SIZE};
     std::array<VkWriteDescriptorSet, 6> mw{};
@@ -393,6 +394,7 @@ void ForwardPass::bindScene(Device& d, const SceneGpu& gpu, uint32_t textureCoun
     mw[5]={VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};mw[5].dstSet=m_meshSet;mw[5].dstBinding=11;mw[5].descriptorCount=m_maxTextures;
     mw[5].descriptorType=VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;mw[5].pImageInfo=imgs.data();
     vkUpdateDescriptorSets(d.device(),(uint32_t)mw.size(),mw.data(),0,nullptr);
+    } // if (m_useMeshShader)
 }
 
 void ForwardPass::bindDrawData(Device& d, VkBuffer drawDataBuf) {
@@ -402,10 +404,12 @@ void ForwardPass::bindDrawData(Device& d, VkBuffer drawDataBuf) {
     w.descriptorType=VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;w.pBufferInfo=&dd;
     vkUpdateDescriptorSets(d.device(),1,&w,0,nullptr);
     // Mesh 路径 binding 0
-    VkWriteDescriptorSet mw{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-    mw.dstSet=m_meshSet;mw.dstBinding=0;mw.descriptorCount=1;
-    mw.descriptorType=VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;mw.pBufferInfo=&dd;
-    vkUpdateDescriptorSets(d.device(),1,&mw,0,nullptr);
+    if (m_useMeshShader) {
+        VkWriteDescriptorSet mw{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+        mw.dstSet=m_meshSet;mw.dstBinding=0;mw.descriptorCount=1;
+        mw.descriptorType=VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;mw.pBufferInfo=&dd;
+        vkUpdateDescriptorSets(d.device(),1,&mw,0,nullptr);
+    }
 }
 void ForwardPass::updateFrame(const FrameUBO& ubo) {
     std::memcpy(m_frameUbo.mapped(), &ubo, sizeof(FrameUBO));
