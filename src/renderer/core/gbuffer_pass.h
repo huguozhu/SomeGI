@@ -22,6 +22,10 @@ public:
     void bindScene(Device& d, const SceneGpu& gpu, uint32_t textureCount);
     void bindDrawData(Device& d, VkBuffer drawDataBuf);
     void updateFrame(const FrameUBO& ubo);
+    // 更新 Task Shader 的 CullUbo（Mesh Shader 路径每帧调用）
+    void updateCullUbo(const glm::mat4& viewProj, const glm::vec4 frustum[6],
+                       uint32_t drawCount, uint32_t hizMaxMip,
+                       uint32_t screenW, uint32_t screenH);
 
     // Expose the frame UBO buffer so LightingPass can bind the same memory.
     VkBuffer frameUboHandle() const { return m_frameUbo.handle(); }

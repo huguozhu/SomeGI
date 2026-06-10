@@ -334,14 +334,61 @@ void GBufferPass::bindScene(Device& d, const SceneGpu& gpu, uint32_t textureCoun
     w[3].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE; w[3].pImageInfo = imgs.data();
 
     vkUpdateDescriptorSets(d.device(), (uint32_t)w.size(), w.data(), 0, nullptr);
+
+    // ── 同时写入 Mesh Shader 的 set=0 描述符 ──
+    VkDescriptorBufferInfo vbInfo{gpu.vertexBuffer.handle(), 0, VK_WHOLE_SIZE};
+    VkDescriptorBufferInfo ibInfo{gpu.indexBuffer.handle(), 0, VK_WHOLE_SIZE};
+    std::array<VkWriteDescriptorSet, 7> mw{};
+    mw[0] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+    mw[0].dstSet=m_meshSet;mw[0].dstBinding=6;mw[0].descriptorCount=1;
+    mw[0].descriptorType=VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;mw[0].pBufferInfo=&uboInfo;
+    mw[1] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+    mw[1].dstSet=m_meshSet;mw[1].dstBinding=7;mw[1].descriptorCount=1;
+    mw[1].descriptorType=VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;mw[1].pBufferInfo=&vbInfo;
+    mw[2] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+    mw[2].dstSet=m_meshSet;mw[2].dstBinding=8;mw[2].descriptorCount=1;
+    mw[2].descriptorType=VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;mw[2].pBufferInfo=&ibInfo;
+    mw[3] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+    mw[3].dstSet=m_meshSet;mw[3].dstBinding=9;mw[3].descriptorCount=1;
+    mw[3].descriptorType=VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;mw[3].pBufferInfo=&matInfo;
+    mw[4] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+    mw[4].dstSet=m_meshSet;mw[4].dstBinding=10;mw[4].descriptorCount=1;
+    mw[4].descriptorType=VK_DESCRIPTOR_TYPE_SAMPLER;mw[4].pImageInfo=&samplerInfo;
+    mw[5] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+    mw[5].dstSet=m_meshSet;mw[5].dstBinding=11;mw[5].descriptorCount=m_maxTextures;
+    mw[5].descriptorType=VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;mw[5].pImageInfo=imgs.data();
+    // DrawData (binding 0) 在 bindDrawData 中写入
+    vkUpdateDescriptorSets(d.device(), (uint32_t)mw.size(), mw.data(), 0, nullptr);
 }
 
 void GBufferPass::bindDrawData(Device& d, VkBuffer drawDataBuf) {
+    // VS 路径 binding 10
     VkDescriptorBufferInfo dd{drawDataBuf,0,VK_WHOLE_SIZE};
     VkWriteDescriptorSet w{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
     w.dstSet=m_set;w.dstBinding=10;w.descriptorCount=1;
     w.descriptorType=VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;w.pBufferInfo=&dd;
     vkUpdateDescriptorSets(d.device(),1,&w,0,nullptr);
+    // Mesh 路径 binding 0（同一 buffer，不同 binding）
+    VkWriteDescriptorSet mw{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+    mw.dstSet=m_meshSet;mw.dstBinding=0;mw.descriptorCount=1;
+    mw.descriptorType=VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;mw.pBufferInfo=&dd;
+    vkUpdateDescriptorSets(d.device(),1,&mw,0,nullptr);
+}
+// 更新 Task Shader 的 CullUbo（每帧调用）
+void GBufferPass::updateCullUbo(const glm::mat4& viewProj, const glm::vec4 frustum[6],
+                                 uint32_t drawCount, uint32_t hizMaxMip,
+                                 uint32_t screenW, uint32_t screenH) {
+    struct {
+        glm::mat4 viewProj;
+        glm::vec4 frustum[6];
+        glm::vec2 screenSize; uint32_t drawCount; uint32_t hizMaxMip;
+    } cull{};
+    cull.viewProj = viewProj;
+    for (int i = 0; i < 6; ++i) cull.frustum[i] = frustum[i];
+    cull.screenSize = glm::vec2((float)screenW, (float)screenH);
+    cull.drawCount = drawCount;
+    cull.hizMaxMip = hizMaxMip;
+    std::memcpy(m_cullUbo.mapped(), &cull, sizeof(cull));
 }
 void GBufferPass::updateFrame(const FrameUBO& ubo) {
     std::memcpy(m_frameUbo.mapped(), &ubo, sizeof(FrameUBO));
@@ -401,16 +448,25 @@ void GBufferPass::record(VkCommandBuffer cmd, const RenderTargets& rt,
     vkCmdSetViewport(cmd, 0, 1, &vp);
     vkCmdSetScissor(cmd, 0, 1, &sc);
 
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipeline);
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-        m_pipelineLayout, 0, 1, &m_set, 0, nullptr);
+    if (m_useMeshShader && m_meshPipeline != VK_NULL_HANDLE) {
+        // ── Mesh Shader 路径：无需 vertex/index buffer bind ──
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_meshPipeline);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+            m_meshPipelineLayout, 0, 1, &m_meshSet, 0, nullptr);
+        uint32_t taskGroups = (drawCount + 63) / 64;  // 64 threads per task group
+        m_device->vkCmdDrawMeshTasksEXT(cmd, taskGroups, 1, 1);
+    } else {
+        // ── VS 路径：传统 vertex/index buffer ──
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipeline);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+            m_pipelineLayout, 0, 1, &m_set, 0, nullptr);
 
-    VkDeviceSize zero = 0;
-    VkBuffer vb = gpu.vertexBuffer.handle();
-    vkCmdBindVertexBuffers(cmd, 0, 1, &vb, &zero);
-    vkCmdBindIndexBuffer(cmd, gpu.indexBuffer.handle(), 0, VK_INDEX_TYPE_UINT32);
-
+        VkDeviceSize zero = 0;
+        VkBuffer vb = gpu.vertexBuffer.handle();
+        vkCmdBindVertexBuffers(cmd, 0, 1, &vb, &zero);
+        vkCmdBindIndexBuffer(cmd, gpu.indexBuffer.handle(), 0, VK_INDEX_TYPE_UINT32);
         vkCmdDrawIndexedIndirectCount(cmd, indirectBuf, 0, indirectBuf, 0, drawCount, sizeof(VkDrawIndexedIndirectCommand));
+    }
 
     vkCmdEndRendering(cmd);
 }

@@ -48,6 +48,9 @@ public:
     // vk-bootstrap dispatch table（加载了所有 extension 函数指针）。
     const vkb::DispatchTable& dispatch() const { return m_dispatch; }
 
+    // Mesh Shader 扩展函数（vkGetDeviceProcAddr 加载）
+    PFN_vkCmdDrawMeshTasksEXT vkCmdDrawMeshTasksEXT = nullptr;
+
     // VMA allocator
     VmaAllocator allocator() const { return m_allocator; }
 

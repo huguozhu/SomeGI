@@ -114,6 +114,12 @@ Device::Device(Window& window, bool enableValidation) {
     // Load extension function pointers from dispatch table.
     m_dispatch = m_device.make_table();
 
+    // Mesh Shader 扩展函数（不包含在 vkb::DispatchTable 中）
+    if (meshShaderAvail) {
+        vkCmdDrawMeshTasksEXT = (PFN_vkCmdDrawMeshTasksEXT)
+            vkGetDeviceProcAddr(m_device.device, "vkCmdDrawMeshTasksEXT");
+    }
+
     // Create VMA allocator
     VmaVulkanFunctions vmaFuncs{};
     vmaFuncs.vkGetInstanceProcAddr = vkGetInstanceProcAddr;
