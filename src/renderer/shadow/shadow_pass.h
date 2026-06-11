@@ -36,7 +36,7 @@ constexpr ShadowEntry kShadows[] = {
     {"PCSS Soft Shadow",   true,  false},
     {"VSM Soft Shadow",    true,  false},
     {"RT Hard Shadow",     true,  true},
-    {"RT Soft Shadow",     false, true},   // Phase 2
+    {"RT Soft Shadow",     true,  true},
 };
 constexpr int kShadowCount = (int)(sizeof(kShadows) / sizeof(kShadows[0]));
 
@@ -109,6 +109,7 @@ private:
 
     Device* m_device = nullptr;
     ShadowMethod m_method = ShadowMethod::HardShadowMap;
+    uint32_t m_currentFrameIndex = 0;  // 用于 RT soft shadow 随机种子
 
     // Shadow map target (D32_SFLOAT, 2048x2048)
     Image m_shadowMap;
@@ -162,6 +163,8 @@ private:
     // RT shadow（仅 HW 支持时创建）
     VkPipelineLayout m_rtHardLayout = VK_NULL_HANDLE;
     VkPipeline m_rtHardPipeline = VK_NULL_HANDLE;
+    VkPipelineLayout m_rtSoftLayout = VK_NULL_HANDLE;
+    VkPipeline m_rtSoftPipeline = VK_NULL_HANDLE;
     VkDescriptorSetLayout m_rtSetLayout = VK_NULL_HANDLE;
     VkDescriptorPool m_rtPool = VK_NULL_HANDLE;
     VkDescriptorSet m_rtSet = VK_NULL_HANDLE;

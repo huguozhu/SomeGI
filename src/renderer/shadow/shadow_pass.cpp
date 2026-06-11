@@ -422,6 +422,30 @@ void ShadowPass::buildPipeline_RTHard() {
     cpci.stage  = stage;
     cpci.layout = m_rtHardLayout;
     VK_CHECK(vkCreateComputePipelines(d.device(), VK_NULL_HANDLE, 1, &cpci, nullptr, &m_rtHardPipeline));
+
+    // RT Soft pipeline（push constant 含 frameIndex + sunRadius）
+    {
+        VkPushConstantRange pc2{};
+        pc2.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+        pc2.size       = 24;  // uint2(8) + float2(8) + uint(4) + float(4) = 24
+        std::array<VkDescriptorSetLayout, 2> sets2{m_rtSetLayout, m_frameSetLayout};
+
+        VkPipelineLayoutCreateInfo plci2{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+        plci2.setLayoutCount = (uint32_t)sets2.size(); plci2.pSetLayouts = sets2.data();
+        plci2.pushConstantRangeCount = 1; plci2.pPushConstantRanges = &pc2;
+        VK_CHECK(vkCreatePipelineLayout(d.device(), &plci2, nullptr, &m_rtSoftLayout));
+
+        ShaderModule cs2(d, shaderDir() / "shadow" / "shadow_rt_soft.spv");
+        VkPipelineShaderStageCreateInfo stage2{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
+        stage2.stage  = VK_SHADER_STAGE_COMPUTE_BIT;
+        stage2.module = cs2.handle();
+        stage2.pName  = "cs_main";
+
+        VkComputePipelineCreateInfo cpci2{VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
+        cpci2.stage  = stage2;
+        cpci2.layout = m_rtSoftLayout;
+        VK_CHECK(vkCreateComputePipelines(d.device(), VK_NULL_HANDLE, 1, &cpci2, nullptr, &m_rtSoftPipeline));
+    }
 }
 
 void ShadowPass::bindTLAS(Device& d, VkAccelerationStructureKHR tlas) {
@@ -530,7 +554,7 @@ void ShadowPass::bindFrameResources(Device& d, VkBuffer frameUbo, VkImageView de
 void ShadowPass::record(VkCommandBuffer cmd, const RenderTargets& rt,
                          VkBuffer frameUbo, const SceneGpu& sceneGpu,
                          VkBuffer indirectBuf, uint32_t drawCount, uint32_t frameIndex) {
-    (void)frameIndex;
+    m_currentFrameIndex = frameIndex;
     switch (m_method) {
     case ShadowMethod::None:          recordNone(cmd); break;
     case ShadowMethod::HardShadowMap: recordHardSM(cmd, rt, frameUbo, sceneGpu, indirectBuf, drawCount); break;
@@ -1089,11 +1113,42 @@ void ShadowPass::recordRTHard(VkCommandBuffer cmd) {
 }
 
 // ────────────────────────────────────────────────────────────────────────────
-// recordRTSoft —— RT 软阴影（暂未实现，fallback 到 RT Hard）
+// recordRTSoft —— RT 软阴影：每像素 8 rays 锥体采样模拟面光源
 // ────────────────────────────────────────────────────────────────────────────
 
 void ShadowPass::recordRTSoft(VkCommandBuffer cmd) {
-    recordRTHard(cmd);
+    if (!m_rtSoftPipeline) { recordRTHard(cmd); return; }
+
+    transitionImage(cmd, m_shadowMask.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+        VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
+        VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
+        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+        VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
+
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_rtSoftPipeline);
+    {
+        std::array<VkDescriptorSet, 2> dsets{m_rtSet, m_frameSet};
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
+            m_rtSoftLayout, 0, (uint32_t)dsets.size(), dsets.data(), 0, nullptr);
+    }
+
+    struct { uint32_t x, y; float ix, iy; uint32_t fi; float sr; } pc;
+    pc.x  = m_outputSize.width;  pc.y  = m_outputSize.height;
+    pc.ix = 1.0f / (float)pc.x;  pc.iy = 1.0f / (float)pc.y;
+    pc.fi = m_currentFrameIndex;  // 在 record() 中设置
+    pc.sr = 0.03f;                // 太阳角半径 ≈1.7°，产生柔和半影
+    vkCmdPushConstants(cmd, m_rtSoftLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
+
+    uint32_t gx = (m_outputSize.width  + 7) / 8;
+    uint32_t gy = (m_outputSize.height + 7) / 8;
+    vkCmdDispatch(cmd, gx, gy, 1);
+
+    transitionImage(cmd, m_shadowMask.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+        VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+        VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+        VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -1444,6 +1499,8 @@ void ShadowPass::destroyPipelines() {
     if (m_pcssResolveLayout) vkDestroyPipelineLayout(dev, m_pcssResolveLayout, nullptr);
     if (m_rtHardLayout)     vkDestroyPipelineLayout(dev, m_rtHardLayout, nullptr);
     if (m_rtHardPipeline)   vkDestroyPipeline(dev, m_rtHardPipeline, nullptr);
+    if (m_rtSoftLayout)     vkDestroyPipelineLayout(dev, m_rtSoftLayout, nullptr);
+    if (m_rtSoftPipeline)   vkDestroyPipeline(dev, m_rtSoftPipeline, nullptr);
     if (m_resolveLayout)    vkDestroyPipelineLayout(dev, m_resolveLayout, nullptr);
     m_smPipeline       = VK_NULL_HANDLE;
     m_vsmGenPipeline   = VK_NULL_HANDLE;
@@ -1457,6 +1514,8 @@ void ShadowPass::destroyPipelines() {
     m_pcssResolveLayout = VK_NULL_HANDLE;
     m_rtHardLayout      = VK_NULL_HANDLE;
     m_rtHardPipeline    = VK_NULL_HANDLE;
+    m_rtSoftLayout      = VK_NULL_HANDLE;
+    m_rtSoftPipeline    = VK_NULL_HANDLE;
     m_resolveLayout    = VK_NULL_HANDLE;
 }
 
