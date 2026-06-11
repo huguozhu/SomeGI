@@ -15,9 +15,10 @@ enum class ShadowMethod : int {
     None = 0,
     HardShadowMap = 1,
     PCF = 2,
-    VSM = 3,
-    RTHard = 4,    // Phase 2
-    RTSoft = 5,    // Phase 2
+    PCSS = 3,
+    VSM = 4,
+    RTHard = 5,    // Phase 2
+    RTSoft = 6,    // Phase 2
     Count
 };
 
@@ -32,6 +33,7 @@ constexpr ShadowEntry kShadows[] = {
     {"None",               true,  false},
     {"Hard Shadow Map",    true,  false},
     {"PCF Soft Shadow",    true,  false},
+    {"PCSS Soft Shadow",   true,  false},
     {"VSM Soft Shadow",    true,  false},
     {"RT Hard Shadow",     false, true},   // Phase 2
     {"RT Soft Shadow",     false, true},   // Phase 2
@@ -80,6 +82,9 @@ private:
     void recordPCF(VkCommandBuffer cmd, const RenderTargets& rt,
                    VkBuffer frameUbo, const SceneGpu& sceneGpu,
                    VkBuffer indirectBuf, uint32_t drawCount);
+    void recordPCSS(VkCommandBuffer cmd, const RenderTargets& rt,
+                    VkBuffer frameUbo, const SceneGpu& sceneGpu,
+                    VkBuffer indirectBuf, uint32_t drawCount);
     void recordVSM(VkCommandBuffer cmd, const RenderTargets& rt,
                    VkBuffer frameUbo, const SceneGpu& sceneGpu,
                    VkBuffer indirectBuf, uint32_t drawCount);
@@ -120,6 +125,10 @@ private:
     VkPipeline m_resolveHard = VK_NULL_HANDLE;
     VkPipeline m_resolvePCF = VK_NULL_HANDLE;
     VkPipeline m_resolveVSM = VK_NULL_HANDLE;
+
+    // PCSS resolve（独立 pipeline layout，push constant 含 lightSize）
+    VkPipelineLayout m_pcssResolveLayout = VK_NULL_HANDLE;
+    VkPipeline m_resolvePCSS = VK_NULL_HANDLE;
 
     // Descriptors（resolve compute：UBO + COMBINED_IMAGE_SAMPLER + STORAGE_IMAGE）
     VkDescriptorSetLayout m_setLayout = VK_NULL_HANDLE;

@@ -1,19 +1,21 @@
 // shadow_pcf_resolve.slang — PCF soft shadow resolve compute shader。
 //
-// 与 shadow_hard_resolve 相似，但用 3×3 的 Percentage-Closer Filtering
-// 替代单点深度比较，产生软阴影边缘过渡。
+// 使用 Poisson disk 16 采样替代原始 3×3 网格 PCF：
+//   - 无网格走样伪影
+//   - 更宽的软阴影过渡带（kernel 半径 ≈ 3 texels）
 //
 // 每像素：
 //   1. 从 GBuffer depth 重建世界坐标 worldPos
 //   2. 变换到 sun light clip space → NDC → UV
-//   3. 在 shadow map 上做 3×3 PCF 采样（每采样做手动深度比较）
-//   4. 输出 9 样本平均值：1.0 = full lit, 0.0 = full shadow
+//   3. Poisson disk PCF 采样（手动深度比较）
+//   4. 输出样本平均值：1.0 = full lit, 0.0 = full shadow
 //
 // 管线约定：
 //   set=0:
 //     binding 0: ConstantBuffer<ShadowUbo>       — sunViewProj
-//     binding 1: Texture2D + SamplerState         — shadow map
-//     binding 2: RWTexture2D<float>               — shadowMask
+//     binding 1: Texture2D                       — shadow map
+//     binding 2: SamplerState                     — shadow sampler
+//     binding 3: RWTexture2D<float>               — shadowMask
 //   set=1:
 //     binding 0: ConstantBuffer<FrameUniforms>    — invViewProj
 //     binding 1: Texture2D<float>                 — gDepth
@@ -41,6 +43,19 @@ struct ResolvePC {
 };
 [[vk::push_constant]] ResolvePC gPC;
 
+// ── Poisson disk 16 采样点 ──
+static const float2 kPoisson16[16] = {
+    float2(-0.3262, -0.2358), float2(-0.0913,  0.3674),
+    float2( 0.1935, -0.3961), float2( 0.3741,  0.0821),
+    float2(-0.4638,  0.0883), float2( 0.0127, -0.1339),
+    float2( 0.2319,  0.2978), float2(-0.1876, -0.4062),
+    float2( 0.4193, -0.1851), float2(-0.4014,  0.3487),
+    float2( 0.0598,  0.4615), float2(-0.2722, -0.0564),
+    float2( 0.1489, -0.2593), float2(-0.3594, -0.2965),
+    float2( 0.3052, -0.0418), float2(-0.0831,  0.2043),
+};
+
+// ── 从 GBuffer depth 重建世界坐标 ──
 float3 worldFromDepth(uint2 pix, float depth) {
     float2 uv = (float2(pix) + 0.5) * gPC.invOutSize;
     float2 ndc = uv * 2.0 - 1.0;
@@ -74,24 +89,24 @@ void cs_main(uint3 dt : SV_DispatchThreadID) {
         return;
     }
 
-    // ── 4. UV + 3×3 PCF ──
+    // ── 4. Poisson disk PCF ──
     float2 uv = sunNdc.xy * 0.5 + 0.5;
     float receiverDepth = sunNdc.z - gPC.bias;
-
-    // texel 大小从 push constant 传入，与 shadow map 实际分辨率一致
     float2 texelSize = gPC.invShadowMapSize;
 
+    // kernel 半径（texels）：3.0 产生中等宽度的软过渡
+    // 可调大（5～8）获得更宽的 penumbra，或调小（1～2）接近 Hard SM
+    float kernelRadius = 3.0;
+
     float shadow = 0.0;
-    for (int y = -1; y <= 1; ++y) {
-        for (int x = -1; x <= 1; ++x) {
-            float2 sampleUv = uv + float2(x, y) * texelSize;
-            float sampleDepth = gShadowMap.SampleLevel(gShadowSampler, sampleUv, 0).r;
-            if (receiverDepth <= sampleDepth) {
-                shadow += 1.0;
-            }
+    for (int i = 0; i < 16; ++i) {
+        float2 sampleUv = uv + kPoisson16[i] * texelSize * kernelRadius;
+        float sampleDepth = gShadowMap.SampleLevel(gShadowSampler, sampleUv, 0).r;
+        if (receiverDepth <= sampleDepth) {
+            shadow += 1.0;
         }
     }
-    shadow /= 9.0;
+    shadow /= 16.0;
 
     gOutMask[pix] = shadow;
 }

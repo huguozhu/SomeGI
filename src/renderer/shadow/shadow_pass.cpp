@@ -42,6 +42,18 @@ struct ResolvePC {
 };
 static_assert(sizeof(ResolvePC) == 32, "ResolvePC must match shader push constant layout");
 
+// PCSS 专用 push constant —— 比 ResolvePC 多 lightSize + maxKernelRadius
+struct PCSS_PC {
+    uint32_t outSizeX, outSizeY;
+    float    invOutSizeX, invOutSizeY;
+    float    bias;
+    uint32_t _pad;
+    float    invShadowMapX, invShadowMapY;
+    float    lightSize;         // 太阳角半径（如 0.03）
+    float    maxKernelRadius;   // 最大 PCF kernel（texels，如 15.0）
+};
+static_assert(sizeof(PCSS_PC) == 40, "PCSS_PC must match shader push constant layout");
+
 } // anonymous namespace
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -398,6 +410,7 @@ void ShadowPass::record(VkCommandBuffer cmd, const RenderTargets& rt,
     case ShadowMethod::None:          recordNone(cmd); break;
     case ShadowMethod::HardShadowMap: recordHardSM(cmd, rt, frameUbo, sceneGpu, indirectBuf, drawCount); break;
     case ShadowMethod::PCF:           recordPCF(cmd, rt, frameUbo, sceneGpu, indirectBuf, drawCount); break;
+    case ShadowMethod::PCSS:          recordPCSS(cmd, rt, frameUbo, sceneGpu, indirectBuf, drawCount); break;
     case ShadowMethod::VSM:           recordVSM(cmd, rt, frameUbo, sceneGpu, indirectBuf, drawCount); break;
     default:                          recordNone(cmd); break;
     }
@@ -617,6 +630,75 @@ void ShadowPass::recordPCF(VkCommandBuffer cmd, const RenderTargets& /*rt*/,
 }
 
 // ────────────────────────────────────────────────────────────────────────────
+// recordPCSS —— 渲染 shadow map + PCSS resolve（blocker search + 自适应 PCF）
+// ────────────────────────────────────────────────────────────────────────────
+
+void ShadowPass::recordPCSS(VkCommandBuffer cmd, const RenderTargets& /*rt*/,
+                             VkBuffer frameUbo, const SceneGpu& sceneGpu,
+                             VkBuffer indirectBuf, uint32_t drawCount) {
+    if (drawCount == 0) { recordNone(cmd); return; }
+
+    // 1. 渲染 shadow map（与 HardSM/PCF 共用同一张）
+    renderShadowMap(cmd, frameUbo, sceneGpu, indirectBuf, drawCount);
+
+    // 2. 恢复 resolve descriptor（VSM 可能已改 binding 1/2）
+    {
+        VkDescriptorImageInfo imgInfo{};
+        imgInfo.imageView   = m_shadowMap.view();
+        imgInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        VkDescriptorImageInfo smpInfo{};
+        smpInfo.sampler = m_shadowSampler;
+
+        std::array<VkWriteDescriptorSet, 2> dw{};
+        dw[0] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+        dw[0].dstSet = m_set; dw[0].dstBinding = 1; dw[0].descriptorCount = 1;
+        dw[0].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE; dw[0].pImageInfo = &imgInfo;
+        dw[1] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+        dw[1].dstSet = m_set; dw[1].dstBinding = 2; dw[1].descriptorCount = 1;
+        dw[1].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER; dw[1].pImageInfo = &smpInfo;
+        vkUpdateDescriptorSets(m_device->device(), (uint32_t)dw.size(), dw.data(), 0, nullptr);
+    }
+
+    // 3. Resolve
+    transitionImage(cmd, m_shadowMask.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+        VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
+        VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
+        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+        VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
+
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_resolvePCSS);
+    {
+        std::array<VkDescriptorSet, 2> dsets{m_set, m_frameSet};
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
+            m_pcssResolveLayout, 0, (uint32_t)dsets.size(), dsets.data(), 0, nullptr);
+    }
+
+    PCSS_PC pc{};
+    pc.outSizeX       = m_outputSize.width;
+    pc.outSizeY       = m_outputSize.height;
+    pc.invOutSizeX    = 1.0f / (float)m_outputSize.width;
+    pc.invOutSizeY    = 1.0f / (float)m_outputSize.height;
+    pc.bias           = 0.001f;
+    pc._pad           = 0;
+    pc.invShadowMapX  = 1.0f / (float)m_shadowMapSize.width;
+    pc.invShadowMapY  = 1.0f / (float)m_shadowMapSize.height;
+    pc.lightSize      = 0.03f;          // 太阳角半径 ~1.7°
+    pc.maxKernelRadius = 15.0f;         // 最大 kernel 半径（texels）
+    vkCmdPushConstants(cmd, m_pcssResolveLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
+
+    uint32_t gx = (m_outputSize.width  + 7) / 8;
+    uint32_t gy = (m_outputSize.height + 7) / 8;
+    vkCmdDispatch(cmd, gx, gy, 1);
+
+    transitionImage(cmd, m_shadowMask.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+        VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+        VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+        VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+}
+
+// ────────────────────────────────────────────────────────────────────────────
 // recordVSM —— 渲染 depth+depth^2 + VSM resolve
 // ────────────────────────────────────────────────────────────────────────────
 
@@ -688,8 +770,46 @@ void ShadowPass::recordVSM(VkCommandBuffer cmd, const RenderTargets& /*rt*/,
         vkCmdEndRendering(cmd);
     }
 
-    // ── 4. Blur：m_vsmMap → m_vsmBlur（2×2 box blur 降方差噪声）──
-    // 4a. vsmMap → SHADER_READ_ONLY（blur 输入）
+    // ── 4. 可分離 blur：水平 pass → 垂直 pass（5-tap gaussian）──
+    //     共享内存 blur pipeline，pass 1 vsmMap→vsmBlur，pass 2 vsmBlur→vsmMap
+    //     最终 vsmMap 包含两次滤波后的 moments，resolve 直接读 vsmMap
+
+    auto blurDispatch = [&](VkImageView inView, VkImageLayout inLayout,
+                            VkImageView outView, VkImageLayout outLayout,
+                            uint32_t dir) {
+        // 更新 blur descriptor
+        VkDescriptorImageInfo inInfo{};
+        inInfo.imageView   = inView;
+        inInfo.imageLayout = inLayout;
+        VkDescriptorImageInfo outInfo{};
+        outInfo.imageView   = outView;
+        outInfo.imageLayout = outLayout;
+        std::array<VkWriteDescriptorSet, 2> wd{};
+        wd[0] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+        wd[0].dstSet = m_vsmBlurSet; wd[0].dstBinding = 0; wd[0].descriptorCount = 1;
+        wd[0].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE; wd[0].pImageInfo = &inInfo;
+        wd[1] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+        wd[1].dstSet = m_vsmBlurSet; wd[1].dstBinding = 1; wd[1].descriptorCount = 1;
+        wd[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE; wd[1].pImageInfo = &outInfo;
+        vkUpdateDescriptorSets(m_device->device(), (uint32_t)wd.size(), wd.data(), 0, nullptr);
+
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_vsmBlurPipeline);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
+            m_vsmBlurLayout, 0, 1, &m_vsmBlurSet, 0, nullptr);
+
+        struct { uint32_t x, y; float ix, iy; uint32_t dir, pad; } pc;
+        pc.x   = m_shadowMapSize.width;  pc.y   = m_shadowMapSize.height;
+        pc.ix  = 1.0f / (float)pc.x;     pc.iy  = 1.0f / (float)pc.y;
+        pc.dir = dir;                     pc.pad = 0;
+        vkCmdPushConstants(cmd, m_vsmBlurLayout, VK_SHADER_STAGE_COMPUTE_BIT,
+            0, sizeof(pc), &pc);
+
+        uint32_t gx = (m_shadowMapSize.width  + 7) / 8;
+        uint32_t gy = (m_shadowMapSize.height + 7) / 8;
+        vkCmdDispatch(cmd, gx, gy, 1);
+    };
+
+    // 4a. Pass 1 布局：vsmMap → SHADER_READ_ONLY（blur 输入），vsmBlur → GENERAL（输出）
     transitionImage(cmd, m_vsmMap.image(), VK_IMAGE_ASPECT_COLOR_BIT,
         VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
@@ -698,50 +818,17 @@ void ShadowPass::recordVSM(VkCommandBuffer cmd, const RenderTargets& /*rt*/,
         VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
         VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
 
-    // 4b. vsmBlur → GENERAL（blur 输出）
     transitionImage(cmd, m_vsmBlur.image(), VK_IMAGE_ASPECT_COLOR_BIT,
         VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
         VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
         VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
         VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
 
-    // 4c. Blur 采样描述符更新（输入=vsmMap, 输出=vsmBlur）
-    {
-        VkDescriptorImageInfo inInfo{};
-        inInfo.imageView   = m_vsmMap.view();
-        inInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        VkDescriptorImageInfo outInfo{};
-        outInfo.imageView   = m_vsmBlur.view();
-        outInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+    // 4b. Pass 1: 水平 blur（vsmMap → vsmBlur）
+    blurDispatch(m_vsmMap.view(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                 m_vsmBlur.view(), VK_IMAGE_LAYOUT_GENERAL, 0);
 
-        std::array<VkWriteDescriptorSet, 2> w{};
-        w[0] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-        w[0].dstSet = m_vsmBlurSet; w[0].dstBinding = 0; w[0].descriptorCount = 1;
-        w[0].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE; w[0].pImageInfo = &inInfo;
-        w[1] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-        w[1].dstSet = m_vsmBlurSet; w[1].dstBinding = 1; w[1].descriptorCount = 1;
-        w[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE; w[1].pImageInfo = &outInfo;
-        vkUpdateDescriptorSets(m_device->device(), (uint32_t)w.size(), w.data(), 0, nullptr);
-    }
-
-    // 4d. Blur dispatch（8×8 thread groups）
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_vsmBlurPipeline);
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
-        m_vsmBlurLayout, 0, 1, &m_vsmBlurSet, 0, nullptr);
-    {
-        struct { uint32_t x, y; float ix, iy; } pc;
-        pc.x  = m_shadowMapSize.width;  pc.y  = m_shadowMapSize.height;
-        pc.ix = 1.0f / (float)pc.x;     pc.iy = 1.0f / (float)pc.y;
-        vkCmdPushConstants(cmd, m_vsmBlurLayout, VK_SHADER_STAGE_COMPUTE_BIT,
-            0, sizeof(pc), &pc);
-    }
-    {
-        uint32_t gx = (m_shadowMapSize.width  + 7) / 8;
-        uint32_t gy = (m_shadowMapSize.height + 7) / 8;
-        vkCmdDispatch(cmd, gx, gy, 1);
-    }
-
-    // 4e. vsmBlur → SHADER_READ_ONLY（resolve 输入）
+    // 4c. Pass 2 布局：vsmBlur → SHADER_READ_ONLY，vsmMap → GENERAL
     transitionImage(cmd, m_vsmBlur.image(), VK_IMAGE_ASPECT_COLOR_BIT,
         VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
         VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
@@ -749,7 +836,26 @@ void ShadowPass::recordVSM(VkCommandBuffer cmd, const RenderTargets& /*rt*/,
         VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
         VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
 
-    // 4f. shadowMap → SHADER_READ_ONLY（resolve 不需要 shadowMap，保持 layout 一致）
+    transitionImage(cmd, m_vsmMap.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL,
+        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+        VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
+        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+        VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
+
+    // 4d. Pass 2: 垂直 blur（vsmBlur → vsmMap，覆盖原始数据）
+    blurDispatch(m_vsmBlur.view(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                 m_vsmMap.view(), VK_IMAGE_LAYOUT_GENERAL, 1);
+
+    // 4e. vsmMap → SHADER_READ_ONLY（resolve 输入）
+    transitionImage(cmd, m_vsmMap.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+        VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+        VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+        VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+
+    // 4f. shadowMap → SHADER_READ_ONLY
     transitionImage(cmd, m_shadowMap.image(), VK_IMAGE_ASPECT_DEPTH_BIT,
         VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
@@ -758,10 +864,10 @@ void ShadowPass::recordVSM(VkCommandBuffer cmd, const RenderTargets& /*rt*/,
         VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
         VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
 
-    // ── 5. 更新 resolve descriptor: binding 1 → vsmBlur（blur 后）, binding 2 → vsmSampler ──
+    // ── 5. 更新 resolve descriptor: binding 1 → vsmMap（两次 blur 后）, binding 2 → vsmSampler ──
     {
         VkDescriptorImageInfo imgInfo{};
-        imgInfo.imageView   = m_vsmBlur.view();
+        imgInfo.imageView   = m_vsmMap.view();
         imgInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
         VkDescriptorImageInfo smpInfo{};
@@ -1044,11 +1150,10 @@ void ShadowPass::buildPipeline_VSMGen() {
 void ShadowPass::buildPipeline_VSMBlur() {
     auto& d = *m_device;
 
-    // Push constant: 输出尺寸 + 倒数
+    // Push constant: uint2 size + float2 invSize + uint dir + uint _pad = 24 bytes
     VkPushConstantRange pc{};
     pc.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-    pc.size       = sizeof(uint32_t) * 4;  // uint2 + float2 = 16 bytes
-    static_assert(sizeof(uint32_t) * 4 == 16, "VsmBlurPC must be 16 bytes");
+    pc.size       = sizeof(uint32_t) * 6;  // 24 bytes
 
     VkPipelineLayoutCreateInfo plci{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
     plci.setLayoutCount = 1; plci.pSetLayouts = &m_vsmBlurSetLayout;
@@ -1125,6 +1230,31 @@ void ShadowPass::buildResolvePipeline() {
         cpci.layout = m_resolveLayout;
         VK_CHECK(vkCreateComputePipelines(d.device(), VK_NULL_HANDLE, 1, &cpci, nullptr, &m_resolveVSM));
     }
+
+    // ── PCSS resolve（独立 pipeline layout，push constant 比 ResolvePC 大）──
+    {
+        VkPushConstantRange pc{};
+        pc.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+        pc.size       = sizeof(PCSS_PC);    // 40 bytes：含 lightSize + maxKernelRadius
+        static_assert(sizeof(PCSS_PC) == 40);
+
+        std::array<VkDescriptorSetLayout, 2> sets{m_setLayout, m_frameSetLayout};
+        VkPipelineLayoutCreateInfo plci{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+        plci.setLayoutCount = (uint32_t)sets.size(); plci.pSetLayouts = sets.data();
+        plci.pushConstantRangeCount = 1; plci.pPushConstantRanges = &pc;
+        VK_CHECK(vkCreatePipelineLayout(d.device(), &plci, nullptr, &m_pcssResolveLayout));
+
+        ShaderModule cs(d, shaderDir() / "shadow" / "shadow_pcss_resolve.spv");
+        VkPipelineShaderStageCreateInfo stage{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
+        stage.stage  = VK_SHADER_STAGE_COMPUTE_BIT;
+        stage.module = cs.handle();
+        stage.pName  = "cs_main";
+
+        VkComputePipelineCreateInfo cpci{VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
+        cpci.stage  = stage;
+        cpci.layout = m_pcssResolveLayout;
+        VK_CHECK(vkCreateComputePipelines(d.device(), VK_NULL_HANDLE, 1, &cpci, nullptr, &m_resolvePCSS));
+    }
 }
 
 void ShadowPass::destroyPipelines() {
@@ -1135,18 +1265,22 @@ void ShadowPass::destroyPipelines() {
     if (m_vsmBlurPipeline)  vkDestroyPipeline(dev, m_vsmBlurPipeline, nullptr);
     if (m_resolveHard)      vkDestroyPipeline(dev, m_resolveHard, nullptr);
     if (m_resolvePCF)       vkDestroyPipeline(dev, m_resolvePCF, nullptr);
+    if (m_resolvePCSS)      vkDestroyPipeline(dev, m_resolvePCSS, nullptr);
     if (m_resolveVSM)       vkDestroyPipeline(dev, m_resolveVSM, nullptr);
     if (m_smPipelineLayout) vkDestroyPipelineLayout(dev, m_smPipelineLayout, nullptr);
     if (m_vsmBlurLayout)    vkDestroyPipelineLayout(dev, m_vsmBlurLayout, nullptr);
+    if (m_pcssResolveLayout) vkDestroyPipelineLayout(dev, m_pcssResolveLayout, nullptr);
     if (m_resolveLayout)    vkDestroyPipelineLayout(dev, m_resolveLayout, nullptr);
     m_smPipeline       = VK_NULL_HANDLE;
     m_vsmGenPipeline   = VK_NULL_HANDLE;
     m_vsmBlurPipeline  = VK_NULL_HANDLE;
     m_resolveHard      = VK_NULL_HANDLE;
     m_resolvePCF       = VK_NULL_HANDLE;
+    m_resolvePCSS      = VK_NULL_HANDLE;
     m_resolveVSM       = VK_NULL_HANDLE;
     m_smPipelineLayout = VK_NULL_HANDLE;
     m_vsmBlurLayout    = VK_NULL_HANDLE;
+    m_pcssResolveLayout = VK_NULL_HANDLE;
     m_resolveLayout    = VK_NULL_HANDLE;
 }
 
