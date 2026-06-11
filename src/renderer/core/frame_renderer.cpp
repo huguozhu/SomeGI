@@ -7,7 +7,7 @@ namespace somegi {
 
 void FrameRenderer::init(Device& d, VkCommandPool pool, VkExtent2D extent,
                           VkSampleCountFlagBits msaaSamples, bool rtSupported,
-                          VkFormat swapchainFmt, GLFWwindow* window) {
+                          VkFormat /*swapchainFmt*/, GLFWwindow* /*window*/) {
     m_device = &d;
     m_pool   = pool;
     m_rtSupported = rtSupported;

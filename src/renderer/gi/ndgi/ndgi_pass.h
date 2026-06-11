@@ -11,7 +11,7 @@ class NdgiResources;
 struct SceneGpu;
 class SceneRtAS;
 struct RenderTargets;
-struct VxgiResources;
+class VxgiResources;
 
 // NDGI Pass: manages the compute pipelines for probe tracing and weight init
 class NdgiPass {

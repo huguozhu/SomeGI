@@ -81,10 +81,10 @@ void ForwardPass::init(Device& d, VkFormat colorFmt, VkFormat depthFmt, uint32_t
         VkDescriptorSetLayoutBindingFlagsCreateInfo mbfci{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO};
         mbfci.bindingCount = (uint32_t)mbf.size(); mbfci.pBindingFlags = mbf.data();
 
-        VkDescriptorSetLayoutCreateInfo li{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-        li.pNext = &mbfci;
-        li.bindingCount = (uint32_t)mb.size(); li.pBindings = mb.data();
-        VK_CHECK(vkCreateDescriptorSetLayout(d.device(), &li, nullptr, &m_meshSetLayout));
+        VkDescriptorSetLayoutCreateInfo mli{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+        mli.pNext = &mbfci;
+        mli.bindingCount = (uint32_t)mb.size(); mli.pBindings = mb.data();
+        VK_CHECK(vkCreateDescriptorSetLayout(d.device(), &mli, nullptr, &m_meshSetLayout));
 
         std::array<VkDescriptorPoolSize, 4> mps{{
             {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 5},
@@ -92,13 +92,13 @@ void ForwardPass::init(Device& d, VkFormat colorFmt, VkFormat depthFmt, uint32_t
             {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, m_maxTextures + 4},
             {VK_DESCRIPTOR_TYPE_SAMPLER, 1},
         }};
-        VkDescriptorPoolCreateInfo pci{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
-        pci.maxSets = 1; pci.poolSizeCount = (uint32_t)mps.size(); pci.pPoolSizes = mps.data();
-        VK_CHECK(vkCreateDescriptorPool(d.device(), &pci, nullptr, &m_meshPool));
+        VkDescriptorPoolCreateInfo mpci{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+        mpci.maxSets = 1; mpci.poolSizeCount = (uint32_t)mps.size(); mpci.pPoolSizes = mps.data();
+        VK_CHECK(vkCreateDescriptorPool(d.device(), &mpci, nullptr, &m_meshPool));
 
-        VkDescriptorSetAllocateInfo dai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
-        dai.descriptorPool = m_meshPool; dai.descriptorSetCount = 1; dai.pSetLayouts = &m_meshSetLayout;
-        VK_CHECK(vkAllocateDescriptorSets(d.device(), &dai, &m_meshSet));
+        VkDescriptorSetAllocateInfo mdai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+        mdai.descriptorPool = m_meshPool; mdai.descriptorSetCount = 1; mdai.pSetLayouts = &m_meshSetLayout;
+        VK_CHECK(vkAllocateDescriptorSets(d.device(), &mdai, &m_meshSet));
 
         m_cullUbo = Buffer(d, sizeof(glm::vec4)*6 + sizeof(glm::vec2) + sizeof(uint32_t)*2,
             VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,

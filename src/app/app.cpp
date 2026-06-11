@@ -1496,6 +1496,12 @@ void App::registerPipelineSteps() {
         .name = "Shadow",
         .phase = "PrePass",
         .record = [this](VkCommandBuffer cmd) {
+            // 确保 depth 在 SHADER_READ_ONLY_OPTIMAL（shadow resolve 采样 GBuffer depth）
+            transitionImage(cmd, m_renderer.rt().depth.image(), VK_IMAGE_ASPECT_DEPTH_BIT,
+                VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
+                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
             m_renderer.shadow().record(cmd, m_renderer.rt(),
                 m_renderer.gbuffer().frameUboHandle(),
                 m_sceneGpu, m_indirectBufSun.handle(), m_drawCount,

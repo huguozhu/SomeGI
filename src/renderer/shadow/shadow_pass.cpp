@@ -153,9 +153,12 @@ void ShadowPass::init(Device& d, VkExtent2D shadowMapSize, VkExtent2D outputSize
         bld[3] = {3, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
 
         // binding 1,2 标记为 UPDATE_AFTER_BIND（Vulkan 1.2+ core）
-        std::array<VkDescriptorBindingFlags, 2> flags{
-            VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT,
-            VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT,
+        // bindingCount 必须与 VkDescriptorSetLayoutCreateInfo::bindingCount 一致
+        std::array<VkDescriptorBindingFlags, 4> flags{
+            0,  // binding 0: UNIFORM_BUFFER
+            VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT,  // binding 1: SAMPLED_IMAGE
+            VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT,  // binding 2: SAMPLER
+            0,  // binding 3: STORAGE_IMAGE
         };
         VkDescriptorSetLayoutBindingFlagsCreateInfo fi{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO};
         fi.bindingCount = (uint32_t)flags.size(); fi.pBindingFlags = flags.data();
@@ -163,7 +166,7 @@ void ShadowPass::init(Device& d, VkExtent2D shadowMapSize, VkExtent2D outputSize
         VkDescriptorSetLayoutCreateInfo li{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
         li.pNext = &fi;
         li.bindingCount = (uint32_t)bld.size(); li.pBindings = bld.data();
-        li.flags = 0;  // 不需要 VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT
+        li.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT;
         VK_CHECK(vkCreateDescriptorSetLayout(d.device(), &li, nullptr, &m_setLayout));
     }
 
@@ -215,13 +218,23 @@ void ShadowPass::init(Device& d, VkExtent2D shadowMapSize, VkExtent2D outputSize
     }
 
     // ── 9. 每帧资源 descriptor set layout（set=1：FrameUniforms + GBuffer depth）
+    //     使用 UPDATE_AFTER_BIND 允许跨帧安全更新（kFramesInFlight=2）
     {
         std::array<VkDescriptorSetLayoutBinding, 2> bld{};
         bld[0] = {0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
         bld[1] = {1, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
 
+        std::array<VkDescriptorBindingFlags, 2> flags{
+            VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT,
+            VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT,
+        };
+        VkDescriptorSetLayoutBindingFlagsCreateInfo fi{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO};
+        fi.bindingCount = (uint32_t)flags.size(); fi.pBindingFlags = flags.data();
+
         VkDescriptorSetLayoutCreateInfo li{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+        li.pNext = &fi;
         li.bindingCount = (uint32_t)bld.size(); li.pBindings = bld.data();
+        li.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT;
         VK_CHECK(vkCreateDescriptorSetLayout(d.device(), &li, nullptr, &m_frameSetLayout));
     }
 
@@ -232,6 +245,7 @@ void ShadowPass::init(Device& d, VkExtent2D shadowMapSize, VkExtent2D outputSize
             {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1},
         }};
         VkDescriptorPoolCreateInfo pci{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+        pci.flags   = VK_DESCRIPTOR_POOL_CREATE_UPDATE_AFTER_BIND_BIT;
         pci.maxSets = 1; pci.poolSizeCount = (uint32_t)ps.size(); pci.pPoolSizes = ps.data();
         VK_CHECK(vkCreateDescriptorPool(d.device(), &pci, nullptr, &m_framePool));
 
@@ -258,6 +272,7 @@ void ShadowPass::init(Device& d, VkExtent2D shadowMapSize, VkExtent2D outputSize
         VkDescriptorSetLayoutCreateInfo li{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
         li.pNext = &fi;
         li.bindingCount = (uint32_t)bld.size(); li.pBindings = bld.data();
+        li.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT;
         VK_CHECK(vkCreateDescriptorSetLayout(d.device(), &li, nullptr, &m_vsmBlurSetLayout));
     }
 
@@ -854,7 +869,7 @@ void ShadowPass::recordPCSS(VkCommandBuffer cmd, const RenderTargets& /*rt*/,
 // ────────────────────────────────────────────────────────────────────────────
 
 void ShadowPass::recordVSM(VkCommandBuffer cmd, const RenderTargets& /*rt*/,
-                            VkBuffer frameUbo, const SceneGpu& sceneGpu,
+                            VkBuffer /*frameUbo*/, const SceneGpu& /*sceneGpu*/,
                             VkBuffer indirectBuf, uint32_t drawCount) {
     if (drawCount == 0) { recordNone(cmd); return; }
 
@@ -1462,16 +1477,16 @@ void ShadowPass::buildResolvePipeline() {
 
     // ── PCSS resolve（独立 pipeline layout，push constant 比 ResolvePC 大）──
     {
-        VkPushConstantRange pc{};
-        pc.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-        pc.size       = sizeof(PCSS_PC);    // 40 bytes：含 lightSize + maxKernelRadius
+        VkPushConstantRange pc2{};
+        pc2.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+        pc2.size       = sizeof(PCSS_PC);    // 40 bytes：含 lightSize + maxKernelRadius
         static_assert(sizeof(PCSS_PC) == 40);
 
-        std::array<VkDescriptorSetLayout, 2> sets{m_setLayout, m_frameSetLayout};
-        VkPipelineLayoutCreateInfo plci{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
-        plci.setLayoutCount = (uint32_t)sets.size(); plci.pSetLayouts = sets.data();
-        plci.pushConstantRangeCount = 1; plci.pPushConstantRanges = &pc;
-        VK_CHECK(vkCreatePipelineLayout(d.device(), &plci, nullptr, &m_pcssResolveLayout));
+        std::array<VkDescriptorSetLayout, 2> sets2{m_setLayout, m_frameSetLayout};
+        VkPipelineLayoutCreateInfo plci2{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+        plci2.setLayoutCount = (uint32_t)sets2.size(); plci2.pSetLayouts = sets2.data();
+        plci2.pushConstantRangeCount = 1; plci2.pPushConstantRanges = &pc2;
+        VK_CHECK(vkCreatePipelineLayout(d.device(), &plci2, nullptr, &m_pcssResolveLayout));
 
         ShaderModule cs(d, shaderDir() / "shadow" / "shadow_pcss_resolve.spv");
         VkPipelineShaderStageCreateInfo stage{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};

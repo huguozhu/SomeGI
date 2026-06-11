@@ -226,7 +226,7 @@ void DdgiPass::bindResources(Device& d, const DdgiResources& ddgi, const VxgiRes
     vkUpdateDescriptorSets(d.device(), (uint32_t)wc.size(), wc.data(), 0, nullptr);
 }
 
-void DdgiPass::record(VkCommandBuffer cmd, const DdgiResources& ddgi,
+void DdgiPass::record(VkCommandBuffer cmd, const DdgiResources& /*ddgi*/,
                       const glm::vec3& ddgiOrigin, const glm::vec3& ddgiSpacing,
                       const glm::vec3& vxgiGridMin, float vxgiCellSize, uint32_t vxgiResolution,
                       float randomRotation, uint32_t /*frameIndex*/) {

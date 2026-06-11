@@ -18,6 +18,8 @@ Device::Device(Window& window, bool enableValidation) {
     VkPhysicalDeviceVulkan13Features f13{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES};
     f13.dynamicRendering = VK_TRUE;
     f13.synchronization2 = VK_TRUE;
+    f13.maintenance4 = VK_TRUE;
+    f13.shaderDemoteToHelperInvocation = VK_TRUE;
 
     VkPhysicalDeviceVulkan12Features f12{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES};
     f12.bufferDeviceAddress = VK_TRUE;
@@ -25,6 +27,8 @@ Device::Device(Window& window, bool enableValidation) {
     f12.runtimeDescriptorArray = VK_TRUE;
     f12.descriptorBindingPartiallyBound = VK_TRUE;
     f12.descriptorBindingSampledImageUpdateAfterBind = VK_TRUE;
+    f12.descriptorBindingStorageImageUpdateAfterBind = VK_TRUE;
+    f12.descriptorBindingUniformBufferUpdateAfterBind = VK_TRUE;
     f12.shaderSampledImageArrayNonUniformIndexing = VK_TRUE;
     f12.drawIndirectCount = VK_TRUE;
 

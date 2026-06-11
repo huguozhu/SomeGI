@@ -65,7 +65,6 @@ void GBufferPass::init(Device& d,
     // ── Mesh Shader descriptor set layout（set=0，bindings 0-11）────
     {
         const VkShaderStageFlags kTS = VK_SHADER_STAGE_TASK_BIT_EXT | VK_SHADER_STAGE_MESH_BIT_EXT;
-        bool hasTask = d.features().taskShader;
         std::array<VkDescriptorSetLayoutBinding, 12> mb{};
         mb[0] = {0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, kTS, nullptr};
         mb[1] = {1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, kTS, nullptr};  // MeshGroup 映射
@@ -83,10 +82,10 @@ void GBufferPass::init(Device& d,
         VkDescriptorSetLayoutBindingFlagsCreateInfo mbfci{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO};
         mbfci.bindingCount = (uint32_t)mbf.size(); mbfci.pBindingFlags = mbf.data();
 
-        VkDescriptorSetLayoutCreateInfo li{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-        li.pNext = &mbfci;
-        li.bindingCount = (uint32_t)mb.size(); li.pBindings = mb.data();
-        VK_CHECK(vkCreateDescriptorSetLayout(d.device(), &li, nullptr, &m_meshSetLayout));
+        VkDescriptorSetLayoutCreateInfo mli{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+        mli.pNext = &mbfci;
+        mli.bindingCount = (uint32_t)mb.size(); mli.pBindings = mb.data();
+        VK_CHECK(vkCreateDescriptorSetLayout(d.device(), &mli, nullptr, &m_meshSetLayout));
 
         uint32_t storageCount = 5u;   // bindings 0,1,7,8,9
         uint32_t uniformCount = 1u;   // binding 6
@@ -96,13 +95,13 @@ void GBufferPass::init(Device& d,
             {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, m_maxTextures + 4},
             {VK_DESCRIPTOR_TYPE_SAMPLER, 1},
         }};
-        VkDescriptorPoolCreateInfo pci{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
-        pci.maxSets = 1; pci.poolSizeCount = (uint32_t)mps.size(); pci.pPoolSizes = mps.data();
-        VK_CHECK(vkCreateDescriptorPool(d.device(), &pci, nullptr, &m_meshPool));
+        VkDescriptorPoolCreateInfo mpci{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+        mpci.maxSets = 1; mpci.poolSizeCount = (uint32_t)mps.size(); mpci.pPoolSizes = mps.data();
+        VK_CHECK(vkCreateDescriptorPool(d.device(), &mpci, nullptr, &m_meshPool));
 
-        VkDescriptorSetAllocateInfo dai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
-        dai.descriptorPool = m_meshPool; dai.descriptorSetCount = 1; dai.pSetLayouts = &m_meshSetLayout;
-        VK_CHECK(vkAllocateDescriptorSets(d.device(), &dai, &m_meshSet));
+        VkDescriptorSetAllocateInfo mdai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+        mdai.descriptorPool = m_meshPool; mdai.descriptorSetCount = 1; mdai.pSetLayouts = &m_meshSetLayout;
+        VK_CHECK(vkAllocateDescriptorSets(d.device(), &mdai, &m_meshSet));
 
         m_cullUbo = Buffer(d, sizeof(glm::vec4)*6 + sizeof(glm::vec2) + sizeof(uint32_t)*2,
             VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
