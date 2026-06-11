@@ -48,7 +48,8 @@ public:
     // Per-frame record: dispatches based on m_method
     void record(VkCommandBuffer cmd, const RenderTargets& rt,
                 VkBuffer frameUbo, const SceneGpu& sceneGpu,
-                VkBuffer indirectBuf, uint32_t drawCount);
+                VkBuffer indirectBuf, uint32_t drawCount,
+                uint32_t frameIndex = 0);
 
     // Algorithm selection
     ShadowMethod method() const { return m_method; }

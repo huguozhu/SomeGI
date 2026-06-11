@@ -142,11 +142,9 @@ void ShadowPass::init(Device& d, VkExtent2D shadowMapSize, VkExtent2D outputSize
     }
 
     // ── 5. Resolve compute descriptor set layout ──
-    //     与 shader 端 set=0 对齐：
-    //       binding 0: UBO (ShadowUbo)
-    //       binding 1: SAMPLED_IMAGE (shadow map / vsm map)
-    //       binding 2: SAMPLER (shadow sampler)
-    //       binding 3: STORAGE_IMAGE (shadowMask)
+    //     与 shader 端 set=0 对齐。
+    //     binding 1/2 在 cmd 录制期间可能被更新（VSM ↔ Hard 切换），
+    //     使用 UPDATE_AFTER_BIND 标志允许安全更新。
     {
         std::array<VkDescriptorSetLayoutBinding, 4> bld{};
         bld[0] = {0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
@@ -154,12 +152,22 @@ void ShadowPass::init(Device& d, VkExtent2D shadowMapSize, VkExtent2D outputSize
         bld[2] = {2, VK_DESCRIPTOR_TYPE_SAMPLER,       1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
         bld[3] = {3, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
 
+        // binding 1,2 标记为 UPDATE_AFTER_BIND（Vulkan 1.2+ core）
+        std::array<VkDescriptorBindingFlags, 2> flags{
+            VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT,
+            VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT,
+        };
+        VkDescriptorSetLayoutBindingFlagsCreateInfo fi{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO};
+        fi.bindingCount = (uint32_t)flags.size(); fi.pBindingFlags = flags.data();
+
         VkDescriptorSetLayoutCreateInfo li{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+        li.pNext = &fi;
         li.bindingCount = (uint32_t)bld.size(); li.pBindings = bld.data();
+        li.flags = 0;  // 不需要 VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT
         VK_CHECK(vkCreateDescriptorSetLayout(d.device(), &li, nullptr, &m_setLayout));
     }
 
-    // ── 6. Resolve descriptor pool + set ──
+    // ── 6. Resolve descriptor pool + set（支持 UPDATE_AFTER_BIND）──
     {
         std::array<VkDescriptorPoolSize, 4> ps{{
             {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1},
@@ -168,7 +176,8 @@ void ShadowPass::init(Device& d, VkExtent2D shadowMapSize, VkExtent2D outputSize
             {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1},
         }};
         VkDescriptorPoolCreateInfo pci{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
-        pci.maxSets = 1; pci.poolSizeCount = (uint32_t)ps.size(); pci.pPoolSizes = ps.data();
+        pci.flags    = VK_DESCRIPTOR_POOL_CREATE_UPDATE_AFTER_BIND_BIT;
+        pci.maxSets  = 1; pci.poolSizeCount = (uint32_t)ps.size(); pci.pPoolSizes = ps.data();
         VK_CHECK(vkCreateDescriptorPool(d.device(), &pci, nullptr, &m_pool));
 
         VkDescriptorSetAllocateInfo dai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
@@ -233,23 +242,33 @@ void ShadowPass::init(Device& d, VkExtent2D shadowMapSize, VkExtent2D outputSize
 
     // ── 10b. VSM blur descriptor set layout ──
     //        set=0: [0]=SAMPLED_IMAGE(vsmMap), [1]=STORAGE_IMAGE(vsmBlur)
+    //        两 binding 均在 recordVSM 中更新，需要 UPDATE_AFTER_BIND
     {
         std::array<VkDescriptorSetLayoutBinding, 2> bld{};
         bld[0] = {0, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
         bld[1] = {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
 
+        std::array<VkDescriptorBindingFlags, 2> flags{
+            VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT,
+            VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT,
+        };
+        VkDescriptorSetLayoutBindingFlagsCreateInfo fi{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO};
+        fi.bindingCount = (uint32_t)flags.size(); fi.pBindingFlags = flags.data();
+
         VkDescriptorSetLayoutCreateInfo li{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+        li.pNext = &fi;
         li.bindingCount = (uint32_t)bld.size(); li.pBindings = bld.data();
         VK_CHECK(vkCreateDescriptorSetLayout(d.device(), &li, nullptr, &m_vsmBlurSetLayout));
     }
 
-    // ── 10c. VSM blur descriptor pool + set ──
+    // ── 10c. VSM blur descriptor pool + set（支持 UPDATE_AFTER_BIND）──
     {
         std::array<VkDescriptorPoolSize, 2> ps{{
             {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1},
             {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1},
         }};
         VkDescriptorPoolCreateInfo pci{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+        pci.flags   = VK_DESCRIPTOR_POOL_CREATE_UPDATE_AFTER_BIND_BIT;
         pci.maxSets = 1; pci.poolSizeCount = (uint32_t)ps.size(); pci.pPoolSizes = ps.data();
         VK_CHECK(vkCreateDescriptorPool(d.device(), &pci, nullptr, &m_vsmBlurPool));
 
@@ -405,7 +424,8 @@ void ShadowPass::bindFrameResources(Device& d, VkBuffer frameUbo, VkImageView de
 
 void ShadowPass::record(VkCommandBuffer cmd, const RenderTargets& rt,
                          VkBuffer frameUbo, const SceneGpu& sceneGpu,
-                         VkBuffer indirectBuf, uint32_t drawCount) {
+                         VkBuffer indirectBuf, uint32_t drawCount, uint32_t frameIndex) {
+    (void)frameIndex;
     switch (m_method) {
     case ShadowMethod::None:          recordNone(cmd); break;
     case ShadowMethod::HardShadowMap: recordHardSM(cmd, rt, frameUbo, sceneGpu, indirectBuf, drawCount); break;

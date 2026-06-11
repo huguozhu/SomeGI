@@ -1485,7 +1485,8 @@ void App::registerPipelineSteps() {
         .record = [this](VkCommandBuffer cmd) {
             m_renderer.shadow().record(cmd, m_renderer.rt(),
                 m_renderer.gbuffer().frameUboHandle(),
-                m_sceneGpu, m_indirectBufSun.handle(), m_drawCount);
+                m_sceneGpu, m_indirectBufSun.handle(), m_drawCount,
+                m_renderer.frameIndex());
         }
     });
 
