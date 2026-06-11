@@ -35,7 +35,7 @@ constexpr ShadowEntry kShadows[] = {
     {"PCF Soft Shadow",    true,  false},
     {"PCSS Soft Shadow",   true,  false},
     {"VSM Soft Shadow",    true,  false},
-    {"RT Hard Shadow",     false, true},   // Phase 2
+    {"RT Hard Shadow",     true,  true},
     {"RT Soft Shadow",     false, true},   // Phase 2
 };
 constexpr int kShadowCount = (int)(sizeof(kShadows) / sizeof(kShadows[0]));
@@ -66,8 +66,11 @@ public:
     // 绑定场景 GPU 资源到 SM render descriptor set（场景加载后、record 前调用）
     void bindScene(Device& d, const SceneGpu& gpu);
 
-    // 绑定每帧资源（FrameUniforms + GBuffer depth）到 resolve 的 set=1
-    void bindFrameResources(Device& d, VkBuffer frameUbo, VkImageView depthView);
+    // 绑定每帧资源（FrameUniforms + GBuffer depth + normal）到 resolve set
+    void bindFrameResources(Device& d, VkBuffer frameUbo, VkImageView depthView, VkImageView normalView);
+
+    // 绑定 TLAS（RT shadow 用，场景加载后调用）
+    void bindTLAS(Device& d, VkAccelerationStructureKHR tlas);
 
     // Shadow output (R8_UNORM) — LightingPass reads from here
     const Image& shadowMask() const { return m_shadowMask; }
@@ -89,6 +92,8 @@ private:
     void recordVSM(VkCommandBuffer cmd, const RenderTargets& rt,
                    VkBuffer frameUbo, const SceneGpu& sceneGpu,
                    VkBuffer indirectBuf, uint32_t drawCount);
+    void recordRTHard(VkCommandBuffer cmd);
+    void recordRTSoft(VkCommandBuffer cmd);
 
     // Shared shadow map render (sun-view depth-only)
     void renderShadowMap(VkCommandBuffer cmd, VkBuffer frameUbo,
@@ -98,6 +103,7 @@ private:
     void buildPipeline_HardSM();
     void buildPipeline_VSMGen();
     void buildPipeline_VSMBlur();
+    void buildPipeline_RTHard();
     void buildResolvePipeline();
     void destroyPipelines();
 
@@ -152,6 +158,14 @@ private:
     VkDescriptorSetLayout m_vsmBlurSetLayout = VK_NULL_HANDLE;
     VkDescriptorPool m_vsmBlurPool = VK_NULL_HANDLE;
     VkDescriptorSet m_vsmBlurSet = VK_NULL_HANDLE;
+
+    // RT shadow（仅 HW 支持时创建）
+    VkPipelineLayout m_rtHardLayout = VK_NULL_HANDLE;
+    VkPipeline m_rtHardPipeline = VK_NULL_HANDLE;
+    VkDescriptorSetLayout m_rtSetLayout = VK_NULL_HANDLE;
+    VkDescriptorPool m_rtPool = VK_NULL_HANDLE;
+    VkDescriptorSet m_rtSet = VK_NULL_HANDLE;
+    VkAccelerationStructureKHR m_tlas = VK_NULL_HANDLE;
 
     VkSampler m_shadowSampler = VK_NULL_HANDLE;   // depth compare (PCF 用)
     VkSampler m_vsmSampler    = VK_NULL_HANDLE;   // 线性、无 compare（VSM 用）

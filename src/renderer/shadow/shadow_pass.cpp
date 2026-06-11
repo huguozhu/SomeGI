@@ -277,6 +277,50 @@ void ShadowPass::init(Device& d, VkExtent2D shadowMapSize, VkExtent2D outputSize
         VK_CHECK(vkAllocateDescriptorSets(d.device(), &dai, &m_vsmBlurSet));
     }
 
+    // ── 10d. RT shadow descriptor set（仅 HW 支持 ray query 时创建）──
+    bool rtOk = d.features().accelStruct && d.features().rayQuery;
+    if (rtOk) {
+        // set=0: [0]=TLAS, [1]=STORAGE_IMAGE(shadowMask), [2]=SAMPLED_IMAGE(normal)
+        {
+            std::array<VkDescriptorSetLayoutBinding, 3> bld{};
+            bld[0] = {0, VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
+            bld[1] = {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,           1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
+            bld[2] = {2, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,            1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
+
+            VkDescriptorSetLayoutCreateInfo li{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+            li.bindingCount = (uint32_t)bld.size(); li.pBindings = bld.data();
+            VK_CHECK(vkCreateDescriptorSetLayout(d.device(), &li, nullptr, &m_rtSetLayout));
+        }
+
+        {
+            std::array<VkDescriptorPoolSize, 3> ps{{
+                {VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 1},
+                {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,              1},
+                {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,              1},
+            }};
+            VkDescriptorPoolCreateInfo pci{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+            pci.maxSets = 1; pci.poolSizeCount = (uint32_t)ps.size(); pci.pPoolSizes = ps.data();
+            VK_CHECK(vkCreateDescriptorPool(d.device(), &pci, nullptr, &m_rtPool));
+
+            VkDescriptorSetAllocateInfo dai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+            dai.descriptorPool = m_rtPool; dai.descriptorSetCount = 1; dai.pSetLayouts = &m_rtSetLayout;
+            VK_CHECK(vkAllocateDescriptorSets(d.device(), &dai, &m_rtSet));
+        }
+
+        // 初始写入：binding 1 = shadowMask（TLAS 在 bindTLAS 写入，normal 在 bindFrameResources 写入）
+        {
+            VkDescriptorImageInfo maskInfo{};
+            maskInfo.imageView   = m_shadowMask.view();
+            maskInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+            VkWriteDescriptorSet w{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+            w.dstSet = m_rtSet; w.dstBinding = 1; w.descriptorCount = 1;
+            w.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE; w.pImageInfo = &maskInfo;
+            vkUpdateDescriptorSets(d.device(), 1, &w, 0, nullptr);
+        }
+
+        buildPipeline_RTHard();
+    }
+
     // ── 11. Shadow UBO (host-coherent, renderShadowMap 每帧写入) ──
     m_shadowUbo = Buffer(d, sizeof(ShadowUbo),
                          VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
@@ -351,6 +395,50 @@ void ShadowPass::init(Device& d, VkExtent2D shadowMapSize, VkExtent2D outputSize
     buildResolvePipeline();
 }
 
+// ──────────────────────────────────────────────────────────────────
+// RT Hard shadow pipeline（compute shader + ray query）
+// ──────────────────────────────────────────────────────────────────
+void ShadowPass::buildPipeline_RTHard() {
+    auto& d = *m_device;
+    if (!m_rtSetLayout) return; // RT 不可用时跳过
+
+    VkPushConstantRange pc{};
+    pc.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    pc.size       = 16;  // uint2 outSize + float2 invOutSize
+    std::array<VkDescriptorSetLayout, 2> sets{m_rtSetLayout, m_frameSetLayout};
+
+    VkPipelineLayoutCreateInfo plci{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+    plci.setLayoutCount = (uint32_t)sets.size(); plci.pSetLayouts = sets.data();
+    plci.pushConstantRangeCount = 1; plci.pPushConstantRanges = &pc;
+    VK_CHECK(vkCreatePipelineLayout(d.device(), &plci, nullptr, &m_rtHardLayout));
+
+    ShaderModule cs(d, shaderDir() / "shadow" / "shadow_rt_hard.spv");
+    VkPipelineShaderStageCreateInfo stage{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
+    stage.stage  = VK_SHADER_STAGE_COMPUTE_BIT;
+    stage.module = cs.handle();
+    stage.pName  = "cs_main";
+
+    VkComputePipelineCreateInfo cpci{VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
+    cpci.stage  = stage;
+    cpci.layout = m_rtHardLayout;
+    VK_CHECK(vkCreateComputePipelines(d.device(), VK_NULL_HANDLE, 1, &cpci, nullptr, &m_rtHardPipeline));
+}
+
+void ShadowPass::bindTLAS(Device& d, VkAccelerationStructureKHR tlas) {
+    if (!m_rtSet) return;
+    m_tlas = tlas;
+
+    VkWriteDescriptorSetAccelerationStructureKHR tlasAI{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR};
+    tlasAI.accelerationStructureCount = 1;
+    tlasAI.pAccelerationStructures = &m_tlas;
+
+    VkWriteDescriptorSet w{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+    w.dstSet = m_rtSet; w.dstBinding = 0; w.descriptorCount = 1;
+    w.descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
+    w.pNext = &tlasAI;
+    vkUpdateDescriptorSets(d.device(), 1, &w, 0, nullptr);
+}
+
 void ShadowPass::destroy() {
     if (!m_device) return;
     destroyPipelines();
@@ -369,6 +457,9 @@ void ShadowPass::destroy() {
     m_framePool = VK_NULL_HANDLE; m_frameSetLayout = VK_NULL_HANDLE;
     m_smPool = VK_NULL_HANDLE; m_smSetLayout = VK_NULL_HANDLE;
     m_vsmBlurPool = VK_NULL_HANDLE; m_vsmBlurSetLayout = VK_NULL_HANDLE;
+    if (m_rtPool)     vkDestroyDescriptorPool(dev, m_rtPool, nullptr);
+    if (m_rtSetLayout) vkDestroyDescriptorSetLayout(dev, m_rtSetLayout, nullptr);
+    m_rtPool = VK_NULL_HANDLE; m_rtSetLayout = VK_NULL_HANDLE;
     m_shadowSampler = VK_NULL_HANDLE;
     m_vsmSampler    = VK_NULL_HANDLE;
     m_shadowMap.reset();
@@ -402,20 +493,34 @@ void ShadowPass::bindScene(Device& d, const SceneGpu& gpu) {
     vkUpdateDescriptorSets(d.device(), (uint32_t)w.size(), w.data(), 0, nullptr);
 }
 
-void ShadowPass::bindFrameResources(Device& d, VkBuffer frameUbo, VkImageView depthView) {
-    VkDescriptorBufferInfo uboInfo{frameUbo, 0, VK_WHOLE_SIZE};
-    VkDescriptorImageInfo depthInfo{};
-    depthInfo.imageView = depthView;
-    depthInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+void ShadowPass::bindFrameResources(Device& d, VkBuffer frameUbo, VkImageView depthView, VkImageView normalView) {
+    // ── set=1: FrameUniforms + gDepth ──
+    {
+        VkDescriptorBufferInfo uboInfo{frameUbo, 0, VK_WHOLE_SIZE};
+        VkDescriptorImageInfo depthInfo{};
+        depthInfo.imageView = depthView;
+        depthInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
-    std::array<VkWriteDescriptorSet, 2> w{};
-    w[0] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-    w[0].dstSet = m_frameSet; w[0].dstBinding = 0; w[0].descriptorCount = 1;
-    w[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER; w[0].pBufferInfo = &uboInfo;
-    w[1] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-    w[1].dstSet = m_frameSet; w[1].dstBinding = 1; w[1].descriptorCount = 1;
-    w[1].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE; w[1].pImageInfo = &depthInfo;
-    vkUpdateDescriptorSets(d.device(), (uint32_t)w.size(), w.data(), 0, nullptr);
+        std::array<VkWriteDescriptorSet, 2> w{};
+        w[0] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+        w[0].dstSet = m_frameSet; w[0].dstBinding = 0; w[0].descriptorCount = 1;
+        w[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER; w[0].pBufferInfo = &uboInfo;
+        w[1] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+        w[1].dstSet = m_frameSet; w[1].dstBinding = 1; w[1].descriptorCount = 1;
+        w[1].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE; w[1].pImageInfo = &depthInfo;
+        vkUpdateDescriptorSets(d.device(), (uint32_t)w.size(), w.data(), 0, nullptr);
+    }
+
+    // ── RT set binding 2: gNormalRough ──
+    if (m_rtSet) {
+        VkDescriptorImageInfo normalInfo{};
+        normalInfo.imageView   = normalView;
+        normalInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        VkWriteDescriptorSet w{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+        w.dstSet = m_rtSet; w.dstBinding = 2; w.descriptorCount = 1;
+        w.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE; w.pImageInfo = &normalInfo;
+        vkUpdateDescriptorSets(d.device(), 1, &w, 0, nullptr);
+    }
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -432,6 +537,8 @@ void ShadowPass::record(VkCommandBuffer cmd, const RenderTargets& rt,
     case ShadowMethod::PCF:           recordPCF(cmd, rt, frameUbo, sceneGpu, indirectBuf, drawCount); break;
     case ShadowMethod::PCSS:          recordPCSS(cmd, rt, frameUbo, sceneGpu, indirectBuf, drawCount); break;
     case ShadowMethod::VSM:           recordVSM(cmd, rt, frameUbo, sceneGpu, indirectBuf, drawCount); break;
+    case ShadowMethod::RTHard:        recordRTHard(cmd); break;
+    case ShadowMethod::RTSoft:        recordRTSoft(cmd); break;
     default:                          recordNone(cmd); break;
     }
 }
@@ -945,6 +1052,51 @@ void ShadowPass::recordVSM(VkCommandBuffer cmd, const RenderTargets& /*rt*/,
 }
 
 // ────────────────────────────────────────────────────────────────────────────
+// recordRTHard —— RT 硬阴影：每像素 1 条 shadow ray 向太阳
+// ────────────────────────────────────────────────────────────────────────────
+
+void ShadowPass::recordRTHard(VkCommandBuffer cmd) {
+    if (!m_rtHardPipeline) return;
+
+    transitionImage(cmd, m_shadowMask.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+        VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
+        VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
+        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+        VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
+
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_rtHardPipeline);
+    {
+        std::array<VkDescriptorSet, 2> dsets{m_rtSet, m_frameSet};
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
+            m_rtHardLayout, 0, (uint32_t)dsets.size(), dsets.data(), 0, nullptr);
+    }
+
+    struct { uint32_t x, y; float ix, iy; } pc;
+    pc.x  = m_outputSize.width;  pc.y  = m_outputSize.height;
+    pc.ix = 1.0f / (float)pc.x;  pc.iy = 1.0f / (float)pc.y;
+    vkCmdPushConstants(cmd, m_rtHardLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
+
+    uint32_t gx = (m_outputSize.width  + 7) / 8;
+    uint32_t gy = (m_outputSize.height + 7) / 8;
+    vkCmdDispatch(cmd, gx, gy, 1);
+
+    transitionImage(cmd, m_shadowMask.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+        VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+        VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+        VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// recordRTSoft —— RT 软阴影（暂未实现，fallback 到 RT Hard）
+// ────────────────────────────────────────────────────────────────────────────
+
+void ShadowPass::recordRTSoft(VkCommandBuffer cmd) {
+    recordRTHard(cmd);
+}
+
+// ────────────────────────────────────────────────────────────────────────────
 // renderShadowMap —— 从 sun 视角渲染深度图（GPU-driven indirect draw）
 // ────────────────────────────────────────────────────────────────────────────
 
@@ -1290,6 +1442,8 @@ void ShadowPass::destroyPipelines() {
     if (m_smPipelineLayout) vkDestroyPipelineLayout(dev, m_smPipelineLayout, nullptr);
     if (m_vsmBlurLayout)    vkDestroyPipelineLayout(dev, m_vsmBlurLayout, nullptr);
     if (m_pcssResolveLayout) vkDestroyPipelineLayout(dev, m_pcssResolveLayout, nullptr);
+    if (m_rtHardLayout)     vkDestroyPipelineLayout(dev, m_rtHardLayout, nullptr);
+    if (m_rtHardPipeline)   vkDestroyPipeline(dev, m_rtHardPipeline, nullptr);
     if (m_resolveLayout)    vkDestroyPipelineLayout(dev, m_resolveLayout, nullptr);
     m_smPipeline       = VK_NULL_HANDLE;
     m_vsmGenPipeline   = VK_NULL_HANDLE;
@@ -1301,6 +1455,8 @@ void ShadowPass::destroyPipelines() {
     m_smPipelineLayout = VK_NULL_HANDLE;
     m_vsmBlurLayout    = VK_NULL_HANDLE;
     m_pcssResolveLayout = VK_NULL_HANDLE;
+    m_rtHardLayout      = VK_NULL_HANDLE;
+    m_rtHardPipeline    = VK_NULL_HANDLE;
     m_resolveLayout    = VK_NULL_HANDLE;
 }
 

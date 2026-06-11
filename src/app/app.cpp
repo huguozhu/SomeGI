@@ -344,6 +344,8 @@ void App::applySceneSelection() {
         if (m_renderer.rtGiBound()) {
             m_renderer.rtGi().bindFrame(*m_device, m_renderer.rt(), m_renderer.gbuffer().frameUboHandle(), m_renderer.rtAS(), m_sceneGpu);
         }
+        // 绑定 TLAS 到 ShadowPass（RT shadow 用）
+        m_renderer.shadow().bindTLAS(*m_device, m_renderer.rtAS().tlas());
         // M10：TLAS 就绪，绑定到 ReSTIR RT shade pipeline
         if (m_renderer.rtAS().instanceCount() > 0) {
             m_renderer.restirPass().bindResourcesRt(*m_device, m_renderer.restir(), m_renderer.rt(),
@@ -612,6 +614,10 @@ void App::applyShadowSelection() {
     }
     if (!kShadows[m_currentShadowIndex].implemented) {
         m_currentShadowIndex = 1; return;
+    }
+    // RT 阴影需要硬件支持，不可用时 fallback 到 PCF
+    if (kShadows[m_currentShadowIndex].requiresRt && !m_renderer.rtSupported()) {
+        m_currentShadowIndex = 2; return;
     }
     m_renderer.applyShadowSelection(m_currentShadowIndex);
     m_shadowIndexApplied = m_currentShadowIndex;
@@ -986,6 +992,7 @@ void App::buildUI() {
             if (ImGui::BeginCombo("Shadow Method", kShadows[idx].name)) {
                 for (int i = 0; i < kShadowCount; ++i) {
                     if (!kShadows[i].implemented) continue;
+                    if (kShadows[i].requiresRt && !m_renderer.rtSupported()) continue;
                     bool sel = (i == m_currentShadowIndex);
                     if (ImGui::Selectable(kShadows[i].name, sel)) m_currentShadowIndex = i;
                     if (sel) ImGui::SetItemDefaultFocus();
@@ -3411,7 +3418,8 @@ void App::run() {
         // ---- Shadow: 更新 sun 方向 + 绑定每帧资源 ----
         m_renderer.shadow().setSunDir(m_sunDir);
         m_renderer.shadow().bindFrameResources(*m_device,
-            m_renderer.gbuffer().frameUboHandle(), m_renderer.rt().depth.view());
+            m_renderer.gbuffer().frameUboHandle(), m_renderer.rt().depth.view(),
+            m_renderer.rt().gNormalRough.view());
 
         // ---- Execute render pipeline ----
         buildPipelineTable();
