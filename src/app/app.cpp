@@ -1000,6 +1000,12 @@ void App::buildUI() {
                 ImGui::EndCombo();
             }
         }
+        // RT Soft 参数（仅在选中时显示）
+        if (m_currentShadowIndex == (int)ShadowMethod::RTSoft && m_renderer.rtSupported()) {
+            auto& sh = m_renderer.shadow();
+            ImGui::SliderInt("RT samples", &sh.rtRayCount(), 4, 32);
+            ImGui::SliderFloat("sun radius", &sh.rtSunRadius(), 0.01f, 0.10f, "%.3f rad");
+        }
         ImGui::Separator();
         ImGui::Checkbox("GPU Frustum Culling", &m_useGpuCulling);
         ImGui::SameLine();

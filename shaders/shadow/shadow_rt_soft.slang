@@ -20,7 +20,9 @@ struct RtSoftPC {
     uint2  outSize;
     float2 invOutSize;
     uint   frameIndex;      // 用于随机种子变化
-    float  sunRadius;        // 太阳角半径（radians），典型值 0.01~0.05
+    float  sunRadius;        // 太阳角半径（radians），0.01~0.10
+    uint   rayCount;         // 每像素采样数，4~32
+    uint   _pad;
 };
 [[vk::push_constant]] RtSoftPC gPC;
 
@@ -87,9 +89,10 @@ void cs_main(uint3 dt : SV_DispatchThreadID) {
     // ── 3. 随机种子 ──
     uint seed = (pix.y * gPC.outSize.x + pix.x) * 1664525u + gPC.frameIndex * 22695477u;
 
-    // ── 4. 8 条 ray 在锥体内采样 ──
+    // ── 4. N 条 ray 在锥体内采样 ──
     float shadowSum = 0.0;
-    for (int i = 0; i < 8; ++i) {
+    int n = int(clamp(gPC.rayCount, 4u, 32u));
+    for (int i = 0; i < n; ++i) {
         float2 xi = float2(rand01(seed), rand01(seed));
         float3 dir = coneSample(L, gPC.sunRadius, xi);
 
@@ -112,5 +115,5 @@ void cs_main(uint3 dt : SV_DispatchThreadID) {
             shadowSum += 1.0;   // 未命中 → lit
         }
     }
-    gOutMask[pix] = shadowSum / 8.0;
+    gOutMask[pix] = shadowSum / float(n);
 }

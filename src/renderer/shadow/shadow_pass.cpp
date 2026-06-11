@@ -427,7 +427,7 @@ void ShadowPass::buildPipeline_RTHard() {
     {
         VkPushConstantRange pc2{};
         pc2.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-        pc2.size       = 24;  // uint2(8) + float2(8) + uint(4) + float(4) = 24
+        pc2.size       = 32;  // uint2(8)+float2(8)+uint(4)+float(4)+uint(4)+pad(4)=32
         std::array<VkDescriptorSetLayout, 2> sets2{m_rtSetLayout, m_frameSetLayout};
 
         VkPipelineLayoutCreateInfo plci2{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
@@ -1132,11 +1132,13 @@ void ShadowPass::recordRTSoft(VkCommandBuffer cmd) {
             m_rtSoftLayout, 0, (uint32_t)dsets.size(), dsets.data(), 0, nullptr);
     }
 
-    struct { uint32_t x, y; float ix, iy; uint32_t fi; float sr; } pc;
+    struct { uint32_t x, y; float ix, iy; uint32_t fi; float sr; uint32_t rc; uint32_t pad; } pc;
     pc.x  = m_outputSize.width;  pc.y  = m_outputSize.height;
     pc.ix = 1.0f / (float)pc.x;  pc.iy = 1.0f / (float)pc.y;
-    pc.fi = m_currentFrameIndex;  // 在 record() 中设置
-    pc.sr = 0.03f;                // 太阳角半径 ≈1.7°，产生柔和半影
+    pc.fi = m_currentFrameIndex;
+    pc.sr = m_rtSunRadius;
+    pc.rc = (uint32_t)m_rtRayCount;
+    pc.pad = 0;
     vkCmdPushConstants(cmd, m_rtSoftLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
 
     uint32_t gx = (m_outputSize.width  + 7) / 8;

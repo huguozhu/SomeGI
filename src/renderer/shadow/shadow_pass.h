@@ -78,6 +78,10 @@ public:
     // Sampler used for shadow map sampling (exposed for LightingPass)
     VkSampler shadowSampler() const { return m_shadowSampler; }
 
+    // RT shadow 可调参数
+    float& rtSunRadius()  { return m_rtSunRadius; }
+    int&   rtRayCount()   { return m_rtRayCount; }
+
 private:
     void recordNone(VkCommandBuffer cmd);
     void recordHardSM(VkCommandBuffer cmd, const RenderTargets& rt,
@@ -169,6 +173,10 @@ private:
     VkDescriptorPool m_rtPool = VK_NULL_HANDLE;
     VkDescriptorSet m_rtSet = VK_NULL_HANDLE;
     VkAccelerationStructureKHR m_tlas = VK_NULL_HANDLE;
+
+    // RT soft 可调参数
+    float m_rtSunRadius = 0.03f;
+    int   m_rtRayCount  = 8;
 
     VkSampler m_shadowSampler = VK_NULL_HANDLE;   // depth compare (PCF 用)
     VkSampler m_vsmSampler    = VK_NULL_HANDLE;   // 线性、无 compare（VSM 用）
