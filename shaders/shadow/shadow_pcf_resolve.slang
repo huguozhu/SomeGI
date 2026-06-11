@@ -37,6 +37,7 @@ struct ResolvePC {
     float2 invOutSize;
     float bias;
     uint _pad;
+    float2 invShadowMapSize;  // 1/width, 1/height —— texel 步长
 };
 [[vk::push_constant]] ResolvePC gPC;
 
@@ -77,9 +78,8 @@ void cs_main(uint3 dt : SV_DispatchThreadID) {
     float2 uv = sunNdc.xy * 0.5 + 0.5;
     float receiverDepth = sunNdc.z - gPC.bias;
 
-    // texel 大小（shadow map 尺寸由 C++ 指定，简化假设 2048²）
-    // TODO: 从 push constant 或 UBO 传入 shadow map 尺寸以获得精确的 texel 步长
-    float2 texelSize = 1.0 / 2048.0;
+    // texel 大小从 push constant 传入，与 shadow map 实际分辨率一致
+    float2 texelSize = gPC.invShadowMapSize;
 
     float shadow = 0.0;
     for (int y = -1; y <= 1; ++y) {

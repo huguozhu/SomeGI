@@ -91,6 +91,7 @@ private:
 
     void buildPipeline_HardSM();
     void buildPipeline_VSMGen();
+    void buildPipeline_VSMBlur();
     void buildResolvePipeline();
     void destroyPipelines();
 
@@ -107,7 +108,7 @@ private:
 
     // VSM-specific: depth + depth^2 (R32G32_SFLOAT)
     Image m_vsmMap;
-    Image m_vsmBlur;
+    Image m_vsmBlur;     // 2×2 box blur 中间结果
 
     // Shadow map render pipelines
     VkPipelineLayout m_smPipelineLayout = VK_NULL_HANDLE;
@@ -135,7 +136,15 @@ private:
     VkDescriptorPool m_smPool = VK_NULL_HANDLE;
     VkDescriptorSet m_smSet = VK_NULL_HANDLE;
 
-    VkSampler m_shadowSampler = VK_NULL_HANDLE;
+    // VSM blur pipeline（compute：vsmMap → vsmBlur）
+    VkPipelineLayout m_vsmBlurLayout = VK_NULL_HANDLE;
+    VkPipeline m_vsmBlurPipeline = VK_NULL_HANDLE;
+    VkDescriptorSetLayout m_vsmBlurSetLayout = VK_NULL_HANDLE;
+    VkDescriptorPool m_vsmBlurPool = VK_NULL_HANDLE;
+    VkDescriptorSet m_vsmBlurSet = VK_NULL_HANDLE;
+
+    VkSampler m_shadowSampler = VK_NULL_HANDLE;   // depth compare (PCF 用)
+    VkSampler m_vsmSampler    = VK_NULL_HANDLE;   // 线性、无 compare（VSM 用）
 
     // Shadow view/proj UBO (sun-space)
     Buffer m_shadowUbo;

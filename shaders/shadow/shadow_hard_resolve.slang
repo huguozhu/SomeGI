@@ -37,6 +37,7 @@ struct ResolvePC {
     float2 invOutSize;
     float bias;
     uint _pad;
+    float2 invShadowMapSize;  // PCF 用；hard resolve 不使用
 };
 [[vk::push_constant]] ResolvePC gPC;
 
