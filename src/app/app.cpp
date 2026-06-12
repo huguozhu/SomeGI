@@ -3284,6 +3284,14 @@ void App::setScreenshotConfig(int interval, int oneFrame, const char* dir) {
     if (dir && dir[0]) m_screenshot.outputDir = dir;
 }
 
+void App::setInitialShadowMethod(int method) {
+    if (method >= 0 && method < kShadowCount && kShadows[method].implemented) {
+        m_currentShadowIndex = method;
+        std::printf("[init] shadow method set to %d (%s) via CLI\n",
+                    method, kShadows[method].name);
+    }
+}
+
 void App::renderDebugWindow() {
     if (m_imguiWin->shouldClose()) {
         m_device->waitIdle();

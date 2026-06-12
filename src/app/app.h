@@ -39,6 +39,7 @@ public:
 
     // 由 main() 在构造后、run() 前调用，传入 CLI 截图配置
     void setScreenshotConfig(int interval, int oneFrame, const char* dir);
+    void setInitialShadowMethod(int method);   // --shadow-method CLI
 
 private:
     void onSwapchainResized();

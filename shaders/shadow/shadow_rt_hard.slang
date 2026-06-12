@@ -59,8 +59,9 @@ void cs_main(uint3 dt : SV_DispatchThreadID) {
     float3 L = normalize(-gFrame.sunDir.xyz);     // 从表面指向太阳
 
     // ── 3. 沿法线 + 光线方向偏移起点避免自相交 ──
-    //     偏移量需足够大（世界单位），否则 ray 仍会命中起始面
-    float3 origin = worldPos + N * 0.05 + L * 0.02;
+    //     偏移量需足够大（世界单位），否则 ray 仍会命中起始面。
+    //     同时使用 RAY_FLAG_CULL_BACK_FACING_TRIANGLES 避免命中背面三角形。
+    float3 origin = worldPos + N * 0.1 + L * 0.05;
 
     // ── 4. 发射 shadow ray ──
     RayDesc ray;
@@ -70,6 +71,7 @@ void cs_main(uint3 dt : SV_DispatchThreadID) {
     ray.TMax      = 100.0;
 
     RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH |
+             RAY_FLAG_CULL_BACK_FACING_TRIANGLES |
              RAY_FLAG_CULL_NON_OPAQUE |
              RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES> q;
     q.TraceRayInline(gTLAS, RAY_FLAG_NONE, 0xFF, ray);

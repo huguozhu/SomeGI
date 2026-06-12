@@ -96,8 +96,8 @@ void cs_main(uint3 dt : SV_DispatchThreadID) {
         float2 xi = float2(rand01(seed), rand01(seed));
         float3 dir = coneSample(L, gPC.sunRadius, xi);
 
-        // 沿随机方向 + 法线偏移
-        float3 rayOrigin = worldPos + N * 0.05 + dir * 0.02;
+        // 沿随机方向 + 法线偏移（增大偏移量 + 背面剔除避免自阴影）
+        float3 rayOrigin = worldPos + N * 0.1 + dir * 0.05;
 
         RayDesc ray;
         ray.Origin    = rayOrigin;
@@ -106,6 +106,7 @@ void cs_main(uint3 dt : SV_DispatchThreadID) {
         ray.TMax      = 100.0;
 
         RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH |
+                 RAY_FLAG_CULL_BACK_FACING_TRIANGLES |
                  RAY_FLAG_CULL_NON_OPAQUE |
                  RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES> q;
         q.TraceRayInline(gTLAS, RAY_FLAG_NONE, 0xFF, ray);

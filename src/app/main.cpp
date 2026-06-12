@@ -14,6 +14,7 @@ struct CliConfig {
     int captureInterval = 0;   // --capture-interval N
     int captureFrame = -1;     // --capture-frame N
     const char* captureDir = "screenshots";
+    int shadowMethod = -1;     // --shadow-method N（-1 表示使用默认值）
 };
 
 CliConfig parseCli(int argc, char** argv) {
@@ -27,6 +28,8 @@ CliConfig parseCli(int argc, char** argv) {
             if (cfg.captureFrame < 0) cfg.captureFrame = -1;
         } else if (std::strcmp(argv[i], "--capture-dir") == 0 && i + 1 < argc) {
             cfg.captureDir = argv[++i];
+        } else if (std::strcmp(argv[i], "--shadow-method") == 0 && i + 1 < argc) {
+            cfg.shadowMethod = std::atoi(argv[++i]);
         } else {
             // 兜底：旧的 gltf 路径参数（已废弃），忽略
         }
@@ -69,6 +72,8 @@ int main(int argc, char** argv) {
             g_cliConfig.captureInterval,
             g_cliConfig.captureFrame,
             g_cliConfig.captureDir);
+        if (g_cliConfig.shadowMethod >= 0)
+            app.setInitialShadowMethod(g_cliConfig.shadowMethod);
         app.run();
     } catch (const std::exception& e) {
         std::fprintf(stderr, "Fatal: %s\n", e.what());
