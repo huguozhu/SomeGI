@@ -87,8 +87,16 @@ void LightingPass::init(Device& d) {
     b[32] = {32, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}; // NDGI B3
     b[33] = {33, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,  1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}; // shadowMask
 
+    // binding 33 (shadowMask) 在运行时切换阴影方法时更新，需 UPDATE_AFTER_BIND
+    std::array<VkDescriptorBindingFlags, 34> lflags{};
+    lflags[33] = VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT;
+    VkDescriptorSetLayoutBindingFlagsCreateInfo lfi{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO};
+    lfi.bindingCount = (uint32_t)lflags.size(); lfi.pBindingFlags = lflags.data();
+
     VkDescriptorSetLayoutCreateInfo li{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+    li.pNext = &lfi;
     li.bindingCount = (uint32_t)b.size(); li.pBindings = b.data();
+    li.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT;
     VK_CHECK(vkCreateDescriptorSetLayout(d.device(), &li, nullptr, &m_setLayout));
 
     std::array<VkDescriptorPoolSize, 5> ps{{
@@ -99,6 +107,7 @@ void LightingPass::init(Device& d) {
         {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 7},  // +6 NDGI weights
     }};
     VkDescriptorPoolCreateInfo pci{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+    pci.flags = VK_DESCRIPTOR_POOL_CREATE_UPDATE_AFTER_BIND_BIT;
     pci.maxSets = 1; pci.poolSizeCount = (uint32_t)ps.size(); pci.pPoolSizes = ps.data();
     VK_CHECK(vkCreateDescriptorPool(d.device(), &pci, nullptr, &m_pool));
 

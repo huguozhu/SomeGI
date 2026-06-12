@@ -235,6 +235,8 @@ void FrameRenderer::destroy() {
     m_rsmGeom.destroy();
     m_gbuffer.destroy();
     m_shadow.destroy();
+    m_cullPass.destroy();
+    m_hizPass.destroy();
     m_envIbl.destroy(*m_device);
     m_rt.destroy();
     if (m_timestampPool) vkDestroyQueryPool(m_device->device(), m_timestampPool, nullptr);

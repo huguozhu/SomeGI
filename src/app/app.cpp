@@ -3,6 +3,7 @@
 #include "core/window.h"
 #include "core/device.h"
 #include "core/swapchain.h"
+#include <GLFW/glfw3.h>
 #include "scene/gltf_loader.h"
 #include "scene/scene_gpu.h"
 #include "scene/env_loader.h"
@@ -539,49 +540,29 @@ App::~App() {
 }
 
 void App::cleanup() {
-    m_renderer.taa().destroy();
-    m_renderer.smaa().destroy();
-    m_renderer.rtGi().destroy();
-    m_renderer.rtAS().destroy();
-    m_renderer.skybox().destroy();
-    m_renderer.forward().destroy();
-    m_renderer.ssgi().destroy();
-    m_renderer.gtgi().destroy();
-    m_renderer.ssr().destroy();
-    m_renderer.ssao().destroy();
-    m_renderer.gtao().destroy();
-    m_renderer.lighting().destroy();   // pipeline references IBL DSL — must die before GI tech
-    m_renderer.ddgiPass().destroy();
-    m_renderer.ddgi().destroy();
-    m_renderer.ndgiPass().destroy();
-    m_renderer.ndgi().destroy();
-    m_renderer.prtBake().destroy();
-    m_renderer.prt().destroy();
-    m_renderer.vxgiMipmap().destroy();
-    m_renderer.vxgiAniso().destroy();
-    m_renderer.vxgiRelight().destroy();
-    m_renderer.vxgi6Axis().destroy();
-    m_renderer.sdfgiPass().destroy();
-    m_renderer.sdfgi().destroy();
-    m_renderer.lumenProbe().destroy();
-    m_renderer.lumenFilter().destroy();
-    m_renderer.lumenGather().destroy();
-    m_renderer.lumen().destroy();
-    m_renderer.restirPass().destroy();
-    m_renderer.restir().destroy();
-    m_renderer.vxgiInject().destroy();
-    m_renderer.vxgiVoxelize().destroy();
-    m_renderer.vxgi().destroy();
-    m_renderer.lpvProp().destroy();
-    m_renderer.lpvInject().destroy();
-    m_renderer.lpv().destroy();
-    m_renderer.rsmSample().destroy();
-    m_renderer.rsmGeom().destroy();
-    m_renderer.gbuffer().destroy();
-    if (m_device) m_renderer.envIbl().destroy(*m_device);
-    m_renderer.rt().destroy();
+    if (m_device) m_device->waitIdle();
+
+    // FrameRenderer 统一清理所有 pass（含 envIbl / rt / timestamp）
+    m_renderer.destroy();
+
     if (m_device) destroySceneSamplers(*m_device, m_sceneGpu);
-    if (m_renderer.timestampPool()) vkDestroyQueryPool(m_device->device(), m_renderer.timestampPool(), nullptr);
+    // 显式释放 SceneGpu 中的 GPU 资源（必须在 Device 销毁前完成）
+    m_sceneGpu.vertexBuffer.reset();
+    m_sceneGpu.indexBuffer.reset();
+    m_sceneGpu.materialBuffer.reset();
+    m_sceneGpu.drawDataBuffer.reset();
+    for (auto& img : m_sceneGpu.images) img.reset();
+    m_sceneGpu.images.clear();
+    m_sceneGpu.whiteTex.reset();
+    m_sceneGpu.normalTex.reset();
+    if (m_sceneGpu.linearSampler) {
+        vkDestroySampler(m_device->device(), m_sceneGpu.linearSampler, nullptr);
+        m_sceneGpu.linearSampler = VK_NULL_HANDLE;
+    }
+    // 显式释放 indirect buffer
+    m_indirectBuf.reset();
+    m_indirectBufSun.reset();
+    m_countBuf.reset();
     if (m_pool) vkDestroyCommandPool(m_device->device(), m_pool, nullptr);
     if (m_imguiFence) vkDestroyFence(m_device->device(), m_imguiFence, nullptr);
     if (m_imguiCmds[0]) vkFreeCommandBuffers(m_device->device(), m_imguiPool, kFramesInFlight, m_imguiCmds);
@@ -1501,6 +1482,18 @@ void App::registerPipelineSteps() {
         .name = "Shadow",
         .phase = "PrePass",
         .record = [this](VkCommandBuffer cmd) {
+            // 确保 gDepth 在 SHADER_READ_ONLY_OPTIMAL layout（首帧从 UNDEFINED 过渡）
+            transitionImage(cmd, m_renderer.rt().depth.image(), VK_IMAGE_ASPECT_DEPTH_BIT,
+                VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
+                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+            // 同理 gNormalRough（首帧 layout 不确定）
+            transitionImage(cmd, m_renderer.rt().gNormalRough.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
+                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
             m_renderer.shadow().record(cmd, m_renderer.rt(),
                 m_renderer.gbuffer().frameUboHandle(),
                 m_sceneGpu, m_indirectBufSun.handle(), m_drawCount,
@@ -3503,6 +3496,9 @@ void App::run() {
             if (m_screenshot.captureOneFrame >= 0 &&
                 m_screenshot.frameCount >= m_screenshot.captureOneFrame) {
                 m_screenshot.captureOneFrame = -1;  // 一次性截图完成
+                if (m_exitAfterCapture) {
+                    glfwSetWindowShouldClose(m_window->handle(), GLFW_TRUE);
+                }
             }
         } else if (m_screenshot.shouldCapture() && m_swap->hdrEnabled()) {
             std::printf("[screenshot] HDR mode — screenshot not yet supported (use SDR)\n");

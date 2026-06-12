@@ -9,8 +9,11 @@ static void framebufferResizeCb(GLFWwindow* w, int width, int height) {
     if (self) self->onResize(width, height);
 }
 
+int Window::s_liveCount = 0;
+
 Window::Window(const WindowDesc& d) : m_w(d.width), m_h(d.height) {
     if (!glfwInit()) throw std::runtime_error("glfwInit failed");
+    ++s_liveCount;
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
     m_window = glfwCreateWindow(d.width, d.height, d.title, nullptr, nullptr);
     if (!m_window) throw std::runtime_error("glfwCreateWindow failed");
@@ -20,7 +23,8 @@ Window::Window(const WindowDesc& d) : m_w(d.width), m_h(d.height) {
 
 Window::~Window() {
     if (m_window) glfwDestroyWindow(m_window);
-    glfwTerminate();
+    // glfwTerminate() 只在最后一个窗口销毁时调用，避免多窗口场景下提前终止 GLFW
+    if (--s_liveCount == 0) glfwTerminate();
 }
 
 bool Window::shouldClose() const { return glfwWindowShouldClose(m_window); }

@@ -83,7 +83,8 @@ void ShadowPass::init(Device& d, VkExtent2D shadowMapSize, VkExtent2D outputSize
         desc.extent = {shadowMapSize.width, shadowMapSize.height, 1};
         desc.aspect = VK_IMAGE_ASPECT_COLOR_BIT;
         desc.usage  = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT
-                    | VK_IMAGE_USAGE_SAMPLED_BIT;
+                    | VK_IMAGE_USAGE_SAMPLED_BIT
+                    | VK_IMAGE_USAGE_STORAGE_BIT;   // VSM blur pass 2 写入
         m_vsmMap = Image(d, desc);
     }
 
@@ -152,18 +153,17 @@ void ShadowPass::init(Device& d, VkExtent2D shadowMapSize, VkExtent2D outputSize
         bld[2] = {2, VK_DESCRIPTOR_TYPE_SAMPLER,       1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
         bld[3] = {3, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
 
-        // binding 1,2 标记为 UPDATE_AFTER_BIND（Vulkan 1.2+ core）
-        std::array<VkDescriptorBindingFlags, 2> flags{
-            VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT,
-            VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT,
-        };
+        // binding 1(SAMPLED_IMAGE),2(SAMPLER) 标记 UPDATE_AFTER_BIND：帧间切换 VSM/Hard 纹理/采样器
+        std::array<VkDescriptorBindingFlags, 4> flags{0, 0, 0, 0};
+        flags[1] = VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT;
+        flags[2] = VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT;
         VkDescriptorSetLayoutBindingFlagsCreateInfo fi{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO};
         fi.bindingCount = (uint32_t)flags.size(); fi.pBindingFlags = flags.data();
 
         VkDescriptorSetLayoutCreateInfo li{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
         li.pNext = &fi;
         li.bindingCount = (uint32_t)bld.size(); li.pBindings = bld.data();
-        li.flags = 0;  // 不需要 VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT
+        li.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT;
         VK_CHECK(vkCreateDescriptorSetLayout(d.device(), &li, nullptr, &m_setLayout));
     }
 
@@ -215,23 +215,34 @@ void ShadowPass::init(Device& d, VkExtent2D shadowMapSize, VkExtent2D outputSize
     }
 
     // ── 9. 每帧资源 descriptor set layout（set=1：FrameUniforms + GBuffer depth）
+    //      bindFrameResources 每帧更新，需 UPDATE_AFTER_BIND 避免 in-flight 冲突
     {
         std::array<VkDescriptorSetLayoutBinding, 2> bld{};
         bld[0] = {0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
         bld[1] = {1, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
 
+        std::array<VkDescriptorBindingFlags, 2> flags{
+            VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT,
+            VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT,
+        };
+        VkDescriptorSetLayoutBindingFlagsCreateInfo fi{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO};
+        fi.bindingCount = (uint32_t)flags.size(); fi.pBindingFlags = flags.data();
+
         VkDescriptorSetLayoutCreateInfo li{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+        li.pNext = &fi;
         li.bindingCount = (uint32_t)bld.size(); li.pBindings = bld.data();
+        li.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT;
         VK_CHECK(vkCreateDescriptorSetLayout(d.device(), &li, nullptr, &m_frameSetLayout));
     }
 
-    // ── 10. 每帧资源 descriptor pool + set ──
+    // ── 10. 每帧资源 descriptor pool + set（UPDATE_AFTER_BIND）──
     {
         std::array<VkDescriptorPoolSize, 2> ps{{
             {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1},
             {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1},
         }};
         VkDescriptorPoolCreateInfo pci{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+        pci.flags = VK_DESCRIPTOR_POOL_CREATE_UPDATE_AFTER_BIND_BIT;
         pci.maxSets = 1; pci.poolSizeCount = (uint32_t)ps.size(); pci.pPoolSizes = ps.data();
         VK_CHECK(vkCreateDescriptorPool(d.device(), &pci, nullptr, &m_framePool));
 
@@ -258,6 +269,7 @@ void ShadowPass::init(Device& d, VkExtent2D shadowMapSize, VkExtent2D outputSize
         VkDescriptorSetLayoutCreateInfo li{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
         li.pNext = &fi;
         li.bindingCount = (uint32_t)bld.size(); li.pBindings = bld.data();
+        li.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT;
         VK_CHECK(vkCreateDescriptorSetLayout(d.device(), &li, nullptr, &m_vsmBlurSetLayout));
     }
 
@@ -281,14 +293,21 @@ void ShadowPass::init(Device& d, VkExtent2D shadowMapSize, VkExtent2D outputSize
     bool rtOk = d.features().accelStruct && d.features().rayQuery;
     if (rtOk) {
         // set=0: [0]=TLAS, [1]=STORAGE_IMAGE(shadowMask), [2]=SAMPLED_IMAGE(normal)
+        //        binding 2 每帧 bindFrameResources 更新，需 UPDATE_AFTER_BIND
         {
             std::array<VkDescriptorSetLayoutBinding, 3> bld{};
             bld[0] = {0, VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
             bld[1] = {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,           1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
             bld[2] = {2, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,            1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
 
+            std::array<VkDescriptorBindingFlags, 3> rtFlags{0, 0, VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT};
+            VkDescriptorSetLayoutBindingFlagsCreateInfo fi{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO};
+            fi.bindingCount = (uint32_t)rtFlags.size(); fi.pBindingFlags = rtFlags.data();
+
             VkDescriptorSetLayoutCreateInfo li{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+            li.pNext = &fi;
             li.bindingCount = (uint32_t)bld.size(); li.pBindings = bld.data();
+            li.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT;
             VK_CHECK(vkCreateDescriptorSetLayout(d.device(), &li, nullptr, &m_rtSetLayout));
         }
 
@@ -299,6 +318,7 @@ void ShadowPass::init(Device& d, VkExtent2D shadowMapSize, VkExtent2D outputSize
                 {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,              1},
             }};
             VkDescriptorPoolCreateInfo pci{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+            pci.flags = VK_DESCRIPTOR_POOL_CREATE_UPDATE_AFTER_BIND_BIT;
             pci.maxSets = 1; pci.poolSizeCount = (uint32_t)ps.size(); pci.pPoolSizes = ps.data();
             VK_CHECK(vkCreateDescriptorPool(d.device(), &pci, nullptr, &m_rtPool));
 

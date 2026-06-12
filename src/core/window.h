@@ -31,6 +31,8 @@ public:
     VkSurfaceKHR createSurface(VkInstance instance);
 
 private:
+    static int s_liveCount;  // 存活窗口计数，最后一个析构时调用 glfwTerminate
+
     GLFWwindow* m_window = nullptr;
     int m_w = 0, m_h = 0;
     bool m_resized = false;

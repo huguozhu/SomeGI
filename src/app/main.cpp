@@ -4,7 +4,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <exception>
+#include <exception>f
 #include <filesystem>
 
 namespace {
@@ -15,6 +15,7 @@ struct CliConfig {
     int captureFrame = -1;     // --capture-frame N
     const char* captureDir = "screenshots";
     int shadowMethod = -1;     // --shadow-method N（-1 表示使用默认值）
+    bool exitAfterCapture = false;  // --exit-after-capture
 };
 
 CliConfig parseCli(int argc, char** argv) {
@@ -30,6 +31,8 @@ CliConfig parseCli(int argc, char** argv) {
             cfg.captureDir = argv[++i];
         } else if (std::strcmp(argv[i], "--shadow-method") == 0 && i + 1 < argc) {
             cfg.shadowMethod = std::atoi(argv[++i]);
+        } else if (std::strcmp(argv[i], "--exit-after-capture") == 0) {
+            cfg.exitAfterCapture = true;
         } else {
             // 兜底：旧的 gltf 路径参数（已废弃），忽略
         }
@@ -74,6 +77,8 @@ int main(int argc, char** argv) {
             g_cliConfig.captureDir);
         if (g_cliConfig.shadowMethod >= 0)
             app.setInitialShadowMethod(g_cliConfig.shadowMethod);
+        if (g_cliConfig.exitAfterCapture)
+            app.setExitAfterCapture(true);
         app.run();
     } catch (const std::exception& e) {
         std::fprintf(stderr, "Fatal: %s\n", e.what());
