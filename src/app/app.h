@@ -1,5 +1,6 @@
 #pragma once
 #include "core/vk_common.h"
+#include "core/screenshot.h"
 #include "scene/scene.h"
 #include "scene/camera.h"
 #include "scene/draw_list.h"
@@ -35,6 +36,9 @@ public:
     App();
     ~App();
     void run();
+
+    // 由 main() 在构造后、run() 前调用，传入 CLI 截图配置
+    void setScreenshotConfig(int interval, int oneFrame, const char* dir);
 
 private:
     void onSwapchainResized();
@@ -131,6 +135,9 @@ private:
 
     // ---- Benchmark ----
     BenchmarkRunner m_benchmark;
+
+    // ---- Screenshot ----
+    ScreenshotCapture m_screenshot;
 
     // ---- Stats ----
     float m_fpsAvg = 0.0f;

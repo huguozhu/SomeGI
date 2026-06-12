@@ -7,7 +7,6 @@
 #include "scene/scene_gpu.h"
 #include "scene/env_loader.h"
 #include "scene/upload.h"
-#include <glm/gtc/matrix_inverse.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <imgui.h>
 #include <chrono>
@@ -160,6 +159,9 @@ App::App() {
     }
 
     m_swap   = std::make_unique<Swapchain>(*m_device, *m_window);
+
+    // 截图 staging buffer 初始化（先于 ImGui 窗口避免无用的初始化）
+    m_screenshot.init(*m_device, m_swap->extent());
 
     // ImGui debug window (600x900)
     {
@@ -676,6 +678,9 @@ void App::tickBenchmark(float dt) {
 }
 
 void App::onSwapchainResized() {
+    // 截图 staging buffer 随 extent 变化重建
+    m_screenshot.init(*m_device, m_swap->extent());
+
     m_renderer.rt().destroy();
     m_renderer.rt().create(*m_device, m_swap->extent(), m_msaaSamples);
     m_renderer.lighting().bindFrame(*m_device, m_renderer.rt(), m_renderer.gbuffer().frameUboHandle(),
@@ -3273,6 +3278,12 @@ void App::recordPostProcessing(VkCommandBuffer cmd) {
         VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT, 0);
 }
 
+void App::setScreenshotConfig(int interval, int oneFrame, const char* dir) {
+    m_screenshot.captureInterval = interval;
+    m_screenshot.captureOneFrame = oneFrame;
+    if (dir && dir[0]) m_screenshot.outputDir = dir;
+}
+
 void App::renderDebugWindow() {
     if (m_imguiWin->shouldClose()) {
         m_device->waitIdle();
@@ -3338,6 +3349,10 @@ void App::run() {
         if (!wantKbd && ImGui::IsKeyPressed(ImGuiKey_F2)) {
             startBenchmark();
         }
+        if (!wantKbd && ImGui::IsKeyPressed(ImGuiKey_F12)) {
+            m_screenshot.manualRequest = true;
+            std::printf("[screenshot] F12 pressed, will capture next frame\n");
+        }
         if (m_benchmark.running()) {
             tickBenchmark(dt);
         } else {
@@ -3348,6 +3363,9 @@ void App::run() {
             bakePrt();
             m_renderer.prtBaked() = true;
         }
+
+        // ---- Screenshot frame counter ----
+        m_screenshot.frameCount++;
 
         // ---- Swapchain acquire ----
         auto frame = m_swap->acquireNextFrame();
@@ -3452,6 +3470,37 @@ void App::run() {
         si.signalSemaphoreInfoCount = 1;   si.pSignalSemaphoreInfos = &signalS;
         si.commandBufferInfoCount = 1;     si.pCommandBufferInfos = &csi;
         VK_CHECK(vkQueueSubmit2(m_device->graphicsQueue(), 1, &si, frame.sync->inFlight));
+
+        // ---- Screenshot capture (post-submit, pre-present) ----
+        if (m_screenshot.shouldCapture() && !m_swap->hdrEnabled()) {
+            // 等待 GPU 完成，再单独提交一次 copy 命令
+            vkWaitForFences(m_device->device(), 1, &frame.sync->inFlight, VK_TRUE, UINT64_MAX);
+
+            // ldrTonemap 在 SDR 路径末尾处于 VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL
+            // 直接用 oneShotSubmit 拷到 staging buffer
+            oneShotSubmit(*m_device, m_pool, [&](VkCommandBuffer scmd) {
+                m_screenshot.recordCopy(scmd, m_renderer.rt().ldrTonemap.image(),
+                                        m_renderer.rt().extent);
+            });
+
+            // 写 PNG 文件
+            char filename[256];
+            std::snprintf(filename, sizeof(filename), "%s_%04d.png",
+                          m_screenshot.outputPrefix.c_str(),
+                          m_screenshot.frameCount);
+            m_screenshot.savePng(filename, m_renderer.rt().extent);
+
+            // 清除触发标记
+            m_screenshot.manualRequest = false;
+            if (m_screenshot.captureOneFrame >= 0 &&
+                m_screenshot.frameCount >= m_screenshot.captureOneFrame) {
+                m_screenshot.captureOneFrame = -1;  // 一次性截图完成
+            }
+        } else if (m_screenshot.shouldCapture() && m_swap->hdrEnabled()) {
+            std::printf("[screenshot] HDR mode — screenshot not yet supported (use SDR)\n");
+            m_screenshot.manualRequest = false;
+        }
+
         m_swap->present(frame);
 
         // ---- ImGui debug window ----

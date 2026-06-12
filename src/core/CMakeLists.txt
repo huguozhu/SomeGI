@@ -13,6 +13,8 @@ add_library(somegi_core STATIC
     vma_impl.cpp
     shader.h
     shader.cpp
+    screenshot.h
+    screenshot.cpp
 )
 
 target_include_directories(somegi_core PUBLIC ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/external)
