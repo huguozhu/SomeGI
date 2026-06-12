@@ -188,7 +188,7 @@ void LumenProbePass::bindResources(Device& d, const LumenResources& res,
 }
 
 void LumenProbePass::record(VkCommandBuffer cmd, const LumenResources& res,
-                             uint32_t frameIndex, bool useSixAxis) {
+                             uint32_t /*frameIndex*/, bool useSixAxis) {
     uint32_t pw = res.probeGridW();
     uint32_t ph = res.probeGridH();
     uint32_t pc = res.probeCount();

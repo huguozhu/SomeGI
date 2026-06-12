@@ -31,7 +31,7 @@ function(compile_slang TARGET_NAME)
                 -I ${CMAKE_SOURCE_DIR}/shaders/common
                 -I ${CMAKE_SOURCE_DIR}/shaders
                 -target spirv
-                -profile "spirv_1_5+SPV_EXT_mesh_shader"
+                -profile "spirv_1_5+SPV_EXT_mesh_shader+spvRayQueryKHR"
                 -o ${_out}
                 -fvk-use-entrypoint-name
                 -emit-spirv-directly

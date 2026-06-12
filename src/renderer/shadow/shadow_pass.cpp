@@ -854,7 +854,7 @@ void ShadowPass::recordPCSS(VkCommandBuffer cmd, const RenderTargets& /*rt*/,
 // ────────────────────────────────────────────────────────────────────────────
 
 void ShadowPass::recordVSM(VkCommandBuffer cmd, const RenderTargets& /*rt*/,
-                            VkBuffer frameUbo, const SceneGpu& sceneGpu,
+                            VkBuffer /*frameUbo*/, const SceneGpu& /*sceneGpu*/,
                             VkBuffer indirectBuf, uint32_t drawCount) {
     if (drawCount == 0) { recordNone(cmd); return; }
 
@@ -1462,16 +1462,16 @@ void ShadowPass::buildResolvePipeline() {
 
     // ── PCSS resolve（独立 pipeline layout，push constant 比 ResolvePC 大）──
     {
-        VkPushConstantRange pc{};
-        pc.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-        pc.size       = sizeof(PCSS_PC);    // 40 bytes：含 lightSize + maxKernelRadius
+        VkPushConstantRange pcPcss{};
+        pcPcss.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+        pcPcss.size       = sizeof(PCSS_PC);    // 40 bytes：含 lightSize + maxKernelRadius
         static_assert(sizeof(PCSS_PC) == 40);
 
-        std::array<VkDescriptorSetLayout, 2> sets{m_setLayout, m_frameSetLayout};
-        VkPipelineLayoutCreateInfo plci{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
-        plci.setLayoutCount = (uint32_t)sets.size(); plci.pSetLayouts = sets.data();
-        plci.pushConstantRangeCount = 1; plci.pPushConstantRanges = &pc;
-        VK_CHECK(vkCreatePipelineLayout(d.device(), &plci, nullptr, &m_pcssResolveLayout));
+        std::array<VkDescriptorSetLayout, 2> pcssSets{m_setLayout, m_frameSetLayout};
+        VkPipelineLayoutCreateInfo plciPcss{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+        plciPcss.setLayoutCount = (uint32_t)pcssSets.size(); plciPcss.pSetLayouts = pcssSets.data();
+        plciPcss.pushConstantRangeCount = 1; plciPcss.pPushConstantRanges = &pcPcss;
+        VK_CHECK(vkCreatePipelineLayout(d.device(), &plciPcss, nullptr, &m_pcssResolveLayout));
 
         ShaderModule cs(d, shaderDir() / "shadow" / "shadow_pcss_resolve.spv");
         VkPipelineShaderStageCreateInfo stage{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};

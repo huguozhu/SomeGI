@@ -120,7 +120,7 @@ void cs_generateRays(uint3 dt : SV_DispatchThreadID) {
     uint py = probeIdx / gPC.probeGridW;
     float2 probeCenterUV = (float2(px + 0.5, py + 0.5) * float(gPC.probeTileSize)) * gPC.invScreenSize;
     uint2 probePix = uint2(probeCenterUV * float2(gPC.screenSize));
-    probePix = min(probePix, gPC.screenSize - 1);
+    probePix = min(probePix, uint2(gPC.screenSize) - 1u);
 
     float depth = gDepth.Load(int3(probePix, 0));
     if (depth >= 1.0) {
@@ -214,7 +214,7 @@ void cs_projectSH(uint3 dt : SV_DispatchThreadID) {
     // Probe world normal (for cosine weighting)
     float2 probeCenterUV = (float2(px + 0.5, py + 0.5) * float(gPC.probeTileSize)) * gPC.invScreenSize;
     uint2 probePix = uint2(probeCenterUV * float2(gPC.screenSize));
-    probePix = min(probePix, gPC.screenSize - 1);
+    probePix = min(probePix, uint2(gPC.screenSize) - 1u);
 
     float4 nr = gNormalRough.Load(int3(probePix, 0));
     float3 probeN = normalize(nr.xyz);

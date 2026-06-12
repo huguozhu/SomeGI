@@ -74,10 +74,10 @@ void writeProbeSH(RWTexture2D<float4> atlas, int2 gridPos,
 void samplePrevAtlas(float3 worldPos, out float shR[9], out float shG[9], out float shB[9]) {
     // Project worldPos to previous frame's NDC
     float4 clip = mul(gFrame.prevViewProj, float4(worldPos, 1.0));
-    if (abs(clip.w) < 1e-6) { shR[0] = -1; return; } // invalid flag
+    if (abs(clip.w) < 1e-6) { shR[0] = -1; shG[0] = 0; shB[0] = 0; return; } // 无效标记
 
     float3 ndc = clip.xyz / clip.w;
-    if (any(abs(ndc) > 1.001)) { shR[0] = -1; return; }
+    if (any(abs(ndc) > 1.001)) { shR[0] = -1; shG[0] = 0; shB[0] = 0; return; }
 
     // NDC → screen UV → probe grid coordinate
     float2 screenUV = ndc.xy * 0.5 + 0.5;

@@ -131,7 +131,7 @@ void NdgiPass::destroy() {
 }
 
 void NdgiPass::bindResources(Device& d, NdgiResources& res, SceneRtAS& rtAS,
-                              const SceneGpu& scene, const RenderTargets& rt,
+                              const SceneGpu& scene, const RenderTargets& /*rt*/,
                               VkBuffer frameUbo) {
     if (!m_rtSupported || m_traceSet == VK_NULL_HANDLE) return;
 
