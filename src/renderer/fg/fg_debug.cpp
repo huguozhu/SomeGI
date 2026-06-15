@@ -80,7 +80,7 @@ void FGDebug::populate(const FGCompiler::CompiledGraph& compiled,
             uint32_t s = m ? estimateSizeBytes(m->desc) : 0;
             if (s > maxSize) maxSize = s;
         }
-        agd.wastedBytes = ag.totalBytes - maxSize;
+        agd.wastedBytes = ag.sizeBytes - maxSize;
         this->aliasGroups.push_back(std::move(agd));
     }
 }

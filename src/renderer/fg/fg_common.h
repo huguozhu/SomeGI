@@ -73,7 +73,7 @@ struct FGResourceDesc {
 
     // 显式默认构造：匿名 union 成员含有 NSDMI，隐式默认构造被 delete
     FGResourceDesc() {
-        new (&texture) FGTextureDesc();
+        texture = FGTextureDesc{};
     }
 
     // 便捷工厂

@@ -1,16 +1,13 @@
 // src/renderer/fg/fg_debug.h
 #pragma once
 #include "fg_common.h"
+#include "fg_compiler.h"
 #include <string>
 #include <vector>
 #include <cstdint>
 
 namespace somegi {
 namespace fg {
-
-class FGCompiler;
-struct FGPassNode;
-struct FGResourceNode;
 
 // ============================================================
 // FGDebug: FrameGraph 调试/可视化数据
