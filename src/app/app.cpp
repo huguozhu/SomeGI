@@ -203,6 +203,9 @@ App::App() {
     m_renderer.init(*m_device, m_pool, m_swap->extent(), m_msaaSamples,
                     rtSupported, m_swap->format(), m_window->handle());
 
+    // 初始化 FrameGraph（实验性）
+    m_fg.init(*m_device);
+
     // Init ImGui on the separate debug window
     m_renderer.imgui().init(*m_device, m_imguiWin->handle(), m_imguiSwap->format(), kFramesInFlight);
 
@@ -1184,6 +1187,53 @@ void App::buildUI() {
                     if (sel) ImGui::SetItemDefaultFocus();
                 }
                 ImGui::EndCombo();
+            }
+        }
+
+        ImGui::Separator();
+        ImGui::Text("Experimental");
+        bool useFg = m_useFrameGraph;
+        if (ImGui::Checkbox("Use Frame Graph", &useFg)) {
+            m_useFrameGraph = useFg;
+            m_pipelineDirty = true;
+        }
+        if (m_useFrameGraph) {
+            ImGui::SameLine();
+            ImGui::TextColored(ImVec4(1,1,0,1), "(experimental)");
+
+            auto& fgDebug = m_fg.debug();
+            if (ImGui::TreeNode("FrameGraph Debug")) {
+                if (ImGui::Button("Show Pass List")) fgDebug.showPassList = !fgDebug.showPassList;
+                ImGui::SameLine();
+                if (ImGui::Button("Show Aliases")) fgDebug.showAliasGroups = !fgDebug.showAliasGroups;
+                ImGui::SameLine();
+                if (ImGui::Button("Show Barriers")) fgDebug.showBarrierLog = !fgDebug.showBarrierLog;
+
+                if (fgDebug.showPassList && ImGui::CollapsingHeader("Passes", ImGuiTreeNodeFlags_DefaultOpen)) {
+                    for (auto& p : fgDebug.passes) {
+                        const char* typeStr = "?";
+                        switch (p.passType) {
+                            case somegi::fg::FGPassType::Compute: typeStr = "C"; break;
+                            case somegi::fg::FGPassType::Graphics: typeStr = "G"; break;
+                            case somegi::fg::FGPassType::MeshShading: typeStr = "M"; break;
+                            case somegi::fg::FGPassType::RayTracing: typeStr = "R"; break;
+                        }
+                        ImGui::Text("%s [%s] %s order=%u reads=%zu writes=%zu",
+                            p.culled ? "[CULLED]" : "", typeStr,
+                            p.name.c_str(), p.execOrder,
+                            p.reads.size(), p.writes.size());
+                    }
+                }
+                if (fgDebug.showAliasGroups && ImGui::CollapsingHeader("Alias Groups")) {
+                    for (auto& ag : fgDebug.aliasGroups) {
+                        ImGui::Text("Group %u: %u bytes (%u wasted)",
+                            ag.id, ag.totalBytes, ag.wastedBytes);
+                        for (auto& m : ag.members) {
+                            ImGui::BulletText("%s", m.c_str());
+                        }
+                    }
+                }
+                ImGui::TreePop();
             }
         }
 
@@ -3434,8 +3484,20 @@ void App::run() {
             m_renderer.rt().gNormalRough.view());
 
         // ---- Execute render pipeline ----
-        buildPipelineTable();
-        m_renderer.pipeline().execute(cmd);
+        if (m_useFrameGraph) {
+            // FrameGraph 路径
+            m_fg.reset();
+
+            // TODO Phase 1+: 导入资源 + 注册 pass（当前仅为框架占位）
+            // setupFrameGraph() 将在后续 phase 中填充
+
+            m_fg.compile();
+            m_fg.execute(cmd);
+        } else {
+            // 现有 RenderPipeline 路径
+            buildPipelineTable();
+            m_renderer.pipeline().execute(cmd);
+        }
         ++m_renderer.frameIndex();
 
         // ---- Post-processing (tonemap + AA + blit) ----

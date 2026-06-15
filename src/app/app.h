@@ -6,6 +6,7 @@
 #include "renderer/core/frame_ubo.h"      // for FrameUBO type
 #include "renderer/core/frame_context.h"
 #include "renderer/core/frame_renderer.h"
+#include "renderer/fg/fg_graph.h"
 #include "app/benchmark_runner.h"
 #include <map>
 #include <memory>
@@ -60,6 +61,11 @@ private:
 
     // ---- Rendering (all passes owned by FrameRenderer) ----
     FrameRenderer m_renderer;
+
+    // ---- Frame Graph（实验性） ----
+    somegi::fg::FrameGraph m_fg;
+    bool m_useFrameGraph = false;
+
     Buffer m_indirectBuf;
     Buffer m_indirectBufSun;
     Buffer m_countBuf;
@@ -151,6 +157,7 @@ private:
 
     void registerPipelineSteps();
     void buildPipelineTable();
+    void setupFrameGraph();
     void writeTimestamp(VkCommandBuffer cmd, uint32_t slot);
 
     // Frame loop helpers (extracted from run())
