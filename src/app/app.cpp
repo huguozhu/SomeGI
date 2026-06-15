@@ -3485,12 +3485,9 @@ void App::run() {
 
         // ---- Execute render pipeline ----
         if (m_useFrameGraph) {
-            // FrameGraph 路径
+            // FrameGraph 路径：导入资源 + 注册 pass
             m_fg.reset();
-
-            // TODO Phase 1+: 导入资源 + 注册 pass（当前仅为框架占位）
-            // setupFrameGraph() 将在后续 phase 中填充
-
+            setupFrameGraph();
             m_fg.compile();
             m_fg.execute(cmd);
         } else {
@@ -3528,6 +3525,636 @@ void App::run() {
         // ---- Save viewProj for next frame's reprojection ----
         m_prevViewProj = ubo.viewProj;
     }
+}
+
+void App::setupFrameGraph() {
+    using namespace somegi::fg;
+    auto ext2d = m_swap->extent();
+    VkExtent3D ext{ext2d.width, ext2d.height, 1};
+    auto& rt = m_renderer.rt();
+
+    // ================================================================
+    // 导入持久纹理资源（跨帧存活，FrameGraph 不管理其生命周期）
+    // ================================================================
+
+    // GBuffer (resolved, single-sample) —— 初始布局为 UNDEFINED（首帧由 GBuffer pass 写入）
+    m_fgh.gAlbedoMetal = m_fg.importTexture("gAlbedoMetal", rt.gAlbedoMetal.image(),
+        {ext, rt.gAlbedoMetal.format(), 1, 1, VK_SAMPLE_COUNT_1_BIT,
+         VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT},
+        VK_IMAGE_LAYOUT_UNDEFINED);
+    m_fgh.gNormalRough = m_fg.importTexture("gNormalRough", rt.gNormalRough.image(),
+        {ext, rt.gNormalRough.format(), 1, 1, VK_SAMPLE_COUNT_1_BIT,
+         VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT},
+        VK_IMAGE_LAYOUT_UNDEFINED);
+    m_fgh.gEmissiveAO = m_fg.importTexture("gEmissiveAO", rt.gEmissiveAO.image(),
+        {ext, rt.gEmissiveAO.format(), 1, 1, VK_SAMPLE_COUNT_1_BIT,
+         VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT},
+        VK_IMAGE_LAYOUT_UNDEFINED);
+    m_fgh.depth = m_fg.importTexture("depth", rt.depth.image(),
+        {ext, VK_FORMAT_D32_SFLOAT, 1, 1, VK_SAMPLE_COUNT_1_BIT,
+         VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT},
+        VK_IMAGE_LAYOUT_UNDEFINED);
+
+    // GBuffer MSAA
+    m_fgh.gAlbedoMetalMs = m_fg.importTexture("gAlbedoMetalMs", rt.gAlbedoMetalMs.image(),
+        {ext, rt.gAlbedoMetalMs.format(), 1, 1, m_msaaSamples,
+         VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT}, VK_IMAGE_LAYOUT_UNDEFINED);
+    m_fgh.gNormalRoughMs = m_fg.importTexture("gNormalRoughMs", rt.gNormalRoughMs.image(),
+        {ext, rt.gNormalRoughMs.format(), 1, 1, m_msaaSamples,
+         VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT}, VK_IMAGE_LAYOUT_UNDEFINED);
+    m_fgh.gEmissiveAOMs = m_fg.importTexture("gEmissiveAOMs", rt.gEmissiveAOMs.image(),
+        {ext, rt.gEmissiveAOMs.format(), 1, 1, m_msaaSamples,
+         VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT}, VK_IMAGE_LAYOUT_UNDEFINED);
+    m_fgh.depthMs = m_fg.importTexture("depthMs", rt.depthMs.image(),
+        {ext, VK_FORMAT_D32_SFLOAT, 1, 1, m_msaaSamples,
+         VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT}, VK_IMAGE_LAYOUT_UNDEFINED);
+
+    // AO
+    m_fgh.ssao = m_fg.importTexture("ssao", rt.ssao.image(),
+        {ext, VK_FORMAT_R8_UNORM, 1, 1, VK_SAMPLE_COUNT_1_BIT,
+         VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT},
+        VK_IMAGE_LAYOUT_UNDEFINED);
+
+    // SSR
+    m_fgh.ssr = m_fg.importTexture("ssr", rt.ssr.image(),
+        {ext, VK_FORMAT_R16G16B16A16_SFLOAT, 1, 1, VK_SAMPLE_COUNT_1_BIT,
+         VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT},
+        VK_IMAGE_LAYOUT_UNDEFINED);
+
+    // SSGI
+    m_fgh.ssgi = m_fg.importTexture("ssgi", rt.ssgi.image(),
+        {ext, VK_FORMAT_R16G16B16A16_SFLOAT, 1, 1, VK_SAMPLE_COUNT_1_BIT,
+         VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT},
+        VK_IMAGE_LAYOUT_UNDEFINED);
+    m_fgh.ssgiPrev = m_fg.importTexture("ssgiPrev", rt.ssgiPrev.image(),
+        {ext, VK_FORMAT_R16G16B16A16_SFLOAT, 1, 1, VK_SAMPLE_COUNT_1_BIT,
+         VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT},
+        VK_IMAGE_LAYOUT_UNDEFINED);
+
+    // HDR
+    m_fgh.hdrColor = m_fg.importTexture("hdrColor", rt.hdrColor.image(),
+        {ext, VK_FORMAT_R16G16B16A16_SFLOAT, 1, 1, VK_SAMPLE_COUNT_1_BIT,
+         VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT},
+        VK_IMAGE_LAYOUT_UNDEFINED);
+    m_fgh.hdrPrev = m_fg.importTexture("hdrPrev", rt.hdrPrev.image(),
+        {ext, VK_FORMAT_R16G16B16A16_SFLOAT, 1, 1, VK_SAMPLE_COUNT_1_BIT,
+         VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT},
+        VK_IMAGE_LAYOUT_UNDEFINED);
+
+    // LDR
+    m_fgh.ldrTonemap = m_fg.importTexture("ldrTonemap", rt.ldrTonemap.image(),
+        {ext, VK_FORMAT_B8G8R8A8_UNORM, 1, 1, VK_SAMPLE_COUNT_1_BIT,
+         VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT},
+        VK_IMAGE_LAYOUT_UNDEFINED);
+
+    // RT GI
+    m_fgh.rtGI = m_fg.importTexture("rtGI", rt.rtGI.image(),
+        {ext, VK_FORMAT_R16G16B16A16_SFLOAT, 1, 1, VK_SAMPLE_COUNT_1_BIT,
+         VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT},
+        VK_IMAGE_LAYOUT_UNDEFINED);
+
+    // ReSTIR
+    m_fgh.restir = m_fg.importTexture("restir", rt.restir.image(),
+        {ext, VK_FORMAT_R16G16B16A16_SFLOAT, 1, 1, VK_SAMPLE_COUNT_1_BIT,
+         VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT},
+        VK_IMAGE_LAYOUT_UNDEFINED);
+
+    // RSM GI
+    m_fgh.rsmGI = m_fg.importTexture("rsmGI", rt.rsmGI.image(),
+        {ext, VK_FORMAT_R16G16B16A16_SFLOAT, 1, 1, VK_SAMPLE_COUNT_1_BIT,
+         VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT},
+        VK_IMAGE_LAYOUT_UNDEFINED);
+
+    // Lumen GI
+    m_fgh.lumenGI = m_fg.importTexture("lumenGI", rt.lumenGI.image(),
+        {ext, VK_FORMAT_R16G16B16A16_SFLOAT, 1, 1, VK_SAMPLE_COUNT_1_BIT,
+         VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT},
+        VK_IMAGE_LAYOUT_UNDEFINED);
+
+    // Shadow mask
+    m_fgh.shadowMask = m_fg.importTexture("shadowMask",
+        m_renderer.shadow().shadowMask().image(),
+        {ext, VK_FORMAT_R8_UNORM, 1, 1, VK_SAMPLE_COUNT_1_BIT,
+         VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT},
+        VK_IMAGE_LAYOUT_UNDEFINED);
+
+    // AA
+    bool aaEnabled = (m_aaMethod == AAMethod::TAA || m_aaMethod == AAMethod::SMAA);
+    if (aaEnabled) {
+        m_fgh.aaHdr = m_fg.importTexture("aaHdr", rt.aaHdr.image(),
+            {ext, VK_FORMAT_R16G16B16A16_SFLOAT, 1, 1, VK_SAMPLE_COUNT_1_BIT,
+             VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT},
+            VK_IMAGE_LAYOUT_UNDEFINED);
+        m_fgh.aaHistory = m_fg.importTexture("aaHistory", rt.aaHistory.image(),
+            {ext, VK_FORMAT_R16G16B16A16_SFLOAT, 1, 1, VK_SAMPLE_COUNT_1_BIT,
+             VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT},
+            VK_IMAGE_LAYOUT_UNDEFINED);
+    }
+
+    // ================================================================
+    // 注册所有 Pass（按执行顺序）
+    // 注意：FrameGraph 会自动插入 barrier，不需要手动 transitionImage
+    // ================================================================
+
+    bool fwd = (m_renderingMode == RenderingMode::Forward);
+    bool aoEnabled = (!fwd && m_aoMethod != AOMethod::None);
+
+    // --- Shadow Pass ---
+    m_fg.addPass("Shadow", [&](FGBuilder& b) {
+        b.setPassType(FGPassType::Compute);
+        b.read(m_fgh.depth);        // 读 GBuffer 深度
+        b.write(m_fgh.shadowMask);  // 写 shadowMask
+        b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
+            m_renderer.shadow().record(cmd, m_renderer.rt(),
+                m_renderer.gbuffer().frameUboHandle(),
+                m_sceneGpu, m_indirectBufSun.handle(), m_drawCount,
+                m_renderer.frameIndex());
+        });
+    });
+
+    // --- RSM Geometry ---
+    m_fg.addPass("RSM-Geometry", [&](FGBuilder& b) {
+        b.setPassType(FGPassType::Graphics);
+        b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
+            m_renderer.rsmGeom().record(cmd, m_indirectBufSun.handle(), m_drawCount, m_sceneGpu);
+        });
+    });
+
+    // --- Forward (替代 GBuffer，前向渲染模式) ---
+    if (fwd) {
+        m_fg.addPass("Forward", [&](FGBuilder& b) {
+            b.setPassType(FGPassType::Graphics);
+            b.write(m_fgh.hdrColor);
+            b.write(m_fgh.depth);
+            b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
+                m_renderer.forward().record(cmd, m_renderer.rt(), m_indirectBuf.handle(), m_drawCount, m_sceneGpu);
+            });
+        });
+    }
+
+    // --- GBuffer ---
+    if (!fwd) {
+        m_fg.addPass("GBuffer", [&](FGBuilder& b) {
+            b.setPassType(FGPassType::Graphics);
+            b.write(m_fgh.gAlbedoMetalMs);
+            b.write(m_fgh.gNormalRoughMs);
+            b.write(m_fgh.gEmissiveAOMs);
+            b.write(m_fgh.depthMs);
+            b.write(m_fgh.gAlbedoMetal);   // resolve targets
+            b.write(m_fgh.gNormalRough);
+            b.write(m_fgh.gEmissiveAO);
+            b.write(m_fgh.depth);
+            b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
+                m_renderer.gbuffer().record(cmd, m_renderer.rt(), m_indirectBuf.handle(), m_drawCount, m_sceneGpu);
+            });
+        });
+    }
+
+    // --- AO ---
+    if (aoEnabled) {
+        const char* aoName = (m_aoMethod == AOMethod::SSAO) ? "SSAO" : "GTAO";
+        m_fg.addPass(aoName, [&](FGBuilder& b) {
+            b.setPassType(FGPassType::Compute);
+            b.read(m_fgh.depth);
+            b.read(m_fgh.gNormalRough);
+            b.write(m_fgh.ssao);
+            b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
+                if (m_aoMethod == AOMethod::SSAO) {
+                    m_renderer.ssao().record(cmd, m_renderer.rt(),
+                        m_frameCtx.proj, glm::inverse(m_frameCtx.proj), m_frameCtx.view);
+                } else {
+                    m_renderer.gtao().record(cmd, m_renderer.rt(),
+                        m_frameCtx.proj, m_frameCtx.view);
+                }
+            });
+        });
+    } else if (!fwd) {
+        // AO-Clear: 清除 ssao 为 1.0（无遮挡）
+        m_fg.addPass("AO-Clear", [&](FGBuilder& b) {
+            b.setPassType(FGPassType::Compute);
+            b.write(m_fgh.ssao);
+            b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
+                VkClearColorValue white{1,1,1,1};
+                VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT,0,1,0,1};
+                vkCmdClearColorImage(cmd, m_renderer.rt().ssao.image(),
+                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &white, 1, &range);
+            });
+        });
+    } else {
+        // Forward mode: AO not applicable
+    }
+
+    // --- SSR ---
+    if (!fwd && m_renderer.ssr().enabled) {
+        m_fg.addPass("SSR", [&](FGBuilder& b) {
+            b.setPassType(FGPassType::Compute);
+            b.read(m_fgh.gAlbedoMetal);
+            b.read(m_fgh.gNormalRough);
+            b.read(m_fgh.gEmissiveAO);
+            b.read(m_fgh.depth);
+            b.read(m_fgh.hdrPrev);
+            b.write(m_fgh.ssr);
+            b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
+                m_renderer.ssr().record(cmd, m_renderer.rt());
+            });
+        });
+    } else if (!fwd && !m_renderer.ssr().enabled) {
+        m_fg.addPass("SSR-Clear", [&](FGBuilder& b) {
+            b.setPassType(FGPassType::Compute);
+            b.write(m_fgh.ssr);
+            b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
+                VkClearColorValue zero{};
+                VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT,0,1,0,1};
+                vkCmdClearColorImage(cmd, m_renderer.rt().ssr.image(),
+                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &zero, 1, &range);
+            });
+        });
+    }
+
+    // --- ScreenGI (SSGI/GTGI) ---
+    bool screenGiOn = !fwd && (m_renderer.ssgi().enabled || m_renderer.gtgi().enabled);
+    if (screenGiOn) {
+        m_fg.addPass("ScreenGI", [&](FGBuilder& b) {
+            b.setPassType(FGPassType::Compute);
+            b.read(m_fgh.gAlbedoMetal);
+            b.read(m_fgh.gNormalRough);
+            b.read(m_fgh.gEmissiveAO);
+            b.read(m_fgh.depth);
+            b.read(m_fgh.ssgiPrev);
+            b.write(m_fgh.ssgi);
+            b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
+                if (m_renderer.ssgi().enabled) m_renderer.ssgi().record(cmd, m_renderer.rt());
+                else m_renderer.gtgi().record(cmd, m_renderer.rt());
+            });
+        });
+    } else if (!fwd) {
+        m_fg.addPass("ScreenGI-Clear", [&](FGBuilder& b) {
+            b.setPassType(FGPassType::Compute);
+            b.write(m_fgh.ssgi);
+            b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
+                VkClearColorValue zero{};
+                VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT,0,1,0,1};
+                vkCmdClearColorImage(cmd, m_renderer.rt().ssgi.image(),
+                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &zero, 1, &range);
+            });
+        });
+    }
+
+    // --- VXGI Chain ---
+    bool needVoxelGrid = !fwd && (m_renderer.vxgiEnabled() || m_renderer.ddgiEnabled()
+        || m_renderer.sdfgiPass().enabled || m_renderer.lumenEnabled()
+        || m_renderer.restirPass().enabled);
+    if (needVoxelGrid) {
+        m_fg.addPass("VXGI-Chain", [&](FGBuilder& b) {
+            b.setPassType(FGPassType::Compute);
+            b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
+                // VXGI voxelize + inject + mipmap + aniso
+                m_renderer.vxgiVoxelize().record(cmd, m_scene, m_sceneGpu,
+                    m_renderer.vxgiGridMin(), m_renderer.vxgiCellSize(), m_renderer.kVxgiResolution);
+                // inject RSM into voxel grid
+                {
+                    VkImageMemoryBarrier2 vbar{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+                    vbar.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                    vbar.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+                    vbar.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                    vbar.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+                    vbar.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+                    vbar.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+                    vbar.image = m_renderer.vxgi().image().image();
+                    vbar.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+                    VkDependencyInfo vdi{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+                    vdi.imageMemoryBarrierCount = 1; vdi.pImageMemoryBarriers = &vbar;
+                    vkCmdPipelineBarrier2(cmd, &vdi);
+                }
+                m_renderer.vxgiInject().record(cmd, m_renderer.kVxgiResolution,
+                    m_renderer.vxgiGridMin(), m_renderer.vxgiCellSize());
+                m_renderer.vxgiMipmap().record(cmd, m_renderer.vxgi());
+                // aniso
+                m_renderer.vxgiAniso().record(cmd, m_renderer.vxgi());
+            });
+        });
+
+        if (m_renderer.vxgiRelightEnabled()) {
+            m_fg.addPass("VXGI-Relight", [&](FGBuilder& b) {
+                b.setPassType(FGPassType::Compute);
+                b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
+                    int bounces = m_renderer.lumenEnabled() ? 3 : 1;
+                    // Bounce 1: read voxelGrid -> write scratch
+                    m_renderer.vxgiRelight().record(cmd, m_renderer.vxgiRelight().voxelSet(),
+                        m_renderer.kVxgiResolution, m_renderer.vxgi().mipLevels(),
+                        m_renderer.vxgiCellSize(), m_renderer.vxgiGridMin(),
+                        m_renderer.vxgiRelightStrength());
+                    if (bounces >= 2) {
+                        // Bounce 2: read scratch -> write scratch2
+                        m_renderer.vxgiRelight().record(cmd, m_renderer.vxgiRelight().pingSet0(),
+                            m_renderer.kVxgiResolution, m_renderer.vxgi().mipLevels(),
+                            m_renderer.vxgiCellSize(), m_renderer.vxgiGridMin(),
+                            m_renderer.vxgiRelightStrength());
+                        if (bounces >= 3) {
+                            // Bounce 3: read scratch2 -> write scratch
+                            m_renderer.vxgiRelight().record(cmd, m_renderer.vxgiRelight().pingSet1(),
+                                m_renderer.kVxgiResolution, m_renderer.vxgi().mipLevels(),
+                                m_renderer.vxgiCellSize(), m_renderer.vxgiGridMin(),
+                                m_renderer.vxgiRelightStrength());
+                        }
+                    }
+                });
+            });
+        }
+
+        if (m_renderer.lumenEnabled() && m_renderer.vxgiSixAxisInited()) {
+            m_fg.addPass("VXGI-6Axis", [&](FGBuilder& b) {
+                b.setPassType(FGPassType::Compute);
+                b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
+                    m_renderer.vxgi6Axis().record(cmd, m_renderer.kVxgiResolution,
+                        m_renderer.vxgi().mipLevels(), m_renderer.vxgiCellSize(),
+                        m_renderer.vxgiGridMin(), m_renderer.vxgiRelightStrength());
+                });
+            });
+        }
+    }
+
+    // --- SDFGI ---
+    if (!fwd && m_renderer.sdfgiPass().enabled) {
+        m_fg.addPass("SDFGI", [&](FGBuilder& b) {
+            b.setPassType(FGPassType::Compute);
+            b.read(m_fgh.gNormalRough);
+            b.read(m_fgh.depth);
+            b.read(m_fgh.ssgi);
+            b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
+                m_renderer.sdfgiPass().record(cmd, m_renderer.sdfgi(), m_renderer.rt(), m_renderer.frameIndex(),
+                    m_renderer.sdfgiPass().seedThreshold, m_renderer.sdfgiPass().maxDistCells,
+                    (uint32_t)m_renderer.sdfgiPass().numRays,
+                    (uint32_t)m_renderer.sdfgiPass().maxSteps,
+                    m_renderer.sdfgiPass().rayMaxCells, m_renderer.sdfgiPass().hitEpsCells);
+            });
+        });
+    }
+
+    // --- RT GI ---
+    bool rtGiActive = m_renderer.rtGiBound() && m_giIndexApplied == 10;
+    if (!fwd && rtGiActive) {
+        m_fg.addPass("RTGI", [&](FGBuilder& b) {
+            b.setPassType(FGPassType::RayTracing);
+            b.write(m_fgh.rtGI);
+            b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
+                m_renderer.rtGi().record(cmd, m_renderer.rt());
+            });
+        });
+    } else if (!fwd && m_renderer.rtGiInited() && !rtGiActive) {
+        m_fg.addPass("RTGI-Clear", [&](FGBuilder& b) {
+            b.setPassType(FGPassType::Compute);
+            b.write(m_fgh.rtGI);
+            b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
+                VkClearColorValue zero{};
+                VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT,0,1,0,1};
+                vkCmdClearColorImage(cmd, m_renderer.rt().rtGI.image(),
+                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &zero, 1, &range);
+            });
+        });
+    }
+
+    // --- ReSTIR ---
+    if (!fwd && m_renderer.restirPass().enabled) {
+        m_fg.addPass("ReSTIR", [&](FGBuilder& b) {
+            b.setPassType(FGPassType::Compute);
+            b.write(m_fgh.restir);
+            b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
+                uint32_t numLights = (uint32_t)m_renderer.demoLights().size();
+                bool useRtVis = m_renderer.rtSupported() && m_renderer.rtGiBound();
+                m_renderer.restirPass().record(cmd, m_renderer.restir(), m_renderer.rt(),
+                    numLights,
+                    (uint32_t)m_renderer.restirPass().numCandidates,
+                    (uint32_t)m_renderer.restirPass().numNeighbors,
+                    m_renderer.restirPass().spatialRadius,
+                    (uint32_t)m_renderer.restirPass().shadowSteps,
+                    m_renderer.restirPass().intensityScale,
+                    m_renderer.frameIndex(),
+                    useRtVis);
+            });
+        });
+    } else if (!fwd && !m_renderer.restirPass().enabled) {
+        m_fg.addPass("ReSTIR-Clear", [&](FGBuilder& b) {
+            b.setPassType(FGPassType::Compute);
+            b.write(m_fgh.restir);
+            b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
+                VkClearColorValue zero{};
+                VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT,0,1,0,1};
+                vkCmdClearColorImage(cmd, m_renderer.rt().restir.image(),
+                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &zero, 1, &range);
+            });
+        });
+    }
+
+    // --- DDGI ---
+    if (!fwd && m_renderer.ddgiEnabled()) {
+        m_fg.addPass("DDGI", [&](FGBuilder& b) {
+            b.setPassType(FGPassType::Compute);
+            b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
+                float jitterRot = float((m_renderer.frameIndex() % 360) * 0.0174532925);
+                m_renderer.ddgiPass().record(cmd, m_renderer.ddgi(), m_renderer.ddgiOrigin(), m_renderer.ddgiSpacing(),
+                    m_renderer.vxgiGridMin(), m_renderer.vxgiCellSize(), m_renderer.kVxgiResolution,
+                    jitterRot, m_renderer.frameIndex());
+            });
+        });
+    }
+
+    // --- Lumen ---
+    bool lumenActive = !fwd && m_renderer.lumenEnabled();
+    if (lumenActive) {
+        m_fg.addPass("Lumen-Probe", [&](FGBuilder& b) {
+            b.setPassType(FGPassType::RayTracing);
+            b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
+                if (m_renderer.lumenProbeInited()) {
+                    m_renderer.lumenProbe().record(cmd, m_renderer.lumen(), m_renderer.frameIndex(),
+                        m_renderer.vxgiSixAxisInited() ? 1u : 0u);
+                }
+            });
+        });
+        m_fg.addPass("Lumen-Filter", [&](FGBuilder& b) {
+            b.setPassType(FGPassType::Compute);
+            b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
+                if (m_renderer.lumenFilterInited()) {
+                    m_renderer.lumenFilter().record(cmd, m_renderer.lumen(), m_renderer.rt());
+                }
+            });
+        });
+        m_fg.addPass("Lumen-Gather", [&](FGBuilder& b) {
+            b.setPassType(FGPassType::Compute);
+            b.write(m_fgh.lumenGI);
+            b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
+                if (m_renderer.lumenGatherInited()) {
+                    m_renderer.lumenGather().record(cmd, m_renderer.lumen(), m_renderer.rt(),
+                        (uint32_t)m_renderer.lumenDebugMode());
+                }
+            });
+        });
+    } else if (!fwd) {
+        m_fg.addPass("Lumen-Clear", [&](FGBuilder& b) {
+            b.setPassType(FGPassType::Compute);
+            b.write(m_fgh.lumenGI);
+            b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
+                VkClearColorValue zero{};
+                VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT,0,1,0,1};
+                vkCmdClearColorImage(cmd, m_renderer.rt().lumenGI.image(),
+                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &zero, 1, &range);
+            });
+        });
+    }
+
+    // --- LPV ---
+    if (!fwd && m_renderer.lpvEnabled()) {
+        m_fg.addPass("LPV-Inject", [&](FGBuilder& b) {
+            b.setPassType(FGPassType::Compute);
+            b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
+                m_renderer.lpvInject().record(cmd, m_renderer.kLpvResolution,
+                    m_renderer.lpvGridMin(), m_renderer.lpvCellSize());
+            });
+        });
+        m_fg.addPass("LPV-Propagate", [&](FGBuilder& b) {
+            b.setPassType(FGPassType::Compute);
+            b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
+                for (int iter = 0; iter < m_renderer.lpvProp().iterations; ++iter) {
+                    m_renderer.lpvProp().record(cmd, m_renderer.lpv().curIdx(),
+                        m_renderer.kLpvResolution, m_renderer.lpvProp().occlusionAmplifier,
+                        m_renderer.lpvProp().gvOcclusionStrength);
+                }
+            });
+        });
+    }
+
+    // --- RSM Sample ---
+    if (!fwd && m_renderer.rsmSample().enabled) {
+        m_fg.addPass("RSM-Sample", [&](FGBuilder& b) {
+            b.setPassType(FGPassType::Compute);
+            b.write(m_fgh.rsmGI);
+            b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
+                m_renderer.rsmSample().record(cmd, m_renderer.rt());
+            });
+        });
+    } else if (!fwd && !m_renderer.rsmSample().enabled) {
+        m_fg.addPass("RSM-Clear", [&](FGBuilder& b) {
+            b.setPassType(FGPassType::Compute);
+            b.write(m_fgh.rsmGI);
+            b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
+                VkClearColorValue zero{};
+                VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT,0,1,0,1};
+                vkCmdClearColorImage(cmd, m_renderer.rt().rsmGI.image(),
+                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &zero, 1, &range);
+            });
+        });
+    }
+
+    // --- NDGI ---
+    if (m_renderer.ndgiEnabled() && m_renderer.rtSupported()) {
+        m_fg.addPass("NDGI", [&](FGBuilder& b) {
+            b.setPassType(FGPassType::RayTracing);
+            b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
+                m_renderer.ndgiPass().record(cmd, m_renderer.ndgi(), m_renderer.frameIndex(),
+                    m_renderer.ddgiOrigin(), m_renderer.ddgiSpacing());
+                m_renderer.ndgiPass().recordTraining(cmd, m_renderer.ndgi(), m_renderer.frameIndex());
+            });
+        });
+    }
+
+    // --- Lighting ---
+    if (!fwd) {
+        m_fg.addPass("Lighting", [&](FGBuilder& b) {
+            b.setPassType(FGPassType::Compute);
+            b.read(m_fgh.gAlbedoMetal);
+            b.read(m_fgh.gNormalRough);
+            b.read(m_fgh.gEmissiveAO);
+            b.read(m_fgh.depth);
+            b.read(m_fgh.ssao);
+            b.read(m_fgh.ssr);
+            b.read(m_fgh.ssgi);
+            b.read(m_fgh.shadowMask);
+            // Optional GI reads (if GI is active, but framegraph can handle extra deps)
+            b.read(m_fgh.rsmGI);
+            b.read(m_fgh.rtGI);
+            b.read(m_fgh.restir);
+            b.read(m_fgh.lumenGI);
+            b.write(m_fgh.hdrColor);
+            b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
+                m_renderer.lighting().record(cmd, m_renderer.rt());
+            });
+        });
+    }
+
+    // --- Skybox ---
+    if (!fwd) {
+        m_fg.addPass("Skybox", [&](FGBuilder& b) {
+            b.setPassType(FGPassType::Graphics);
+            b.read(m_fgh.depth);
+            b.write(m_fgh.hdrColor);
+            b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
+                m_renderer.skybox().record(cmd, m_renderer.rt());
+            });
+        });
+    }
+
+    // --- Copy hdrPrev ---
+    m_fg.addPass("Copy-hdrPrev", [&](FGBuilder& b) {
+        b.setPassType(FGPassType::Compute);
+        b.read(m_fgh.hdrColor);
+        b.write(m_fgh.hdrPrev);
+        b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
+            VkImageCopy region{};
+            region.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+            region.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+            region.extent = {m_renderer.rt().extent.width, m_renderer.rt().extent.height, 1};
+            vkCmdCopyImage(cmd,
+                m_renderer.rt().hdrColor.image(), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                m_renderer.rt().hdrPrev.image(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                1, &region);
+        });
+    });
+
+    // --- Tonemap ---
+    m_fg.addPass("Tonemap", [&](FGBuilder& b) {
+        b.setPassType(FGPassType::Compute);
+        b.read(m_fgh.hdrColor);
+        b.write(m_fgh.ldrTonemap);
+        b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
+            bool hdr = m_swap->hdrEnabled();
+            m_renderer.tonemap().record(cmd, m_renderer.rt(), m_frameCtx.frameInFlight, hdr, 1.0f);
+        });
+    });
+
+    // --- TAA ---
+    if (m_aaMethod == AAMethod::TAA) {
+        m_fg.addPass("TAA", [&](FGBuilder& b) {
+            b.setPassType(FGPassType::Compute);
+            b.read(m_fgh.hdrColor);
+            b.read(m_fgh.aaHistory);
+            b.write(m_fgh.aaHdr);
+            b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
+                m_renderer.taa().record(cmd, m_renderer.rt(), m_jitter, m_prevJitter,
+                    m_frameCtx.invViewProj, m_prevViewProj, m_frameCtx.frameInFlight, m_taaBlendAlpha);
+            });
+        });
+    }
+
+    // --- SMAA ---
+    if (m_aaMethod == AAMethod::SMAA) {
+        m_fg.addPass("SMAA", [&](FGBuilder& b) {
+            b.setPassType(FGPassType::Compute);
+            b.read(m_fgh.aaHdr);
+            b.write(m_fgh.ldrTonemap);
+            b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
+                m_renderer.smaa().record(cmd, m_renderer.rt());
+            });
+        });
+    }
+
+    // --- ImGui ---
+    m_fg.addPass("ImGui", [&](FGBuilder& b) {
+        b.setPassType(FGPassType::Graphics);
+        b.write(m_fgh.ldrTonemap);
+        b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
+            m_renderer.imgui().render(cmd, m_frameCtx.swapView, m_frameCtx.swapExtent);
+        });
+    });
 }
 
 }

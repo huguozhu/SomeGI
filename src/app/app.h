@@ -66,6 +66,48 @@ private:
     somegi::fg::FrameGraph m_fg;
     bool m_useFrameGraph = false;
 
+    // FrameGraph 资源句柄缓存（每帧 setupFrameGraph 填充）
+    struct FGH {
+        // GBuffer (resolved, single-sample)
+        somegi::fg::FGHandle gAlbedoMetal;
+        somegi::fg::FGHandle gNormalRough;
+        somegi::fg::FGHandle gEmissiveAO;
+        somegi::fg::FGHandle depth;
+
+        // GBuffer MSAA
+        somegi::fg::FGHandle gAlbedoMetalMs;
+        somegi::fg::FGHandle gNormalRoughMs;
+        somegi::fg::FGHandle gEmissiveAOMs;
+        somegi::fg::FGHandle depthMs;
+
+        // AO / SSR / SSGI
+        somegi::fg::FGHandle ssao;
+        somegi::fg::FGHandle ssr;
+        somegi::fg::FGHandle ssgi;
+        somegi::fg::FGHandle ssgiPrev;
+
+        // HDR
+        somegi::fg::FGHandle hdrColor;
+        somegi::fg::FGHandle hdrPrev;
+
+        // LDR output
+        somegi::fg::FGHandle ldrTonemap;
+
+        // GI outputs
+        somegi::fg::FGHandle rtGI;
+        somegi::fg::FGHandle restir;
+        somegi::fg::FGHandle rsmGI;
+        somegi::fg::FGHandle lumenGI;
+
+        // AA intermediates
+        somegi::fg::FGHandle aaHdr;
+        somegi::fg::FGHandle aaHistory;
+
+        // Shadow mask
+        somegi::fg::FGHandle shadowMask;
+    };
+    FGH m_fgh = {};
+
     Buffer m_indirectBuf;
     Buffer m_indirectBufSun;
     Buffer m_countBuf;
