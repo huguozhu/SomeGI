@@ -1,3 +1,4 @@
+add_subdirectory(fg)
 add_subdirectory(core)
 add_subdirectory(shadow)
 add_subdirectory(culling)
@@ -15,6 +16,7 @@ add_subdirectory(gi/rt)
 add_subdirectory(gi/lumen)
 
 add_library(somegi_renderer STATIC
+    $<TARGET_OBJECTS:somegi_renderer_fg>
     $<TARGET_OBJECTS:somegi_renderer_culling>
     $<TARGET_OBJECTS:somegi_renderer_core>
     $<TARGET_OBJECTS:somegi_renderer_shadow>
