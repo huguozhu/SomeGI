@@ -33,8 +33,10 @@ void FGExecutor::execute(VkCommandBuffer cmd,
     for (auto* pass : compiled.passOrder) {
         if (!pass || pass->culled) continue;
 
-        // 2a. 插入 barrier
-        emitBarriers(cmd, *pass, compiled.resources, viewCache);
+        // 2a. 插入 barrier（仅在 autoBarriers 模式）
+        if (m_autoBarriers) {
+            emitBarriers(cmd, *pass, compiled.resources, viewCache);
+        }
 
         // 2b. 执行 pass
         if (pass->execute) {

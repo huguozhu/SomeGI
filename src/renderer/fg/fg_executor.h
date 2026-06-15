@@ -37,6 +37,10 @@ public:
                  FGCompiler::CompiledGraph& compiled,
                  const FGResources& viewCache);
 
+    // 控制是否自动插入 barrier（默认 false，pass 内部管理 barrier）
+    void setAutoBarriers(bool enabled) { m_autoBarriers = enabled; }
+    bool autoBarriers() const { return m_autoBarriers; }
+
     // 静态方法：根据 pass 类型和资源 usage 推导 layout/access/stage
     static VkImageLayout derivedLayout(FGPassType passType,
                                         VkImageUsageFlags usage,
@@ -52,6 +56,7 @@ public:
 private:
     Device* m_device = nullptr;
     uint64_t m_currentFrame = 0;
+    bool m_autoBarriers = false;  // 默认关闭，pass 内部管理 barrier
 
     // ---- 纹理资源池 ----
     struct PooledTexture {

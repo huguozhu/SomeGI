@@ -36,6 +36,11 @@ public:
     // 声明读写依赖：in-place update（先读后写同一资源）
     FGHandle readWrite(FGHandle handle);
 
+    // ---- 显式 Layout 声明（覆盖自动推导） ----
+    // 用于 vkCmdClearColorImage (需 TRANSFER_DST) / vkCmdCopyImage (需 TRANSFER_SRC/DST) 等场景
+    FGHandle read(FGHandle handle, VkImageLayout explicitLayout);
+    FGHandle write(FGHandle handle, VkImageLayout explicitLayout);
+
     // ---- 托管资源创建 ----
     FGHandle createTexture(const char* name, const FGTextureDesc& desc);
     FGHandle createBuffer(const char* name, const FGBufferDesc& desc);

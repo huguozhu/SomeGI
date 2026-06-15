@@ -285,6 +285,44 @@ FGHandle FGBuilder::readWrite(FGHandle handle) {
     return handle;
 }
 
+// ---- 显式 Layout 重载 ----
+
+FGHandle FGBuilder::read(FGHandle handle, VkImageLayout explicitLayout) {
+    auto* res = m_graph.findResource(handle);
+    if (!res) return handle;
+
+    FGPassNode::ResourceRef ref;
+    ref.handle = handle;
+    ref.resource = res;
+    ref.requiredLayout = explicitLayout;
+
+    bool isTexture = (res->desc.type == FGResourceType::Texture);
+    VkImageUsageFlags usage = isTexture ? res->desc.texture.usage : (VkImageUsageFlags)0;
+    ref.access = FGExecutor::derivedAccess(m_passNode->passType, usage, false, false);
+    ref.stages = FrameGraph::readStageForPassType(m_passNode->passType);
+
+    m_passNode->reads.push_back(ref);
+    return handle;
+}
+
+FGHandle FGBuilder::write(FGHandle handle, VkImageLayout explicitLayout) {
+    auto* res = m_graph.findResource(handle);
+    if (!res) return handle;
+
+    FGPassNode::ResourceRef ref;
+    ref.handle = handle;
+    ref.resource = res;
+    ref.requiredLayout = explicitLayout;
+
+    bool isTexture = (res->desc.type == FGResourceType::Texture);
+    VkImageUsageFlags usage = isTexture ? res->desc.texture.usage : (VkImageUsageFlags)0;
+    ref.access = FGExecutor::derivedAccess(m_passNode->passType, usage, true, false);
+    ref.stages = FGExecutor::derivedStage(m_passNode->passType, usage, true);
+
+    m_passNode->writes.push_back(ref);
+    return handle;
+}
+
 FGHandle FGBuilder::createTexture(const char* name, const FGTextureDesc& desc) {
     return m_graph.createTexture(name, desc);
 }
