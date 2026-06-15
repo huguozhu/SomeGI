@@ -1,7 +1,8 @@
 # Frame Graph 渲染帧图系统 — 设计文档
 
 日期： 2026-06-15
-状态： 设计中
+更新： 2026-06-16
+状态： **Phase 1 完成，双轨运行 0 validation error**
 分支： frame_graph
 
 ---
@@ -636,3 +637,62 @@ ImGui 开关：
 | Layout 推导 | 基于 usage 标记自动选择 | 覆盖 95% 场景，复杂情况用 usage 覆盖 |
 | 内存管理 | 池化分配 + 帧热度淘汰 | 平衡分配开销和内存占用 |
 | 可视化 | ImGui Tab + 终端 ASCII | 快速确认 DAG 正确性，无需外部工具 |
+
+---
+
+## 13. 实施状态（2026-06-16）
+
+### Phase 0: 框架搭建 ✅
+
+| 文件 | 状态 |
+|---|---|
+| `src/renderer/fg/fg_common.h` | FGHandle, FGResourceDesc, FGPassType |
+| `src/renderer/fg/fg_resource_node.h` | FGResourceNode: 寿命/别名/barrier 状态 |
+| `src/renderer/fg/fg_pass_node.h` | FGPassNode: 读写边/执行回调 |
+| `src/renderer/fg/fg_builder.h` | FGBuilder: read/write/readWrite + 显式 layout 重载 |
+| `src/renderer/fg/fg_resources.h` | FGResources: execute 期 handle→VkImageView 查询 |
+| `src/renderer/fg/fg_graph.h/cpp` | FrameGraph: import/create/addPass/compile/execute/reset |
+| `src/renderer/fg/fg_compiler.h/cpp` | Cull→Edges→Lifetimes→Aliasing→TopologicalSort |
+| `src/renderer/fg/fg_executor.h/cpp` | 资源池/alias 分配/barrier (auto/manual toggle) |
+| `src/renderer/fg/fg_debug.h/cpp` | Pass/Resource/AliasGroup 调试数据 |
+| `src/app/app.h/cpp` | 双轨开关 + setupFrameGraph 全 pass 注册 |
+
+### Phase 1: 双轨验证 ✅
+
+- **旧管线** (`m_useFrameGraph=false`): 0 validation error, ~780 FPS
+- **FrameGraph** (`m_useFrameGraph=true`): 0 validation error
+
+### FrameGraph 当前能力
+
+| 能力 | 状态 |
+|---|---|
+| DAG 拓扑排序 + 执行 | ✅ 按资源依赖自动排序 |
+| 死 Pass 剔除 | ✅ RSM-Geometry 正确剔除 |
+| 资源导入 (22 images) | ✅ 全部 RenderTargets |
+| Pass 注册 (30+ passes) | ✅ Shadow→Copy-hdrPrev |
+| 自动 Barrier | ⚠️ 框架就绪，暂关闭（见下文） |
+| 资源别名 | ⚠️ 框架就绪，全部使用 importTexture |
+| ImGui 可视化 | ⚠️ FGDebug 数据结构就绪，UI 面板待完善 |
+
+### 执行边界
+
+```
+FrameGraph 管理:
+  Shadow → RSM-Geom → GBuffer → AO → SSR → ScreenGI
+  → VXGI-Chain → SDFGI → RTGI → ReSTIR → DDGI
+  → Lumen → LPV → RSM-Sample → NDGI
+  → Lighting → Skybox → Copy-hdrPrev
+
+recordPostProcessing 管理:
+  Tonemap → TAA/SMAA → Blit → ImGui
+```
+
+### 自动 Barrier 问题分析
+
+自动 barrier 要求 FrameGraph 知道每个 pass 内部操作的精确 layout。当前架构中：
+
+1. **Pass 内部操作不透明** — `record()` 内可能包含 `vkCmdClearColorImage`（需 TRANSFER_DST）、`vkCmdCopyImage`（需 TRANSFER_SRC/DST）、`imageStore`（需 GENERAL）等多种操作，FrameGraph 无法从 `read/write` 声明自动推导
+2. **复杂 Pass 多步操作** — VXGI-Chain/LPV-Propagate/SDFGI 在单个 pass 内包含多次 dispatch + 内部 barrier
+3. **跨帧 Layout 持久化** — Image 在帧间保持上次 layout，首次使用需 oldLayout=UNDEFINED 过渡
+
+**方案 A（推荐）**：为每个 pass 在 `read/write` 中声明精确的入口 layout，去掉 execute lambda 内的 `transitionImage`，FrameGraph 插入 barrier。需改造 ~20 个简单 pass，复杂 pass 保持现状。

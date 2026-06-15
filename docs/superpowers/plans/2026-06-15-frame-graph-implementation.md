@@ -2329,3 +2329,53 @@ void App::setupFrameGraph() {
 - [x] 无占位符：所有 task 包含完整代码
 - [x] 类型一致性：`FGHandle`、`FGPassType`、`FGResourceDesc` 在各 task 中一致使用
 - [x] CMake 路径正确：`src/renderer/fg/` 下新增文件均已列入 CMakeLists.txt
+
+---
+
+## 执行状态（2026-06-16）
+
+### Phase 0: 框架搭建 ✅
+
+所有 Task (0.0-0.13) 已完成，提交记录：
+
+```
+5817a45 Phase 1 完成: FrameGraph 路径 0 validation error
+471e5df Phase 1 fix: oldLayout 改为 UNDEFINED 兼容拓扑排序
+70e4275 Phase 1: 添加 explicit layout 重载 + auto-barriers 开关
+33d1786 Phase 1 fix: 补全 Barrier 过渡
+5347d84 Phase 1: 注册全部渲染 Pass 到 FrameGraph
+86e5061 Phase 0.13: 集成到 App + ImGui toggle
+6971459 Phase 0.12: FGExecutor 实现
+7d457cc Phase 0.11: FGCompiler 实现
+2dded64 Phase 0.10: fg_graph.cpp 实现
+34d3f47 fix: FGResources 前向声明
+1e7cab3 fix: 桩实现
+f931438 Phase 0.9: FGExecutor 声明
+b8727cc Phase 0.7: FrameGraph 声明
+26734de fix: warning
+c631837 fix: 编译错误
+5eb7ac8 fix: FGResourceDesc
+3f87ebd Phase 0.6: FGDebug
+6f140d8 Phase 0.8: FGCompiler 声明
+0007e14 Phase 0.5: FGBuilder
+b6d0ab8 Phase 0.4: FGResources
+10d62c2 Phase 0.3: FGPassNode
+e9d8d21 Phase 0.2: FGResourceNode
+afa9855 Phase 0.1: fg_common.h
+dd1c4d0 Phase 0.0: CMake 骨架
+```
+
+### Phase 2-5 ❌ (合并为一步注册全部 pass)
+
+全部 30+ pass 已在 `setupFrameGraph()` 中注册完毕。
+
+### Phase 6: 清理旧管线 ⏳ (未开始)
+
+待删除: `render_pipeline.h/cpp`, `App::registerPipelineSteps()`, `App::buildPipelineTable()`
+
+### 关键经验
+
+1. **自动 Barrier 不可行** — pass 内部操作多样（clear/copy/store/attachment），无法通过 `read/write` 统一推导。需方案 A 逐步改造。
+2. **执行边界设置** — Tonemap/TAA/SMAA/ImGui 保留在 FrameGraph 外部，由 `recordPostProcessing` 管理，避免双写冲突。
+3. **oldLayout=UNDEFINED** — 帧间 layout 持久化需所有首次过渡使用 UNDEFINED oldLayout。
+4. **显式 layout 重载** — `b.write(handle, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL)` 对 Clear/Copy pass 必不可少。
