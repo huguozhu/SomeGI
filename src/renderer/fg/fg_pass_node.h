@@ -9,7 +9,7 @@ namespace somegi {
 namespace fg {
 
 struct FGResourceNode;
-struct FGResources;
+class FGResources;
 
 // ============================================================
 // FGPassNode: 图内部 Pass 表示

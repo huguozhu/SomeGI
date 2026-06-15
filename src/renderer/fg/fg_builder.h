@@ -9,7 +9,7 @@ namespace fg {
 class FrameGraph;
 struct FGPassNode;
 struct FGResourceNode;
-struct FGResources;
+class FGResources;
 
 // ============================================================
 // FGBuilder: 在 addPass() 的 setup lambda 中使用
