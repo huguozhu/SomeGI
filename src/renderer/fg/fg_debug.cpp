@@ -22,8 +22,10 @@ static uint32_t estimateSizeBytes(const FGResourceDesc& desc) {
 }
 
 void FGDebug::populate(const FGCompiler::CompiledGraph& compiled,
-                        const std::vector<FGPassNode>& passes,
-                        const std::vector<FGResourceNode>& resources) {
+                        const std::vector<FGPassNode>& allPasses,
+                        const std::vector<FGResourceNode>& allResources) {
+    (void)allPasses;
+    (void)allResources;
     // 清空上帧数据
     this->passes.clear();
     this->resources.clear();
@@ -71,7 +73,7 @@ void FGDebug::populate(const FGCompiler::CompiledGraph& compiled,
     // 别名组列表
     for (auto& ag : compiled.aliasGroups) {
         AliasGroupDebug agd;
-        agd.id = this->aliasGroups.size();
+        agd.id = (uint32_t)this->aliasGroups.size();
         agd.totalBytes = ag.sizeBytes;
         uint32_t maxSize = 0;
         for (auto* m : ag.members) {

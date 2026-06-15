@@ -57,9 +57,9 @@ struct FGDebug {
     bool showBarrierLog  = false;
 
     // 编译后填充
-    void populate(const class FGCompiler::CompiledGraph& compiled,
-                  const std::vector<struct FGPassNode>& passes,
-                  const std::vector<struct FGResourceNode>& resources);
+    void populate(const FGCompiler::CompiledGraph& compiled,
+                  const std::vector<struct FGPassNode>& allPasses,
+                  const std::vector<struct FGResourceNode>& allResources);
 };
 
 } // namespace fg
