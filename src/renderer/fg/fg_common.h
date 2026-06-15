@@ -71,6 +71,11 @@ struct FGResourceDesc {
         FGBufferDesc  buffer;
     };
 
+    // 显式默认构造：匿名 union 成员含有 NSDMI，隐式默认构造被 delete
+    FGResourceDesc() {
+        new (&texture) FGTextureDesc();
+    }
+
     // 便捷工厂
     static FGResourceDesc textureDesc(const char* name,
                                        VkExtent3D extent,

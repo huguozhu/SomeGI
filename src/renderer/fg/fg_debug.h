@@ -8,6 +8,10 @@
 namespace somegi {
 namespace fg {
 
+class FGCompiler;
+struct FGPassNode;
+struct FGResourceNode;
+
 // ============================================================
 // FGDebug: FrameGraph 调试/可视化数据
 //
