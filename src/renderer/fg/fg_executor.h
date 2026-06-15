@@ -1,0 +1,103 @@
+// src/renderer/fg/fg_executor.h
+#pragma once
+#include "fg_common.h"
+#include "fg_compiler.h"
+#include "core/image.h"
+#include "core/buffer.h"
+#include <vector>
+#include <cstdint>
+
+namespace somegi {
+
+class Device;
+
+namespace fg {
+
+struct FGPassNode;
+struct FGResourceNode;
+class FGResources;
+
+// ============================================================
+// FGExecutor: 帧图执行器
+//
+// 职责：
+//   1. 为每个 AliasGroup 分配/复用物理 Image/Buffer
+//   2. 遍历 passOrder，为每个 pass 自动插入 barrier
+//   3. 调用 pass.execute() 录制用户命令
+//   4. 更新资源 Barrier 状态
+//   5. 回收长期未用的池资源
+// ============================================================
+class FGExecutor {
+public:
+    void init(Device& device);
+    void destroy();
+
+    // 执行编译后的图
+    void execute(VkCommandBuffer cmd,
+                 FGCompiler::CompiledGraph& compiled,
+                 const FGResources& viewCache);
+
+    // 静态方法：根据 pass 类型和资源 usage 推导 layout/access/stage
+    static VkImageLayout derivedLayout(FGPassType passType,
+                                        VkImageUsageFlags usage,
+                                        bool isWrite);
+    static VkAccessFlags2 derivedAccess(FGPassType passType,
+                                         VkImageUsageFlags usage,
+                                         bool isWrite,
+                                         bool isReadWrite);
+    static VkPipelineStageFlags2 derivedStage(FGPassType passType,
+                                               VkImageUsageFlags usage,
+                                               bool isWrite);
+
+private:
+    Device* m_device = nullptr;
+    uint64_t m_currentFrame = 0;
+
+    // ---- 纹理资源池 ----
+    struct PooledTexture {
+        Image image;
+        VkFormat format = VK_FORMAT_UNDEFINED;
+        VkExtent3D extent{};
+        uint64_t lastUsedFrame = 0;
+        bool inUse = false;
+    };
+    std::vector<PooledTexture> m_texturePool;
+
+    // ---- Buffer 资源池 ----
+    struct PooledBuffer {
+        Buffer buffer;
+        VkDeviceSize size = 0;
+        uint64_t lastUsedFrame = 0;
+        bool inUse = false;
+    };
+    std::vector<PooledBuffer> m_bufferPool;
+
+    // ---- 内部方法 ----
+
+    // 为别名组分配物理资源
+    void allocateAliasGroup(const FGCompiler::AliasGroup& group,
+                            std::vector<FGResourceNode*>& resources);
+
+    // 分配单个托管纹理（池中取或新建）
+    Image* allocateTexture(const FGResourceDesc& desc);
+
+    // 分配单个托管 Buffer（池中取或新建）
+    Buffer* allocateBuffer(const FGResourceDesc& desc);
+
+    // 为 pass 插入前置 barrier
+    void emitBarriers(VkCommandBuffer cmd,
+                      const FGPassNode& pass,
+                      std::vector<FGResourceNode*>& resources,
+                      const FGResources& viewCache);
+
+    // 更新 pass 执行后的资源状态
+    void updateResourceStates(const FGPassNode& pass,
+                              std::vector<FGResourceNode*>& resources);
+
+    // 回收超过 recycleFrameThreshold 帧未用的池资源
+    void recycleUnused(uint64_t threshold);
+    static constexpr uint32_t kRecycleFrames = 30;  // 30 帧不用则回收
+};
+
+} // namespace fg
+} // namespace somegi
