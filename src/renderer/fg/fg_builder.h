@@ -53,6 +53,11 @@ public:
         return *this;
     }
 
+    // 声明 manual pass 退出时资源的精确 layout。
+    // 用于 manual→auto 交接时避免 UNDEFINED oldLayout 丢弃数据。
+    // 必须在 write()/read() 之后调用。
+    FGBuilder& setExitLayout(FGHandle handle, VkImageLayout layout);
+
     // ---- 执行回调 ----
     // fn 签名: void(VkCommandBuffer cmd, const FGResources& resources)
     template<typename F>

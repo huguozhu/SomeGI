@@ -3491,8 +3491,7 @@ void App::run() {
             setupFrameGraph();
             m_fg.compile();
 
-            // 渲染仍使用现有 RenderPipeline（稳定路径）
-            // FrameGraph execute 在解决 device lost 后启用
+            // 渲染使用旧管线（稳定）；execute 在 device lost 修复后启用
             buildPipelineTable();
             m_renderer.pipeline().execute(cmd);
         } else {
@@ -3836,6 +3835,9 @@ void App::setupFrameGraph() {
         b.setManualBarriers();
         b.read(m_fgh.depth);
         b.write(m_fgh.shadowMask);
+        // 声明退出布局：depth 被 transitionImage 过渡到 SR_O，shadowMask 被 recordHardSM 内部过渡到 SR_O
+        b.setExitLayout(m_fgh.depth, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        b.setExitLayout(m_fgh.shadowMask, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
         b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
             transitionImage(cmd, m_renderer.rt().depth.image(), VK_IMAGE_ASPECT_DEPTH_BIT,
                 VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
@@ -4806,6 +4808,8 @@ void App::setupFrameGraph() {
             b.setManualBarriers();
             b.read(m_fgh.depth);
             b.write(m_fgh.hdrColor);
+            // 渲染后 hdrColor 在 COLOR_ATTACHMENT_OPTIMAL，声明退出布局保留数据
+            b.setExitLayout(m_fgh.hdrColor, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
             b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
                 transitionImage(cmd, m_renderer.rt().hdrColor.image(), VK_IMAGE_ASPECT_COLOR_BIT,
                     VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,

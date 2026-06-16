@@ -49,13 +49,17 @@ void FGExecutor::execute(VkCommandBuffer cmd,
         if (!pass->usesManualBarriers) {
             updateResourceStates(*pass, compiled.resources);
         } else {
-            // 手动 pass：记录 lastWriter + 同步信息（stage/access），
-            // 以便后续 auto-barrier 正确同步。layout 不更新（manual pass 可能改变它）。
+            // 手动 pass：记录 lastWriter + stage/access。
+            // 若声明了 exitLayout，同步更新 tracked layout（避免后续 auto-barrier
+            // 被迫使用 UNDEFINED oldLayout 丢弃数据）。
             for (auto& ref : pass->reads) {
                 if (ref.resource) {
                     ref.resource->state.lastWriter = const_cast<FGPassNode*>(pass);
                     ref.resource->state.stage  = ref.stages;
                     ref.resource->state.access = ref.access;
+                    if (ref.exitLayout != VK_IMAGE_LAYOUT_UNDEFINED) {
+                        ref.resource->state.layout = ref.exitLayout;
+                    }
                 }
             }
             for (auto& ref : pass->writes) {
@@ -63,6 +67,9 @@ void FGExecutor::execute(VkCommandBuffer cmd,
                     ref.resource->state.lastWriter = const_cast<FGPassNode*>(pass);
                     ref.resource->state.stage  = ref.stages;
                     ref.resource->state.access = ref.access;
+                    if (ref.exitLayout != VK_IMAGE_LAYOUT_UNDEFINED) {
+                        ref.resource->state.layout = ref.exitLayout;
+                    }
                 }
             }
         }
@@ -208,11 +215,18 @@ void FGExecutor::emitBarriers(VkCommandBuffer cmd,
                 return;  // 无需 barrier
             }
 
-            VkImageLayout oldLayout = prevManual
-                ? VK_IMAGE_LAYOUT_UNDEFINED : currentLayout;
-
-            // oldLayout 使用 UNDEFINED 确保 legal（手动 pass 可能改变布局），
-            // 但 srcStage/srcAccess 必须用精确值保证同步（等待前一个 writer 完成）
+            // oldLayout 决策：
+            // - 非 manual→auto：使用 tracked currentLayout（精确，数据保留）
+            // - manual→auto + exitLayout 已知：使用 tracked layout（manual pass 声明了退出布局）
+            // - manual→auto + exitLayout 未知：回退 UNDEFINED（布局安全，但可能丢数据）
+            VkImageLayout oldLayout;
+            if (!prevManual) {
+                oldLayout = currentLayout;        // 精确 oldLayout，数据保留
+            } else if (currentLayout != VK_IMAGE_LAYOUT_UNDEFINED) {
+                oldLayout = currentLayout;        // exitLayout 已声明，数据保留
+            } else {
+                oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;  // 回退：布局合法，数据可能丢失
+            }
             VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
             b.srcStageMask  = res->state.stage;
             b.srcAccessMask = res->state.access;

@@ -27,6 +27,7 @@ struct FGPassNode {
         VkAccessFlags2 access = 0;
         VkPipelineStageFlags2 stages = 0;
         VkImageLayout requiredLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        VkImageLayout exitLayout = VK_IMAGE_LAYOUT_UNDEFINED;  // manual pass 退出布局
     };
     std::vector<ResourceRef> reads;   // 输入资源
     std::vector<ResourceRef> writes;  // 输出资源

@@ -360,6 +360,24 @@ FGHandle FGBuilder::createBuffer(const char* name, const FGBufferDesc& desc) {
     return m_graph.createBuffer(name, desc);
 }
 
+FGBuilder& FGBuilder::setExitLayout(FGHandle handle, VkImageLayout layout) {
+    // 在 write 列表中查找 handle，设置其 exitLayout
+    for (auto& ref : m_passNode->writes) {
+        if (ref.handle == handle) {
+            ref.exitLayout = layout;
+            return *this;
+        }
+    }
+    // 如果不在 write 列表中，也在 read 列表中查找
+    for (auto& ref : m_passNode->reads) {
+        if (ref.handle == handle) {
+            ref.exitLayout = layout;
+            return *this;
+        }
+    }
+    return *this;
+}
+
 // ============================================================
 // FGResources
 // ============================================================
