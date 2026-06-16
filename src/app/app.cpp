@@ -3485,12 +3485,16 @@ void App::run() {
 
         // ---- Execute render pipeline ----
         if (m_useFrameGraph) {
-            // FrameGraph 路径：导入资源 + 注册 pass
+            // FrameGraph 编译（DAG 分析 + 调试数据）
             m_fg.reset();
-            m_fg.setAutoBarriers(true);   // 启用自动 Barrier
+            m_fg.setAutoBarriers(true);
             setupFrameGraph();
             m_fg.compile();
-            m_fg.execute(cmd);
+
+            // 渲染仍使用现有 RenderPipeline（稳定路径）
+            // FrameGraph execute 在解决 device lost 后启用
+            buildPipelineTable();
+            m_renderer.pipeline().execute(cmd);
         } else {
             // 现有 RenderPipeline 路径
             buildPipelineTable();
