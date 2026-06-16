@@ -43,7 +43,10 @@ private:
         VkDeviceSize size = 0;
     };
 
-    std::vector<TextureView> m_textures;
+    // 用 handle.index 直接索引，O(1) 查找
+    std::vector<TextureView> m_textureByIndex;
+    std::vector<BufferView>  m_bufferByIndex;
+    std::vector<TextureView> m_textures;  // 兼容旧线性遍历
     std::vector<BufferView>  m_buffers;
 };
 

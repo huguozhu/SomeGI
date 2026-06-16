@@ -113,6 +113,7 @@ void FGCompiler::buildEdges(std::vector<FGPassNode*>& passes,
                 if (std::find(p->predecessors.begin(), p->predecessors.end(), it->second)
                     == p->predecessors.end()) {
                     p->predecessors.push_back(it->second);
+                    it->second->successors.push_back(p);  // 反向建边
                 }
             }
         }
@@ -126,11 +127,19 @@ void FGCompiler::buildEdges(std::vector<FGPassNode*>& passes,
                 if (std::find(p->predecessors.begin(), p->predecessors.end(), it->second)
                     == p->predecessors.end()) {
                     p->predecessors.push_back(it->second);
+                    it->second->successors.push_back(p);  // 反向建边
                 }
             }
 
             lastWriter[res] = p;
         }
+    }
+
+    // 清理 successors 中的重复项（可能因同一资源被多次 read+write 而产生）
+    for (auto* p : passes) {
+        if (p->culled) continue;
+        std::sort(p->successors.begin(), p->successors.end());
+        p->successors.erase(std::unique(p->successors.begin(), p->successors.end()), p->successors.end());
     }
 }
 
@@ -249,23 +258,22 @@ void FGCompiler::computeAliasing(std::vector<FGResourceNode*>& resources,
 // ============================================================
 
 void FGCompiler::topologicalSort(std::vector<FGPassNode*>& passes) {
-    std::unordered_map<FGPassNode*, uint32_t> inDegree;
-    for (auto* p : passes) {
-        if (p->culled) continue;
-        inDegree[p] = 0;
-    }
-    for (auto* p : passes) {
-        if (p->culled) continue;
-        for (auto* pred : p->predecessors) {
-            if (!pred->culled) {
-                inDegree[p]++;
-            }
-        }
-    }
-
+    // 用 predecessors 数量作为入度（已去重且在 buildEdges 中维护）
     std::queue<FGPassNode*> queue;
-    for (auto& [node, deg] : inDegree) {
-        if (deg == 0) queue.push(node);
+    uint32_t activeCount = 0;
+
+    for (auto* p : passes) {
+        if (p->culled) continue;
+        activeCount++;
+        uint32_t deg = 0;
+        for (auto* pred : p->predecessors)
+            if (!pred->culled) deg++;
+        if (deg == 0) {
+            queue.push(p);
+        } else {
+            // 临时用 topologicalIndex 存放入度（排序时会覆盖）
+            p->topologicalIndex = deg;
+        }
     }
 
     uint32_t order = 0;
@@ -274,23 +282,16 @@ void FGCompiler::topologicalSort(std::vector<FGPassNode*>& passes) {
         queue.pop();
         node->topologicalIndex = order++;
 
-        for (auto* other : passes) {
-            if (other->culled) continue;
-            for (auto* pred : other->predecessors) {
-                if (pred == node) {
-                    inDegree[other]--;
-                    if (inDegree[other] == 0) {
-                        queue.push(other);
-                    }
-                }
+        // O(1) 遍历后继，而非 O(n) 扫描全部 pass
+        for (auto* succ : node->successors) {
+            if (succ->culled) continue;
+            uint32_t& deg = succ->topologicalIndex;  // 入度暂存于此
+            if (--deg == 0) {
+                queue.push(succ);
             }
         }
     }
 
-    uint32_t activeCount = 0;
-    for (auto* p : passes) {
-        if (!p->culled) activeCount++;
-    }
     if (order < activeCount) {
         std::fprintf(stderr, "[FGCompiler] ERROR: cycle detected in pass graph! "
                              "Sorted %u/%u passes.\n", order, activeCount);

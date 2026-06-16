@@ -132,18 +132,16 @@ void FrameGraph::execute(VkCommandBuffer cmd) {
 
 VkImageView FrameGraph::getTextureView(FGHandle handle, uint32_t mip, uint32_t layer) const {
     (void)mip; (void)layer;
-    for (auto& tv : m_viewCache.m_textures) {
-        if (tv.handle == handle) return tv.view;
-    }
+    if (handle.index < m_viewCache.m_textureByIndex.size())
+        return m_viewCache.m_textureByIndex[handle.index].view;
     return VK_NULL_HANDLE;
 }
 
 VkBuffer FrameGraph::getBuffer(FGHandle handle, VkDeviceSize* outOffset) const {
-    for (auto& bv : m_viewCache.m_buffers) {
-        if (bv.handle == handle) {
-            if (outOffset) *outOffset = bv.offset;
-            return bv.buffer;
-        }
+    if (handle.index < m_viewCache.m_bufferByIndex.size()) {
+        auto& bv = m_viewCache.m_bufferByIndex[handle.index];
+        if (outOffset) *outOffset = bv.offset;
+        return bv.buffer;
     }
     return VK_NULL_HANDLE;
 }
@@ -174,22 +172,28 @@ const FGResourceNode* FrameGraph::findResource(FGHandle handle) const {
 // ---- 视图缓存填充 ----
 
 void FrameGraph::populateViewCache() {
+    uint32_t n = (uint32_t)m_resources.size();
     m_viewCache.m_textures.clear();
     m_viewCache.m_buffers.clear();
+    m_viewCache.m_textureByIndex.assign(n, {});
+    m_viewCache.m_bufferByIndex.assign(n, {});
 
     for (auto& res : m_resources) {
-        if (res.desc.type == FGResourceType::Texture && res.physicalTexture) {
+        uint32_t idx = res.handle.index;
+        if (res.desc.type == FGResourceType::Texture && res.physicalTexture && idx < n) {
             FGResources::TextureView tv;
             tv.handle = res.handle;
             tv.view = res.physicalTexture->view();
             tv.extent = res.physicalTexture->extent();
             m_viewCache.m_textures.push_back(tv);
-        } else if (res.desc.type == FGResourceType::Buffer && res.physicalBuffer) {
+            m_viewCache.m_textureByIndex[idx] = tv;
+        } else if (res.desc.type == FGResourceType::Buffer && res.physicalBuffer && idx < n) {
             FGResources::BufferView bv;
             bv.handle = res.handle;
             bv.buffer = res.physicalBuffer->handle();
             bv.size = res.physicalBuffer->size();
             m_viewCache.m_buffers.push_back(bv);
+            m_viewCache.m_bufferByIndex[idx] = bv;
         }
     }
 }
@@ -397,25 +401,24 @@ FGBuilder& FGBuilder::setExitLayout(FGHandle handle, VkImageLayout layout) {
 
 VkImageView FGResources::getTextureView(FGHandle handle, uint32_t mip, uint32_t layer) const {
     (void)mip; (void)layer;
-    for (auto& tv : m_textures) {
-        if (tv.handle == handle) return tv.view;
-    }
+    if (handle.index < m_textureByIndex.size())
+        return m_textureByIndex[handle.index].view;
     return VK_NULL_HANDLE;
 }
 
 VkBuffer FGResources::getBuffer(FGHandle handle, VkDeviceSize* outOffset) const {
-    for (auto& bv : m_buffers) {
-        if (bv.handle == handle) {
-            if (outOffset) *outOffset = bv.offset;
-            return bv.buffer;
-        }
+    if (handle.index < m_bufferByIndex.size()) {
+        auto& bv = m_bufferByIndex[handle.index];
+        if (outOffset) *outOffset = bv.offset;
+        return bv.buffer;
     }
     return VK_NULL_HANDLE;
 }
 
 VkExtent3D FGResources::extent(FGHandle handle) const {
-    for (auto& tv : m_textures) {
-        if (tv.handle == handle) return tv.extent;
+    if (handle.index < m_textureByIndex.size()) {
+        auto& tv = m_textureByIndex[handle.index];
+        if (tv.view) return tv.extent;
     }
     return {1, 1, 1};
 }

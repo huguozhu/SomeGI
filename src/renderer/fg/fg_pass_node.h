@@ -44,6 +44,7 @@ struct FGPassNode {
     // ---- 编译后填充 ----
     uint32_t topologicalIndex = 0;                     // 拓扑排序位置
     std::vector<FGPassNode*> predecessors;             // 直接前驱 pass
+    std::vector<FGPassNode*> successors;               // 直接后继 pass（拓扑排序加速）
 };
 
 } // namespace fg
