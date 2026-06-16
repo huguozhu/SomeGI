@@ -205,6 +205,7 @@ App::App() {
 
     // 初始化 FrameGraph（实验性）
     m_fg.init(*m_device);
+    m_fg.initTimestamps(*m_device, 32);  // GPU timestamp profiling: 最多 32 个 active pass
 
     // Init ImGui on the separate debug window
     m_renderer.imgui().init(*m_device, m_imguiWin->handle(), m_imguiSwap->format(), kFramesInFlight);
@@ -1173,7 +1174,7 @@ void App::buildUI() {
 
                 // ---- Pass 执行列表 ----
                 if (ImGui::CollapsingHeader("Pass List", ImGuiTreeNodeFlags_DefaultOpen)) {
-                    if (ImGui::BeginTable("##fgpasstable", 6,
+                    if (ImGui::BeginTable("##fgpasstable", 7,
                             ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
                             ImGuiTableFlags_ScrollY | ImGuiTableFlags_SizingFixedFit)) {
                         ImGui::TableSetupColumn("#");
@@ -1182,6 +1183,7 @@ void App::buildUI() {
                         ImGui::TableSetupColumn("Reads");
                         ImGui::TableSetupColumn("Writes");
                         ImGui::TableSetupColumn("Deps");
+                        ImGui::TableSetupColumn("GPU ms");
                         ImGui::TableHeadersRow();
 
                         for (auto& p : fgDebug.passes) {
@@ -1228,6 +1230,10 @@ void App::buildUI() {
                                 for (auto& d : p.deps) ImGui::BulletText("%s", d.c_str());
                                 ImGui::EndTooltip();
                             }
+
+                            ImGui::TableNextColumn();
+                            if (p.gpuMs > 0.001f) ImGui::Text("%.3f", p.gpuMs);
+                            else ImGui::TextDisabled("-");
                         }
                         ImGui::EndTable();
                     }
@@ -3556,6 +3562,7 @@ void App::run() {
             m_fg.compile();
             buildPipelineTable();
             m_fg.execute(cmd);
+            m_fg.applyTimestampsToDebug();
         } else {
             // 现有 RenderPipeline 路径
             buildPipelineTable();

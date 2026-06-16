@@ -60,6 +60,9 @@ struct FGDebug {
     void populate(const FGCompiler::CompiledGraph& compiled,
                   const std::vector<struct FGPassNode>& allPasses,
                   const std::vector<struct FGResourceNode>& allResources);
+
+    // 应用上帧 GPU timestamp 数据到 pass 列表
+    void applyTimestamps(const std::vector<float>& gpuMs);
 };
 
 } // namespace fg

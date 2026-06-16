@@ -20,13 +20,32 @@ void FGExecutor::destroy() {
     m_texturePool.clear();
     m_bufferPool.clear();
     m_persistentState.clear();
+    if (m_timestampPool && m_device) {
+        vkDestroyQueryPool(m_device->device(), m_timestampPool, nullptr);
+        m_timestampPool = VK_NULL_HANDLE;
+    }
+}
+
+void FGExecutor::initTimestamps(Device& d, uint32_t maxPasses) {
+    m_maxTsPasses = maxPasses;
+    m_passGpuMs.resize(maxPasses, 0.0f);
+    VkQueryPoolCreateInfo ci{VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO};
+    ci.queryType = VK_QUERY_TYPE_TIMESTAMP;
+    ci.queryCount = maxPasses * 2;
+    VK_CHECK(vkCreateQueryPool(d.device(), &ci, nullptr, &m_timestampPool));
 }
 
 void FGExecutor::execute(VkCommandBuffer cmd,
                           FGCompiler::CompiledGraph& compiled,
                           const FGResources& viewCache) {
-    // 0. 恢复上帧持久化的 barrier 状态（避免 oldLayout=UNDEFINED 与实际不匹配）
+    // 0. 恢复上帧持久化的 barrier 状态 + 读回上帧 GPU timestamp
     restoreResourceStates(compiled.resources);
+    readbackTimestamps();
+
+    // 0b. 重置本帧 timestamp 池
+    if (m_timestampPool) {
+        vkCmdResetQueryPool(cmd, m_timestampPool, 0, m_maxTsPasses * 2);
+    }
 
     // 1. 分配别名组
     for (auto& group : compiled.aliasGroups) {
@@ -34,8 +53,14 @@ void FGExecutor::execute(VkCommandBuffer cmd,
     }
 
     // 2. 遍历执行 pass
+    uint32_t tsIdx = 0;
     for (auto* pass : compiled.passOrder) {
         if (!pass || pass->culled) continue;
+
+        if (m_timestampPool && tsIdx < m_maxTsPasses) {
+            vkCmdWriteTimestamp2(cmd, VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT,
+                                 m_timestampPool, tsIdx * 2);
+        }
 
         // 2a. 插入 barrier：
         if (m_autoBarriers && !pass->usesManualBarriers) {
@@ -45,6 +70,12 @@ void FGExecutor::execute(VkCommandBuffer cmd,
         // 2b. 执行 pass
         if (pass->execute) {
             pass->execute(cmd, viewCache);
+        }
+
+        if (m_timestampPool && tsIdx < m_maxTsPasses) {
+            vkCmdWriteTimestamp2(cmd, VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT,
+                                 m_timestampPool, tsIdx * 2 + 1);
+            tsIdx++;
         }
 
         // 2c. 更新资源状态
@@ -76,6 +107,8 @@ void FGExecutor::execute(VkCommandBuffer cmd,
             }
         }
     }
+
+    m_tsCount = tsIdx;
 
     // 3. 保存状态供下帧恢复
     saveResourceStates(compiled.resources);
@@ -326,6 +359,31 @@ void FGExecutor::saveResourceStates(const std::vector<FGResourceNode*>& resource
         if (!res || !res->desc.debugName) continue;
         if (res->state.layout == VK_IMAGE_LAYOUT_UNDEFINED) continue;
         m_persistentState[res->desc.debugName] = res->state;
+    }
+}
+
+void FGExecutor::readbackTimestamps() {
+    if (!m_timestampPool || m_tsCount == 0) return;
+
+    uint32_t count = m_tsCount * 2;
+    std::vector<uint64_t> buf(count * 2);  // value + availability pairs
+    VkResult r = vkGetQueryPoolResults(m_device->device(), m_timestampPool,
+        0, count, buf.size() * sizeof(uint64_t), buf.data(), 2 * sizeof(uint64_t),
+        VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WITH_AVAILABILITY_BIT);
+
+    if (r != VK_SUCCESS && r != VK_NOT_READY) return;
+
+    float period = m_device->timestampPeriod() * 1e-6f;  // ns → ms
+    for (uint32_t i = 0; i < m_tsCount; ++i) {
+        uint64_t startVal   = buf[i * 4];
+        uint64_t startAvail = buf[i * 4 + 1];
+        uint64_t endVal     = buf[i * 4 + 2];
+        uint64_t endAvail   = buf[i * 4 + 3];
+        if (startAvail && endAvail && endVal > startVal) {
+            m_passGpuMs[i] = float(endVal - startVal) * period;
+        } else {
+            m_passGpuMs[i] = 0.0f;  // 未就绪
+        }
     }
 }
 

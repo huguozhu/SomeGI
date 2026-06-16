@@ -80,6 +80,9 @@ public:
     void setAutoBarriers(bool enabled) { m_executor.setAutoBarriers(enabled); }
     bool autoBarriers() const { return m_executor.autoBarriers(); }
 
+    void initTimestamps(Device& d, uint32_t maxPasses) { m_executor.initTimestamps(d, maxPasses); }
+    void applyTimestampsToDebug() { m_debug.applyTimestamps(m_executor.passGpuMs()); }
+
     // ---- 调试 ----
     const FGCompiler::CompiledGraph& compiledGraph() const { return m_compiled; }
     FGDebug& debug() { return m_debug; }

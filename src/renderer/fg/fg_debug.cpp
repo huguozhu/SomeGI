@@ -87,5 +87,11 @@ void FGDebug::populate(const FGCompiler::CompiledGraph& compiled,
     }
 }
 
+void FGDebug::applyTimestamps(const std::vector<float>& gpuMs) {
+    for (size_t i = 0; i < gpuMs.size() && i < this->passes.size(); ++i) {
+        this->passes[i].gpuMs = gpuMs[i];
+    }
+}
+
 } // namespace fg
 } // namespace somegi

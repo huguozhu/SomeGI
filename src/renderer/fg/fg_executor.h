@@ -35,6 +35,10 @@ public:
     void init(Device& device);
     void destroy();
 
+    // GPU timestamp 池（可选，调用 initTimestamps 后启用）
+    void initTimestamps(Device& d, uint32_t maxPasses);
+    const std::vector<float>& passGpuMs() const { return m_passGpuMs; }
+
     // 执行编译后的图
     void execute(VkCommandBuffer cmd,
                  FGCompiler::CompiledGraph& compiled,
@@ -111,6 +115,14 @@ private:
     void restoreResourceStates(std::vector<FGResourceNode*>& resources);
 
     std::unordered_map<std::string, FGResourceNode::BarrierState> m_persistentState;
+
+    // ---- GPU Timestamp ----
+    VkQueryPool m_timestampPool = VK_NULL_HANDLE;
+    uint32_t m_maxTsPasses = 0;
+    uint32_t m_tsCount = 0;           // 上帧实际写入的 pass 数
+    std::vector<float> m_passGpuMs;   // 上帧每 pass 的 GPU 耗时 (ms)
+
+    void readbackTimestamps();
 };
 
 } // namespace fg
