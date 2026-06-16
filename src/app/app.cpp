@@ -3165,28 +3165,34 @@ void App::recordIndirectDraws(VkCommandBuffer cmd, uint32_t frameInFlight, const
 }
 
 void App::recordPostProcessing(VkCommandBuffer cmd) {
-    // hdrColor: hdrPrev copy 结束后在 TRANSFER_SRC → SHADER_READ_ONLY for tonemap
-    transitionImage(cmd, m_renderer.rt().hdrColor.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-        VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-        VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_READ_BIT,
-        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT);
-
     bool hdrActive = m_swap->hdrEnabled();
     bool aaActive = (m_aaMethod == AAMethod::TAA || m_aaMethod == AAMethod::SMAA);
+    bool fgHandlesTonemap = m_useFrameGraph && hdrActive && aaActive;
+
+    // hdrColor → SHADER_READ_ONLY：FrameGraph AA 模式下由 Tonemap pass auto-barrier 处理
+    if (!fgHandlesTonemap) {
+        transitionImage(cmd, m_renderer.rt().hdrColor.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+            VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+            VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_READ_BIT,
+            VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT);
+    }
 
     if (hdrActive) {
         // === HDR path ===
         if (aaActive) {
-            m_renderer.rt().ensureAaResources(*m_device);
-            transitionImage(cmd, m_renderer.rt().aaHdr.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-                VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
-                VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
-                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
-            m_renderer.tonemap().bindOutput(*m_device, m_renderer.rt().aaHdr.view(), m_frameCtx.frameInFlight);
-            m_renderer.tonemap().record(cmd, m_renderer.rt(), m_frameCtx.frameInFlight, true, 1.0f);
-            writeTimestamp(cmd, m_renderer.kTsTonemap);
+            if (!fgHandlesTonemap) {
+                m_renderer.rt().ensureAaResources(*m_device);
+                transitionImage(cmd, m_renderer.rt().aaHdr.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                    VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
+                    VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
+                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
+                m_renderer.tonemap().bindOutput(*m_device, m_renderer.rt().aaHdr.view(), m_frameCtx.frameInFlight);
+                m_renderer.tonemap().record(cmd, m_renderer.rt(), m_frameCtx.frameInFlight, true, 1.0f);
+                writeTimestamp(cmd, m_renderer.kTsTonemap);
+            }
 
+            // aaHdr: FrameGraph Tonemap 写入后布局为 GENERAL，需手动转到 SR_O 供 TAA/SMAA 读取
             transitionImage(cmd, m_renderer.rt().aaHdr.image(), VK_IMAGE_ASPECT_COLOR_BIT,
                 VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                 VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
@@ -3874,26 +3880,15 @@ void App::setupFrameGraph() {
     });
 
     // --- Shadow Pass ---
-    // 使用 manual barrier：recordHardSM() 内部自行管理 shadowMask 的 UNDEFINED→GENERAL→SR_O。
-    // depth 入口过渡使用 DEPTH_ATTACHMENT oldLayout（GBuffer 写入后的布局），
-    // 配合 EARLY_FRAGMENT_TESTS srcStage，确保等待 GBuffer 的 depth write 完成。
-    // 注意：不可使用 UNDEFINED oldLayout，因为需要 GBuffer 写入的 depth 数据！
+    // Auto-barrier：depth read → SHADER_READ_ONLY（compute shader 采样）
+    //               shadowMask write → GENERAL（storage image write）
+    // ShadowPass 内部跳过 UNDEFINED→GENERAL 和 GENERAL→SR_O 过渡
+    m_renderer.shadow().setFgAutoBarrier(true);
     m_fg.addPass("Shadow", [&](FGBuilder& b) {
         b.setPassType(FGPassType::Compute);
-        b.setManualBarriers();
         b.read(m_fgh.depth);
         b.write(m_fgh.shadowMask);
-        // 声明退出布局：depth 被 transitionImage 过渡到 SR_O，shadowMask 被 recordHardSM 内部过渡到 SR_O
-        b.setExitLayout(m_fgh.depth, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-        b.setExitLayout(m_fgh.shadowMask, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
         b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
-            transitionImage(cmd, m_renderer.rt().depth.image(), VK_IMAGE_ASPECT_DEPTH_BIT,
-                VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
-                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT,
-                VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
-                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
             m_renderer.shadow().record(cmd, m_renderer.rt(),
                 m_renderer.gbuffer().frameUboHandle(),
                 m_sceneGpu, m_indirectBufSun.handle(), m_drawCount,
@@ -4848,9 +4843,9 @@ void App::setupFrameGraph() {
     }
 
     // --- Skybox ---
+    // Manual barrier：depth 在 render pass 内作为 DEPTH_ATTACHMENT，与 Lighting
+    // 等 compute pass 的 SHADER_READ_ONLY descriptor 冲突，submit-time 无法同时满足
     if (!fwd) {
-        // Skybox 使用 manual barrier：depth read 需要 DEPTH_STENCIL_ATTACHMENT_READ
-        // 而非 SAMPLED_READ，auto-barrier 的 access 推导不匹配
         m_fg.addPass("Skybox", [&](FGBuilder& b) {
             b.setPassType(FGPassType::Graphics);
             b.setManualBarriers();
@@ -4859,7 +4854,6 @@ void App::setupFrameGraph() {
             b.setExitLayout(m_fgh.hdrColor, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
             b.setExitLayout(m_fgh.depth, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
             b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
-                // depth: 首帧 UNDEFINED→DEPTH_ATTACH，后续帧从 SR_O→DEPTH_ATTACH
                 VkImageLayout depthOld = (m_renderer.frameIndex() == 0)
                     ? VK_IMAGE_LAYOUT_UNDEFINED
                     : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
@@ -4869,8 +4863,6 @@ void App::setupFrameGraph() {
                     VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
                     VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT,
                     VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT);
-
-                // hdrColor: 首帧 UNDEFINED，后续帧从上一 pass 布局
                 VkImageLayout hdrOld = (m_renderer.frameIndex() == 0)
                     ? VK_IMAGE_LAYOUT_UNDEFINED
                     : VK_IMAGE_LAYOUT_GENERAL;
@@ -4881,10 +4873,7 @@ void App::setupFrameGraph() {
                     VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
                     VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT |
                         VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT);
-
                 m_renderer.skybox().record(cmd, m_renderer.rt());
-
-                // 恢复 depth 到 SHADER_READ_ONLY，匹配 Lighting/SSAO 等 descriptor
                 transitionImage(cmd, m_renderer.rt().depth.image(), VK_IMAGE_ASPECT_DEPTH_BIT,
                     VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
                     VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
@@ -4915,7 +4904,22 @@ void App::setupFrameGraph() {
         });
     });
 
-    // Tonemap/TAA/SMAA/ImGui 由 recordPostProcessing 统一处理，不纳入 FrameGraph
+    // --- Tonemap（AA 模式下纳入 FrameGraph，非 AA 模式仍由 recordPostProcessing 处理）---
+    if (aaEnabled && m_swap->hdrEnabled()) {
+        m_fg.addPass("Tonemap", [&](FGBuilder& b) {
+            b.setPassType(FGPassType::Compute);
+            b.read(m_fgh.hdrColor, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+            b.write(m_fgh.aaHdr);
+            b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
+                m_renderer.rt().ensureAaResources(*m_device);
+                m_renderer.tonemap().bindOutput(*m_device, m_renderer.rt().aaHdr.view(), m_frameCtx.frameInFlight);
+                m_renderer.tonemap().record(cmd, m_renderer.rt(), m_frameCtx.frameInFlight, true, 1.0f);
+                writeTimestamp(cmd, m_renderer.kTsTonemap);
+            });
+        });
+    }
+
+    // TAA/SMAA/ImGui 由 recordPostProcessing 统一处理，暂不纳入 FrameGraph
 }
 
 }

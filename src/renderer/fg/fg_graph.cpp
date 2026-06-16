@@ -291,7 +291,7 @@ FGHandle FGBuilder::readWrite(FGHandle handle) {
 
 // ---- 显式 Layout 重载 ----
 
-// 根据显式 layout 推导 access 和 stage（用于 Clear/Copy 等非 shader 操作）
+// 根据显式 layout 推导 access 和 stage（用于非标准 shader read/write layout）
 static void deriveFromLayout(VkImageLayout layout, VkAccessFlags2& access, VkPipelineStageFlags2& stages) {
     switch (layout) {
         case VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL:
@@ -302,9 +302,18 @@ static void deriveFromLayout(VkImageLayout layout, VkAccessFlags2& access, VkPip
             access  = VK_ACCESS_2_TRANSFER_READ_BIT;
             stages  = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
             break;
+        case VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL:
+        case VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL:
+            access  = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT;
+            stages  = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT;
+            break;
+        case VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL:
+            access  = VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT;
+            stages  = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+            break;
         default:
-            // 非 transfer layout — 保留自动推导
-            access = 0;  // 哨兵值，调用方判断
+            // 非标准 layout — 保留自动推导
+            access = 0;
             stages = 0;
             break;
     }
