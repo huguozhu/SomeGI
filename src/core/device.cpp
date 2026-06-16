@@ -4,6 +4,14 @@
 namespace somegi {
 
 Device::Device(Window& window, bool enableValidation) {
+    // 启用 GPU-Assisted Validation（GPU 端 shader 越界/未初始化描述符检测）
+    if (enableValidation) {
+        _putenv_s("VK_LAYER_KHRONOS_VALIDATION_GPU_ASSISTED_EXT", "1");
+        _putenv_s("VK_LAYER_KHRONOS_VALIDATION_SYNCHRONIZATION_VALIDATION_EXT", "1");
+        // VK_EXT_device_fault: 获取 device lost 后的详细诊断信息
+        // 通过 device extension 自动启用（见下方 device builder）
+    }
+
     vkb::InstanceBuilder ib;
     ib.set_app_name("SomeGI")
       .require_api_version(1, 3, 0)
@@ -69,6 +77,10 @@ Device::Device(Window& window, bool enableValidation) {
         m_features.accelStruct = true;
         m_features.rayQuery = true;
     }
+
+    // VK_EXT_device_fault: 获取 device lost 后的详细诊断信息
+    bool hasDeviceFault = m_physicalDevice.enable_extension_if_present(
+        VK_EXT_DEVICE_FAULT_EXTENSION_NAME);
 
     // Enable Mesh Shader extension + query actual feature support
     bool meshShaderAvail = false, taskShaderAvail = false;
