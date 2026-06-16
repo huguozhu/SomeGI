@@ -3440,19 +3440,25 @@ void App::run() {
         VK_CHECK(vkBeginCommandBuffer(cmd, &bi));
 
         // ---- Timestamp readback from previous frame ----
+        // 使用 WITH_AVAILABILITY 而非 WAIT：FrameGraph 路径不会写入旧管线的
+        // AO/VoxelGI/Skybox 等 slot，WAIT 会导致在这些未写入 slot 上永久阻塞。
         uint32_t qBase = frame.frameInFlight * m_renderer.kTimestampSlots;
         if (m_renderer.timestampValid(frame.frameInFlight)) {
-            uint64_t ts[m_renderer.kTimestampSlots] = {};
+            uint64_t tsArr[m_renderer.kTimestampSlots * 2] = {};
             VkResult r = vkGetQueryPoolResults(m_device->device(), m_renderer.timestampPool(),
-                qBase, m_renderer.kTimestampSlots, sizeof(ts), ts, sizeof(uint64_t),
-                VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT);
-            if (r == VK_SUCCESS) {
+                qBase, m_renderer.kTimestampSlots, sizeof(tsArr), tsArr, 2 * sizeof(uint64_t),
+                VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WITH_AVAILABILITY_BIT);
+            if (r == VK_SUCCESS || r == VK_NOT_READY) {
                 float period = m_device->timestampPeriod() * 1e-6f;
                 float total = 0;
                 float* dst = m_renderer.passTimes(frame.frameInFlight);
                 for (uint32_t i = 1; i < m_renderer.kTimestampSlots; ++i) {
-                    if (ts[i] > ts[i-1]) {
-                        float ms = float(ts[i] - ts[i-1]) * period;
+                    uint64_t curVal   = tsArr[i * 2];
+                    uint64_t curAvail = tsArr[i * 2 + 1];
+                    uint64_t prevVal   = tsArr[(i - 1) * 2];
+                    uint64_t prevAvail = tsArr[(i - 1) * 2 + 1];
+                    if (curAvail && prevAvail && curVal > prevVal) {
+                        float ms = float(curVal - prevVal) * period;
                         dst[i] = dst[i] * 0.9f + ms * 0.1f;
                         total += ms;
                     }
@@ -3490,7 +3496,7 @@ void App::run() {
             setupFrameGraph();
             m_fg.compile();
             buildPipelineTable();
-            m_renderer.pipeline().execute(cmd);
+            m_fg.execute(cmd);
         } else {
             // 现有 RenderPipeline 路径
             buildPipelineTable();
@@ -3675,6 +3681,7 @@ void App::setupFrameGraph() {
         b.setPassType(FGPassType::Compute);
         b.setManualBarriers();
         b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
+            if (m_renderer.frameIndex() > 0) return;  // 仅首帧执行
             auto toGeneral = [&](VkImage img) {
                 transitionImage(cmd, img, VK_IMAGE_ASPECT_COLOR_BIT,
                     VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
@@ -3693,6 +3700,7 @@ void App::setupFrameGraph() {
             b.setPassType(FGPassType::Compute);
             b.setManualBarriers();
             b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
+                if (m_renderer.frameIndex() > 0) return;  // 仅首帧执行
                 auto transitionToSRO = [&](VkImage img, uint32_t mipLevels) {
                     VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
                     b.srcStageMask = VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
@@ -3719,6 +3727,7 @@ void App::setupFrameGraph() {
             b.setPassType(FGPassType::Compute);
             b.setManualBarriers();
             b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
+                if (m_renderer.frameIndex() > 0) return;  // 仅首帧执行
                 auto barrierAtlas = [&](VkImage img) {
                     VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
                     b.srcStageMask = VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
@@ -3746,6 +3755,7 @@ void App::setupFrameGraph() {
             b.setPassType(FGPassType::Compute);
             b.setManualBarriers();
             b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
+                if (m_renderer.frameIndex() > 0) return;  // 仅首帧执行
                 VkImage imgs[3] = {m_renderer.lpv().current().lpvR.image(),
                                    m_renderer.lpv().current().lpvG.image(),
                                    m_renderer.lpv().current().lpvB.image()};

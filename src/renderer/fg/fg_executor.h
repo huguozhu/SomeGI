@@ -2,9 +2,12 @@
 #pragma once
 #include "fg_common.h"
 #include "fg_compiler.h"
+#include "fg_resource_node.h"
 #include "core/image.h"
 #include "core/buffer.h"
 #include <vector>
+#include <unordered_map>
+#include <string>
 #include <cstdint>
 
 namespace somegi {
@@ -102,6 +105,12 @@ private:
     // 回收超过 recycleFrameThreshold 帧未用的池资源
     void recycleUnused(uint64_t threshold);
     static constexpr uint32_t kRecycleFrames = 30;  // 30 帧不用则回收
+
+    // 跨帧持久化 barrier 状态（reset() 会清空资源节点，但 GPU 布局不变）
+    void saveResourceStates(const std::vector<FGResourceNode*>& resources);
+    void restoreResourceStates(std::vector<FGResourceNode*>& resources);
+
+    std::unordered_map<std::string, FGResourceNode::BarrierState> m_persistentState;
 };
 
 } // namespace fg

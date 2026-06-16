@@ -19,11 +19,15 @@ void FGExecutor::init(Device& device) {
 void FGExecutor::destroy() {
     m_texturePool.clear();
     m_bufferPool.clear();
+    m_persistentState.clear();
 }
 
 void FGExecutor::execute(VkCommandBuffer cmd,
                           FGCompiler::CompiledGraph& compiled,
                           const FGResources& viewCache) {
+    // 0. 恢复上帧持久化的 barrier 状态（避免 oldLayout=UNDEFINED 与实际不匹配）
+    restoreResourceStates(compiled.resources);
+
     // 1. 分配别名组
     for (auto& group : compiled.aliasGroups) {
         allocateAliasGroup(group, compiled.resources);
@@ -34,8 +38,6 @@ void FGExecutor::execute(VkCommandBuffer cmd,
         if (!pass || pass->culled) continue;
 
         // 2a. 插入 barrier：
-        //   - 手动屏障 pass：跳过（pass 内部自行管理 layout 过渡）
-        //   - 自动屏障 pass：FrameGraph 根据读写声明自动插入 barrier
         if (m_autoBarriers && !pass->usesManualBarriers) {
             emitBarriers(cmd, *pass, compiled.resources, viewCache);
         }
@@ -75,7 +77,10 @@ void FGExecutor::execute(VkCommandBuffer cmd,
         }
     }
 
-    // 3. 回收
+    // 3. 保存状态供下帧恢复
+    saveResourceStates(compiled.resources);
+
+    // 4. 回收
     recycleUnused(kRecycleFrames);
 
     ++m_currentFrame;
@@ -310,6 +315,27 @@ void FGExecutor::recycleUnused(uint64_t threshold) {
     for (auto& pb : m_bufferPool) {
         if (pb.inUse) {
             pb.inUse = false;
+        }
+    }
+}
+
+// ---- 跨帧状态持久化 ----
+
+void FGExecutor::saveResourceStates(const std::vector<FGResourceNode*>& resources) {
+    for (auto* res : resources) {
+        if (!res || !res->desc.debugName) continue;
+        if (res->state.layout == VK_IMAGE_LAYOUT_UNDEFINED) continue;
+        m_persistentState[res->desc.debugName] = res->state;
+    }
+}
+
+void FGExecutor::restoreResourceStates(std::vector<FGResourceNode*>& resources) {
+    if (m_persistentState.empty()) return;
+    for (auto* res : resources) {
+        if (!res || !res->desc.debugName) continue;
+        auto it = m_persistentState.find(res->desc.debugName);
+        if (it != m_persistentState.end()) {
+            res->state = it->second;
         }
     }
 }

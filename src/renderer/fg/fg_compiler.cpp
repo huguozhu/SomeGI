@@ -19,14 +19,20 @@ FGCompiler::CompiledGraph FGCompiler::compile(
 
     cullPasses(passes, resources);
     buildEdges(passes, resources);
-    computeLifetimes(resources);
-    computeAliasing(resources, result.aliasGroups);
     topologicalSort(passes);
+    computeLifetimes(passes, resources);
+    computeAliasing(resources, result.aliasGroups);
 
     for (auto* p : passes) {
         if (!p->culled) result.passOrder.push_back(p);
         else result.culledPasses.push_back(p);
     }
+
+    // 按拓扑序排列 passOrder，确保执行顺序与依赖顺序一致
+    std::sort(result.passOrder.begin(), result.passOrder.end(),
+        [](const FGPassNode* a, const FGPassNode* b) {
+            return a->topologicalIndex < b->topologicalIndex;
+        });
 
     return result;
 }
@@ -129,19 +135,39 @@ void FGCompiler::buildEdges(std::vector<FGPassNode*>& passes,
 }
 
 // ============================================================
-// 步骤 3: 计算资源寿命
+// 步骤 4: 计算资源寿命
 // ============================================================
 
-void FGCompiler::computeLifetimes(std::vector<FGResourceNode*>& resources) {
+void FGCompiler::computeLifetimes(std::vector<FGPassNode*>& passes,
+                                   std::vector<FGResourceNode*>& resources) {
     for (auto* res : resources) {
         if (!res) continue;
         res->firstWritePass = UINT32_MAX;
         res->lastReadPass = 0;
     }
+
+    for (auto* pass : passes) {
+        if (pass->culled) continue;
+        uint32_t idx = pass->topologicalIndex;
+
+        for (auto& ref : pass->writes) {
+            if (!ref.resource) continue;
+            if (idx < ref.resource->firstWritePass)
+                ref.resource->firstWritePass = idx;
+            if (idx > ref.resource->lastReadPass)
+                ref.resource->lastReadPass = idx;
+        }
+
+        for (auto& ref : pass->reads) {
+            if (!ref.resource) continue;
+            if (idx > ref.resource->lastReadPass)
+                ref.resource->lastReadPass = idx;
+        }
+    }
 }
 
 // ============================================================
-// 步骤 4: 别名分析
+// 步骤 5: 别名分析
 // ============================================================
 
 void FGCompiler::computeAliasing(std::vector<FGResourceNode*>& resources,
@@ -219,7 +245,7 @@ void FGCompiler::computeAliasing(std::vector<FGResourceNode*>& resources,
 }
 
 // ============================================================
-// 步骤 5: 拓扑排序 (Kahn BFS)
+// 步骤 3: 拓扑排序 (Kahn BFS)
 // ============================================================
 
 void FGCompiler::topologicalSort(std::vector<FGPassNode*>& passes) {

@@ -39,7 +39,8 @@ private:
                     std::vector<FGResourceNode*>& resources);
     void buildEdges(std::vector<FGPassNode*>& passes,
                     std::vector<FGResourceNode*>& resources);
-    void computeLifetimes(std::vector<FGResourceNode*>& resources);
+    void computeLifetimes(std::vector<FGPassNode*>& passes,
+                         std::vector<FGResourceNode*>& resources);
     void computeAliasing(std::vector<FGResourceNode*>& resources,
                          std::vector<AliasGroup>& outGroups);
     void topologicalSort(std::vector<FGPassNode*>& passes);

@@ -64,7 +64,7 @@ private:
 
     // ---- Frame Graph（实验性） ----
     somegi::fg::FrameGraph m_fg;
-    bool m_useFrameGraph = false;
+    bool m_useFrameGraph = true;
 
     // FrameGraph 资源句柄缓存（每帧 setupFrameGraph 填充）
     struct FGH {

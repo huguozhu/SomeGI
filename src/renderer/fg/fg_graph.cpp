@@ -292,11 +292,11 @@ static void deriveFromLayout(VkImageLayout layout, VkAccessFlags2& access, VkPip
     switch (layout) {
         case VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL:
             access  = VK_ACCESS_2_TRANSFER_WRITE_BIT;
-            stages  = VK_PIPELINE_STAGE_2_CLEAR_BIT | VK_PIPELINE_STAGE_2_COPY_BIT;
+            stages  = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
             break;
         case VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL:
             access  = VK_ACCESS_2_TRANSFER_READ_BIT;
-            stages  = VK_PIPELINE_STAGE_2_COPY_BIT;
+            stages  = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
             break;
         default:
             // 非 transfer layout — 保留自动推导
