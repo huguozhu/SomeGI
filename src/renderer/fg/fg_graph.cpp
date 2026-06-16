@@ -19,6 +19,10 @@ void FrameGraph::init(Device& device) {
     m_executor.init(device);
 }
 
+void FrameGraph::destroy() {
+    m_executor.destroy();
+}
+
 // ---- 资源声明 ----
 
 FGHandle FrameGraph::importTexture(const char* name,

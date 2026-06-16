@@ -540,49 +540,12 @@ App::~App() {
 }
 
 void App::cleanup() {
-    m_renderer.taa().destroy();
-    m_renderer.smaa().destroy();
-    m_renderer.rtGi().destroy();
-    m_renderer.rtAS().destroy();
-    m_renderer.skybox().destroy();
-    m_renderer.forward().destroy();
-    m_renderer.ssgi().destroy();
-    m_renderer.gtgi().destroy();
-    m_renderer.ssr().destroy();
-    m_renderer.ssao().destroy();
-    m_renderer.gtao().destroy();
-    m_renderer.lighting().destroy();   // pipeline references IBL DSL — must die before GI tech
-    m_renderer.ddgiPass().destroy();
-    m_renderer.ddgi().destroy();
-    m_renderer.ndgiPass().destroy();
-    m_renderer.ndgi().destroy();
-    m_renderer.prtBake().destroy();
-    m_renderer.prt().destroy();
-    m_renderer.vxgiMipmap().destroy();
-    m_renderer.vxgiAniso().destroy();
-    m_renderer.vxgiRelight().destroy();
-    m_renderer.vxgi6Axis().destroy();
-    m_renderer.sdfgiPass().destroy();
-    m_renderer.sdfgi().destroy();
-    m_renderer.lumenProbe().destroy();
-    m_renderer.lumenFilter().destroy();
-    m_renderer.lumenGather().destroy();
-    m_renderer.lumen().destroy();
-    m_renderer.restirPass().destroy();
-    m_renderer.restir().destroy();
-    m_renderer.vxgiInject().destroy();
-    m_renderer.vxgiVoxelize().destroy();
-    m_renderer.vxgi().destroy();
-    m_renderer.lpvProp().destroy();
-    m_renderer.lpvInject().destroy();
-    m_renderer.lpv().destroy();
-    m_renderer.rsmSample().destroy();
-    m_renderer.rsmGeom().destroy();
-    m_renderer.gbuffer().destroy();
-    if (m_device) m_renderer.envIbl().destroy(*m_device);
-    m_renderer.rt().destroy();
+    // 统一由 FrameRenderer::destroy() 清理所有 render pass 资源
+    m_renderer.destroy();
+    // FrameGraph 资源池清理
+    m_fg.destroy();
+    // App 自有的 Vulkan 资源
     if (m_device) destroySceneSamplers(*m_device, m_sceneGpu);
-    if (m_renderer.timestampPool()) vkDestroyQueryPool(m_device->device(), m_renderer.timestampPool(), nullptr);
     if (m_pool) vkDestroyCommandPool(m_device->device(), m_pool, nullptr);
     if (m_imguiFence) vkDestroyFence(m_device->device(), m_imguiFence, nullptr);
     if (m_imguiCmds[0]) vkFreeCommandBuffers(m_device->device(), m_imguiPool, kFramesInFlight, m_imguiCmds);

@@ -34,8 +34,9 @@ public:
     FrameGraph();
     ~FrameGraph();
 
-    // ---- 初始化 ----
+    // ---- 初始化 / 清理 ----
     void init(Device& device);
+    void destroy();
 
     // ---- 资源声明 ----
     // 导入外部已分配的资源（跨帧持久，不参与 aliasing）
