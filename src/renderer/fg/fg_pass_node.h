@@ -35,6 +35,11 @@ struct FGPassNode {
     // execute 期调用：void(VkCommandBuffer cmd, const FGResources& resources)
     std::function<void(VkCommandBuffer, const FGResources&)> execute;
 
+    // ---- Barrier 模式 ----
+    // true: 此 pass 内部自己管理 barrier，FrameGraph 不为它插入 auto-barrier
+    // false: 使用 FrameGraph 自动 barrier（默认）
+    bool usesManualBarriers = false;
+
     // ---- 编译后填充 ----
     uint32_t topologicalIndex = 0;                     // 拓扑排序位置
     std::vector<FGPassNode*> predecessors;             // 直接前驱 pass

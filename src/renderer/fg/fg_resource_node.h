@@ -28,6 +28,7 @@ struct FGResourceNode {
     // ---- 物理资源（execute 阶段由 FGExecutor 分配） ----
     Image*  physicalTexture = nullptr;
     Buffer* physicalBuffer = nullptr;
+    VkImage importedImage = VK_NULL_HANDLE;  // 导入纹理的 VkImage（屏障发射用）
 
     // ---- Barrier 追踪状态（跨 pass 持续更新） ----
     struct BarrierState {

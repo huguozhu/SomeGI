@@ -33,8 +33,10 @@ void FGExecutor::execute(VkCommandBuffer cmd,
     for (auto* pass : compiled.passOrder) {
         if (!pass || pass->culled) continue;
 
-        // 2a. 插入 barrier（仅在 autoBarriers 模式）
-        if (m_autoBarriers) {
+        // 2a. 插入 barrier：
+        //   - 手动屏障 pass：跳过（pass 内部自行管理 layout 过渡）
+        //   - 自动屏障 pass：FrameGraph 根据读写声明自动插入 barrier
+        if (m_autoBarriers && !pass->usesManualBarriers) {
             emitBarriers(cmd, *pass, compiled.resources, viewCache);
         }
 
@@ -44,7 +46,26 @@ void FGExecutor::execute(VkCommandBuffer cmd,
         }
 
         // 2c. 更新资源状态
-        updateResourceStates(*pass, compiled.resources);
+        if (!pass->usesManualBarriers) {
+            updateResourceStates(*pass, compiled.resources);
+        } else {
+            // 手动 pass：记录 lastWriter + 同步信息（stage/access），
+            // 以便后续 auto-barrier 正确同步。layout 不更新（manual pass 可能改变它）。
+            for (auto& ref : pass->reads) {
+                if (ref.resource) {
+                    ref.resource->state.lastWriter = const_cast<FGPassNode*>(pass);
+                    ref.resource->state.stage  = ref.stages;
+                    ref.resource->state.access = ref.access;
+                }
+            }
+            for (auto& ref : pass->writes) {
+                if (ref.resource) {
+                    ref.resource->state.lastWriter = const_cast<FGPassNode*>(pass);
+                    ref.resource->state.stage  = ref.stages;
+                    ref.resource->state.access = ref.access;
+                }
+            }
+        }
     }
 
     // 3. 回收
@@ -163,27 +184,43 @@ void FGExecutor::emitBarriers(VkCommandBuffer cmd,
         auto* res = ref.resource;
         if (!res) return;
 
-        if (res->desc.type == FGResourceType::Texture && res->physicalTexture) {
+        // 获取屏障用的 VkImage：托管资源用 physicalTexture，导入资源用 importedImage
+        VkImage barrierImage = VK_NULL_HANDLE;
+        if (res->desc.type == FGResourceType::Texture) {
+            if (res->physicalTexture) {
+                barrierImage = res->physicalTexture->image();
+            } else if (res->importedImage) {
+                barrierImage = res->importedImage;
+            }
+        }
+
+        if (barrierImage) {
             VkImageLayout currentLayout = res->state.layout;
             VkImageLayout targetLayout = ref.requiredLayout;
 
-            if (res->isImported && currentLayout == VK_IMAGE_LAYOUT_UNDEFINED) {
-                return;  // 导入资源首次使用，信任 initialLayout
-            }
+            // 若上一 writer 是手动 pass，tracked state 不可信 → 使用 UNDEFINED
+            bool prevManual = res->state.lastWriter &&
+                              res->state.lastWriter->usesManualBarriers;
 
             if (currentLayout == targetLayout &&
-                res->state.access == ref.access) {
+                res->state.access == ref.access &&
+                !prevManual) {
                 return;  // 无需 barrier
             }
 
+            VkImageLayout oldLayout = prevManual
+                ? VK_IMAGE_LAYOUT_UNDEFINED : currentLayout;
+
+            // oldLayout 使用 UNDEFINED 确保 legal（手动 pass 可能改变布局），
+            // 但 srcStage/srcAccess 必须用精确值保证同步（等待前一个 writer 完成）
             VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
             b.srcStageMask  = res->state.stage;
             b.srcAccessMask = res->state.access;
             b.dstStageMask  = ref.stages;
             b.dstAccessMask = ref.access;
-            b.oldLayout = currentLayout;
+            b.oldLayout = oldLayout;
             b.newLayout = targetLayout;
-            b.image = res->physicalTexture->image();
+            b.image = barrierImage;
             b.subresourceRange = {
                 static_cast<VkImageAspectFlags>(
                     (res->desc.texture.usage & VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT)
@@ -194,7 +231,9 @@ void FGExecutor::emitBarriers(VkCommandBuffer cmd,
         }
 
         if (res->desc.type == FGResourceType::Buffer && res->physicalBuffer) {
-            if (res->state.access == ref.access) return;
+            bool prevManual = res->state.lastWriter &&
+                              res->state.lastWriter->usesManualBarriers;
+            if (res->state.access == ref.access && !prevManual) return;
 
             VkBufferMemoryBarrier2 b{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2};
             b.srcStageMask  = res->state.stage;
@@ -229,9 +268,8 @@ void FGExecutor::updateResourceStates(const FGPassNode& pass,
 
     for (auto& ref : pass.reads) {
         if (!ref.resource) continue;
-        if (ref.resource->state.layout == VK_IMAGE_LAYOUT_UNDEFINED) {
-            ref.resource->state.layout = ref.requiredLayout;
-        }
+        // barrier 已将 layout 过渡到 target，必须跟踪
+        ref.resource->state.layout = ref.requiredLayout;
         ref.resource->state.access = ref.access;
         ref.resource->state.stage = ref.stages;
     }
@@ -269,14 +307,19 @@ void FGExecutor::recycleUnused(uint64_t threshold) {
 VkImageLayout FGExecutor::derivedLayout(FGPassType passType,
                                          VkImageUsageFlags usage,
                                          bool isWrite) {
-    (void)passType;
-
     if (!isWrite) return VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
-    if (usage & VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT)
-        return VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-    if (usage & VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT)
-        return VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+    // Compute/RayTracing 写不使用 attachment layout，统一用 GENERAL
+    bool isShaderWrite = (passType == FGPassType::Compute ||
+                          passType == FGPassType::RayTracing ||
+                          passType == FGPassType::MeshShading);
+
+    if (!isShaderWrite) {
+        if (usage & VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT)
+            return VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        if (usage & VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT)
+            return VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+    }
     return VK_IMAGE_LAYOUT_GENERAL;
 }
 
@@ -284,7 +327,6 @@ VkAccessFlags2 FGExecutor::derivedAccess(FGPassType passType,
                                           VkImageUsageFlags usage,
                                           bool isWrite,
                                           bool isReadWrite) {
-    (void)passType;
 
     if (isReadWrite) {
         return VK_ACCESS_2_SHADER_STORAGE_READ_BIT |
@@ -301,10 +343,17 @@ VkAccessFlags2 FGExecutor::derivedAccess(FGPassType passType,
         return VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
     }
 
-    if (usage & VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT)
-        return VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
-    if (usage & VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT)
-        return VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+    // 写操作：Compute/RT/Mesh 不使用 attachment access
+    bool isShaderWrite = (passType == FGPassType::Compute ||
+                          passType == FGPassType::RayTracing ||
+                          passType == FGPassType::MeshShading);
+
+    if (!isShaderWrite) {
+        if (usage & VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT)
+            return VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+        if (usage & VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT)
+            return VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+    }
     if (usage & VK_IMAGE_USAGE_STORAGE_BIT)
         return VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
     if (usage & VK_IMAGE_USAGE_TRANSFER_DST_BIT)

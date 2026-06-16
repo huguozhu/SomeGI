@@ -54,6 +54,10 @@ void FGCompiler::cullPasses(std::vector<FGPassNode*>& passes,
         for (auto* p : passes) {
             if (p->culled) continue;
 
+            // 手动屏障 pass 不参与 cull：它们管理自己的私有资源，
+            // FrameGraph 不追踪这些资源的消费者关系
+            if (p->usesManualBarriers) continue;
+
             bool anyConsumer = false;
             for (auto& w : p->writes) {
                 if (!w.resource || w.resource->isImported) {

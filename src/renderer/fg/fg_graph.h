@@ -74,6 +74,11 @@ public:
     // 每帧开始时调用：清理 pass/resource 节点和视图缓存
     void reset();
 
+    // ---- Barrier 控制 ----
+    // 启用/禁用自动 Barrier（默认关闭，pass 内部管理 barrier）
+    void setAutoBarriers(bool enabled) { m_executor.setAutoBarriers(enabled); }
+    bool autoBarriers() const { return m_executor.autoBarriers(); }
+
     // ---- 调试 ----
     const FGCompiler::CompiledGraph& compiledGraph() const { return m_compiled; }
     FGDebug& debug() { return m_debug; }

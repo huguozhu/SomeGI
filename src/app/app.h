@@ -113,7 +113,7 @@ private:
     Buffer m_countBuf;
     uint32_t m_drawCount = 0;
     uint32_t m_culledDrawCount = 0;
-    bool m_useGpuCulling = false;
+    bool m_useGpuCulling = false;   // 默认关闭，FrameGraph 测试用
     bool m_useHiZOcclusion = false;
     std::vector<DrawEntry> m_drawEntries;
 

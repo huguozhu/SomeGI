@@ -25,7 +25,6 @@ FGHandle FrameGraph::importTexture(const char* name,
                                     VkImage image,
                                     const FGTextureDesc& desc,
                                     VkImageLayout initialLayout) {
-    (void)image;
     uint32_t idx = (uint32_t)m_resources.size();
     FGHandle h{idx, 0};
 
@@ -35,6 +34,7 @@ FGHandle FrameGraph::importTexture(const char* name,
         desc.usage, desc.mipLevels, desc.samples);
     node.desc.texture = desc;
     node.isImported = true;
+    node.importedImage = image;  // 保存 VkImage 供 barrier 发射使用
     node.state.layout = initialLayout;
 
     m_resources.push_back(std::move(node));
@@ -287,6 +287,25 @@ FGHandle FGBuilder::readWrite(FGHandle handle) {
 
 // ---- 显式 Layout 重载 ----
 
+// 根据显式 layout 推导 access 和 stage（用于 Clear/Copy 等非 shader 操作）
+static void deriveFromLayout(VkImageLayout layout, VkAccessFlags2& access, VkPipelineStageFlags2& stages) {
+    switch (layout) {
+        case VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL:
+            access  = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+            stages  = VK_PIPELINE_STAGE_2_CLEAR_BIT | VK_PIPELINE_STAGE_2_COPY_BIT;
+            break;
+        case VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL:
+            access  = VK_ACCESS_2_TRANSFER_READ_BIT;
+            stages  = VK_PIPELINE_STAGE_2_COPY_BIT;
+            break;
+        default:
+            // 非 transfer layout — 保留自动推导
+            access = 0;  // 哨兵值，调用方判断
+            stages = 0;
+            break;
+    }
+}
+
 FGHandle FGBuilder::read(FGHandle handle, VkImageLayout explicitLayout) {
     auto* res = m_graph.findResource(handle);
     if (!res) return handle;
@@ -298,8 +317,13 @@ FGHandle FGBuilder::read(FGHandle handle, VkImageLayout explicitLayout) {
 
     bool isTexture = (res->desc.type == FGResourceType::Texture);
     VkImageUsageFlags usage = isTexture ? res->desc.texture.usage : (VkImageUsageFlags)0;
-    ref.access = FGExecutor::derivedAccess(m_passNode->passType, usage, false, false);
-    ref.stages = FrameGraph::readStageForPassType(m_passNode->passType);
+
+    VkAccessFlags2 derivedAcc = 0;
+    VkPipelineStageFlags2 derivedStg = 0;
+    deriveFromLayout(explicitLayout, derivedAcc, derivedStg);
+
+    ref.access  = derivedAcc ? derivedAcc : FGExecutor::derivedAccess(m_passNode->passType, usage, false, false);
+    ref.stages  = derivedStg ? derivedStg : FrameGraph::readStageForPassType(m_passNode->passType);
 
     m_passNode->reads.push_back(ref);
     return handle;
@@ -316,8 +340,13 @@ FGHandle FGBuilder::write(FGHandle handle, VkImageLayout explicitLayout) {
 
     bool isTexture = (res->desc.type == FGResourceType::Texture);
     VkImageUsageFlags usage = isTexture ? res->desc.texture.usage : (VkImageUsageFlags)0;
-    ref.access = FGExecutor::derivedAccess(m_passNode->passType, usage, true, false);
-    ref.stages = FGExecutor::derivedStage(m_passNode->passType, usage, true);
+
+    VkAccessFlags2 derivedAcc = 0;
+    VkPipelineStageFlags2 derivedStg = 0;
+    deriveFromLayout(explicitLayout, derivedAcc, derivedStg);
+
+    ref.access  = derivedAcc ? derivedAcc : FGExecutor::derivedAccess(m_passNode->passType, usage, true, false);
+    ref.stages  = derivedStg ? derivedStg : FGExecutor::derivedStage(m_passNode->passType, usage, true);
 
     m_passNode->writes.push_back(ref);
     return handle;

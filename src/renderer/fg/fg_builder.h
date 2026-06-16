@@ -45,6 +45,14 @@ public:
     FGHandle createTexture(const char* name, const FGTextureDesc& desc);
     FGHandle createBuffer(const char* name, const FGBufferDesc& desc);
 
+    // ---- Barrier 控制 ----
+    // 标记此 pass 使用手动 barrier（复杂 pass 内部自行管理 layout 过渡）
+    // 设置后 FrameGraph 不会为此 pass 插入 auto-barrier
+    FGBuilder& setManualBarriers() {
+        m_passNode->usesManualBarriers = true;
+        return *this;
+    }
+
     // ---- 执行回调 ----
     // fn 签名: void(VkCommandBuffer cmd, const FGResources& resources)
     template<typename F>

@@ -3487,6 +3487,7 @@ void App::run() {
         if (m_useFrameGraph) {
             // FrameGraph 路径：导入资源 + 注册 pass
             m_fg.reset();
+            m_fg.setAutoBarriers(true);   // 启用自动 Barrier
             setupFrameGraph();
             m_fg.compile();
             m_fg.execute(cmd);
@@ -3658,75 +3659,143 @@ void App::setupFrameGraph() {
 
     bool fwd = (m_renderingMode == RenderingMode::Forward);
     bool aoEnabled = (!fwd && m_aoMethod != AOMethod::None);
+    bool needVoxelGrid = !fwd && (m_renderer.vxgiEnabled() || m_renderer.ddgiEnabled()
+        || m_renderer.sdfgiPass().enabled || m_renderer.lumenEnabled()
+        || m_renderer.restirPass().enabled);
 
-    // --- Shadow Pass ---
-    m_fg.addPass("Shadow", [&](FGBuilder& b) {
+    // ════════════════════════════════════════════════════════════════
+    // Bootstrap passes — 必须在所有 draw/dispatch 之前运行！
+    // 某些 descriptor set 可能引用 FrameGraph 资源（如 hdrColor），
+    // 但 FrameGraph 的第一个 writer 可能在拓扑排序中靠后，
+    // 导致前面的 draw pass 看到 UNDEFINED layout。
+    // ════════════════════════════════════════════════════════════════
+
+    // --- 关键资源提前 Bootstrap（UNDEFINED→GENERAL） ---
+    m_fg.addPass("Resource-Bootstrap", [&](FGBuilder& b) {
         b.setPassType(FGPassType::Compute);
-        b.read(m_fgh.depth);        // 读 GBuffer 深度
-        b.write(m_fgh.shadowMask);  // 写 shadowMask
+        b.setManualBarriers();
         b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
-            // 确保 depth 在 SHADER_READ_ONLY_OPTIMAL（shadow resolve 采样 GBuffer depth）
-            transitionImage(cmd, m_renderer.rt().depth.image(), VK_IMAGE_ASPECT_DEPTH_BIT,
-                VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
-                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
-            m_renderer.shadow().record(cmd, m_renderer.rt(),
-                m_renderer.gbuffer().frameUboHandle(),
-                m_sceneGpu, m_indirectBufSun.handle(), m_drawCount,
-                m_renderer.frameIndex());
+            auto toGeneral = [&](VkImage img) {
+                VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+                b.srcStageMask = VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
+                b.srcAccessMask = 0;
+                b.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
+                                 VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT |
+                                 VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+                b.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT |
+                                  VK_ACCESS_2_SHADER_SAMPLED_READ_BIT |
+                                  VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+                b.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+                b.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+                b.image = img;
+                b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+                VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+                di.imageMemoryBarrierCount = 1; di.pImageMemoryBarriers = &b;
+                vkCmdPipelineBarrier2(cmd, &di);
+            };
+            // hdrColor/hdrPrev: 在 FrameGraph 各 pass 的 descriptor 中被引用
+            toGeneral(m_renderer.rt().hdrColor.image());
+            toGeneral(m_renderer.rt().hdrPrev.image());
         });
     });
 
-    // --- RSM Geometry ---
-    m_fg.addPass("RSM-Geometry", [&](FGBuilder& b) {
-        b.setPassType(FGPassType::Graphics);
-        b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
-            m_renderer.rsmGeom().record(cmd, m_indirectBufSun.handle(), m_drawCount, m_sceneGpu);
+    // --- VXGI Bootstrap ---
+    if (!needVoxelGrid) {
+        m_fg.addPass("VXGI-Bootstrap", [&](FGBuilder& b) {
+            b.setPassType(FGPassType::Compute);
+            b.setManualBarriers();
+            b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
+                auto transitionToSRO = [&](VkImage img, uint32_t mipLevels) {
+                    VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+                    b.srcStageMask = VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
+                    b.srcAccessMask = 0;
+                    b.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                    b.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+                    b.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+                    b.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                    b.image = img;
+                    b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, mipLevels, 0, 1};
+                    VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+                    di.imageMemoryBarrierCount = 1; di.pImageMemoryBarriers = &b;
+                    vkCmdPipelineBarrier2(cmd, &di);
+                };
+                transitionToSRO(m_renderer.vxgi().image().image(), m_renderer.vxgi().mipLevels());
+                transitionToSRO(m_renderer.vxgi().aniso().image(), m_renderer.vxgi().mipLevels());
+            });
         });
-    });
+    }
+
+    // --- DDGI Bootstrap ---
+    if (!fwd && !m_renderer.ddgiEnabled()) {
+        m_fg.addPass("DDGI-Bootstrap", [&](FGBuilder& b) {
+            b.setPassType(FGPassType::Compute);
+            b.setManualBarriers();
+            b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
+                auto barrierAtlas = [&](VkImage img) {
+                    VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+                    b.srcStageMask = VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
+                    b.srcAccessMask = 0;
+                    b.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                    b.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+                    b.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+                    b.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                    b.image = img;
+                    b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+                    VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+                    di.imageMemoryBarrierCount = 1; di.pImageMemoryBarriers = &b;
+                    vkCmdPipelineBarrier2(cmd, &di);
+                };
+                barrierAtlas(m_renderer.ddgi().irradiance().image());
+                barrierAtlas(m_renderer.ddgi().distance().image());
+                m_renderer.ddgiAtlasInited() = true;
+            });
+        });
+    }
+
+    // --- LPV Bootstrap ---
+    if (!fwd && !m_renderer.lpvEnabled()) {
+        m_fg.addPass("LPV-Bootstrap", [&](FGBuilder& b) {
+            b.setPassType(FGPassType::Compute);
+            b.setManualBarriers();
+            b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
+                VkImage imgs[3] = {m_renderer.lpv().current().lpvR.image(),
+                                   m_renderer.lpv().current().lpvG.image(),
+                                   m_renderer.lpv().current().lpvB.image()};
+                for (auto img : imgs) {
+                    transitionImage(cmd, img, VK_IMAGE_ASPECT_COLOR_BIT,
+                        VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                        VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
+                        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                        VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+                }
+            });
+        });
+    }
+
+    // ════════════════════════════════════════════════════════════════
+    // 注意：必须先声明 GBuffer/Forward（写 depth），再声明 Shadow（读 depth），
+    // 否则 FrameGraph 的 buildEdges 无法建立 RAW 依赖边。
+    // ════════════════════════════════════════════════════════════════
 
     // --- Forward (替代 GBuffer，前向渲染模式) ---
     if (fwd) {
+        // FrameGraph auto-barrier: hdrColor → COLOR_ATTACHMENT（entry），depth → DEPTH_ATTACHMENT（entry）
+        //                           hdrColor → COPY_SRC（exit，由 Copy-hdrPrev 触发），depth → SR_O（exit，由 Shadow 触发）
         m_fg.addPass("Forward", [&](FGBuilder& b) {
             b.setPassType(FGPassType::Graphics);
             b.write(m_fgh.hdrColor);
             b.write(m_fgh.depth);
             b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
-                // hdrColor → COLOR_ATTACHMENT, depth → DEPTH_ATTACHMENT
-                transitionImage(cmd, m_renderer.rt().hdrColor.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-                    VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-                    VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
-                    VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-                    VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
-                transitionImage(cmd, m_renderer.rt().depth.image(), VK_IMAGE_ASPECT_DEPTH_BIT,
-                    VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
-                    VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
-                    VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT,
-                    VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT);
-
                 m_renderer.forward().record(cmd, m_renderer.rt(), m_indirectBuf.handle(), m_drawCount, m_sceneGpu);
-
-                // hdrColor COLOR_ATTACHMENT → GENERAL（匹配延迟 Lighting 输出）
-                transitionImage(cmd, m_renderer.rt().hdrColor.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-                    VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL,
-                    VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-                    VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
-                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                    VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
-                // depth DEPTH_ATTACHMENT → SR_O（匹配延迟 GBuffer 输出，供 Skybox 使用）
-                transitionImage(cmd, m_renderer.rt().depth.image(), VK_IMAGE_ASPECT_DEPTH_BIT,
-                    VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
-                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                    VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
-                    VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
-                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                    VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
             });
         });
     }
 
     // --- GBuffer ---
+    // FrameGraph auto-barrier:
+    //   MSAA targets → COLOR_ATTACHMENT / DEPTH_ATTACHMENT（entry）
+    //   Resolve targets → COLOR_ATTACHMENT / DEPTH_ATTACHMENT（entry）
+    //   Resolved GBuffer → SR_O（exit，由 SSAO/SSR/Lighting 的 read 触发）
     if (!fwd) {
         m_fg.addPass("GBuffer", [&](FGBuilder& b) {
             b.setPassType(FGPassType::Graphics);
@@ -3739,73 +3808,56 @@ void App::setupFrameGraph() {
             b.write(m_fgh.gEmissiveAO);
             b.write(m_fgh.depth);
             b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
-                // MSAA images → attachment layout
-                auto toColorAttach = [&](VkImage img) {
-                    transitionImage(cmd, img, VK_IMAGE_ASPECT_COLOR_BIT,
-                        VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-                        VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
-                        VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-                        VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
-                };
-                toColorAttach(m_renderer.rt().gAlbedoMetalMs.image());
-                toColorAttach(m_renderer.rt().gNormalRoughMs.image());
-                toColorAttach(m_renderer.rt().gEmissiveAOMs.image());
-                transitionImage(cmd, m_renderer.rt().depthMs.image(), VK_IMAGE_ASPECT_DEPTH_BIT,
-                    VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
-                    VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
-                    VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT,
-                    VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT);
-
-                // SS resolve targets → attachment layout
-                toColorAttach(m_renderer.rt().gAlbedoMetal.image());
-                toColorAttach(m_renderer.rt().gNormalRough.image());
-                toColorAttach(m_renderer.rt().gEmissiveAO.image());
-                transitionImage(cmd, m_renderer.rt().depth.image(), VK_IMAGE_ASPECT_DEPTH_BIT,
-                    VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
-                    VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
-                    VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT,
-                    VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT);
-
                 m_renderer.gbuffer().record(cmd, m_renderer.rt(), m_indirectBuf.handle(), m_drawCount, m_sceneGpu);
-
-                // Resolved GBuffer → SHADER_READ_ONLY for downstream compute
-                auto toSampled = [&](VkImage img) {
-                    transitionImage(cmd, img, VK_IMAGE_ASPECT_COLOR_BIT,
-                        VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-                        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                        VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-                        VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
-                        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                        VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
-                };
-                toSampled(m_renderer.rt().gAlbedoMetal.image());
-                toSampled(m_renderer.rt().gNormalRough.image());
-                toSampled(m_renderer.rt().gEmissiveAO.image());
-                transitionImage(cmd, m_renderer.rt().depth.image(), VK_IMAGE_ASPECT_DEPTH_BIT,
-                    VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
-                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                    VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
-                    VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
-                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                    VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
             });
         });
     }
 
+    // --- RSM Geometry ---
+    m_fg.addPass("RSM-Geometry", [&](FGBuilder& b) {
+        b.setPassType(FGPassType::Graphics);
+        b.setManualBarriers();  // 复杂 Pass：内部自行管理 layout
+        b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
+            m_renderer.rsmGeom().record(cmd, m_indirectBufSun.handle(), m_drawCount, m_sceneGpu);
+        });
+    });
+
+    // --- Shadow Pass ---
+    // 使用 manual barrier：recordHardSM() 内部自行管理 shadowMask 的 UNDEFINED→GENERAL→SR_O。
+    // depth 入口过渡使用 DEPTH_ATTACHMENT oldLayout（GBuffer 写入后的布局），
+    // 配合 EARLY_FRAGMENT_TESTS srcStage，确保等待 GBuffer 的 depth write 完成。
+    // 注意：不可使用 UNDEFINED oldLayout，因为需要 GBuffer 写入的 depth 数据！
+    m_fg.addPass("Shadow", [&](FGBuilder& b) {
+        b.setPassType(FGPassType::Compute);
+        b.setManualBarriers();
+        b.read(m_fgh.depth);
+        b.write(m_fgh.shadowMask);
+        b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
+            transitionImage(cmd, m_renderer.rt().depth.image(), VK_IMAGE_ASPECT_DEPTH_BIT,
+                VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
+                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT,
+                VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+            m_renderer.shadow().record(cmd, m_renderer.rt(),
+                m_renderer.gbuffer().frameUboHandle(),
+                m_sceneGpu, m_indirectBufSun.handle(), m_drawCount,
+                m_renderer.frameIndex());
+        });
+    });
+
     // --- AO ---
     if (aoEnabled) {
         const char* aoName = (m_aoMethod == AOMethod::SSAO) ? "SSAO" : "GTAO";
+        // FrameGraph auto-barrier: depth/normal → SR_O（entry），ssao → GENERAL（entry）
+        //                           ssao → SR_O（exit，由 Lighting 的 read 触发）
         m_fg.addPass(aoName, [&](FGBuilder& b) {
             b.setPassType(FGPassType::Compute);
             b.read(m_fgh.depth);
             b.read(m_fgh.gNormalRough);
             b.write(m_fgh.ssao);
             b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
-                transitionImage(cmd, m_renderer.rt().ssao.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-                    VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
-                    VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
-                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                    VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
                 if (m_aoMethod == AOMethod::SSAO) {
                     m_renderer.ssao().record(cmd, m_renderer.rt(),
                         m_frameCtx.proj, glm::inverse(m_frameCtx.proj), m_frameCtx.view);
@@ -3813,36 +3865,21 @@ void App::setupFrameGraph() {
                     m_renderer.gtao().record(cmd, m_renderer.rt(),
                         m_frameCtx.proj, m_frameCtx.view);
                 }
-                transitionImage(cmd, m_renderer.rt().ssao.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-                    VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                    VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
-                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                    VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
             });
         });
     } else if (!fwd) {
         // AO-Clear: 清除 ssao 为 1.0（无遮挡）
+        // FrameGraph auto-barrier 负责 UNDEFINED→TRANSFER_DST（entry）和 TRANSFER_DST→SR_O（exit）
         m_fg.addPass("AO-Clear", [&](FGBuilder& b) {
             b.setPassType(FGPassType::Compute);
             b.write(m_fgh.ssao, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
             b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
-                transitionImage(cmd, m_renderer.rt().ssao.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-                    VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                    VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
-                    VK_PIPELINE_STAGE_2_CLEAR_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
                 VkClearColorValue white{};
                 white.float32[0] = 1.0f; white.float32[1] = 1.0f;
                 white.float32[2] = 1.0f; white.float32[3] = 1.0f;
                 VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
                 vkCmdClearColorImage(cmd, m_renderer.rt().ssao.image(),
                     VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &white, 1, &range);
-                transitionImage(cmd, m_renderer.rt().ssao.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                    VK_PIPELINE_STAGE_2_CLEAR_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
-                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                    VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
             });
         });
     } else {
@@ -3851,6 +3888,8 @@ void App::setupFrameGraph() {
 
     // --- SSR ---
     if (!fwd && m_renderer.ssr().enabled) {
+        // FrameGraph auto-barrier: GBuffer → SR_O（entry），ssr → GENERAL（entry）
+        //                           ssr → SR_O（exit，由 Lighting 的 read 触发）
         m_fg.addPass("SSR", [&](FGBuilder& b) {
             b.setPassType(FGPassType::Compute);
             b.read(m_fgh.gAlbedoMetal);
@@ -3860,18 +3899,7 @@ void App::setupFrameGraph() {
             b.read(m_fgh.hdrPrev);
             b.write(m_fgh.ssr);
             b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
-                transitionImage(cmd, m_renderer.rt().ssr.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-                    VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
-                    VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
-                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                    VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
                 m_renderer.ssr().record(cmd, m_renderer.rt());
-                transitionImage(cmd, m_renderer.rt().ssr.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-                    VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                    VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
-                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                    VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
             });
         });
     } else if (!fwd && !m_renderer.ssr().enabled) {
@@ -3879,20 +3907,10 @@ void App::setupFrameGraph() {
             b.setPassType(FGPassType::Compute);
             b.write(m_fgh.ssr, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
             b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
-                transitionImage(cmd, m_renderer.rt().ssr.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-                    VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                    VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
-                    VK_PIPELINE_STAGE_2_CLEAR_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
                 VkClearColorValue zero{};
                 VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
                 vkCmdClearColorImage(cmd, m_renderer.rt().ssr.image(),
                     VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &zero, 1, &range);
-                transitionImage(cmd, m_renderer.rt().ssr.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                    VK_PIPELINE_STAGE_2_CLEAR_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
-                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                    VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
             });
         });
     }
@@ -3902,6 +3920,7 @@ void App::setupFrameGraph() {
     if (screenGiOn) {
         m_fg.addPass("ScreenGI", [&](FGBuilder& b) {
             b.setPassType(FGPassType::Compute);
+            b.setManualBarriers();  // 复杂 Pass：内部 copy+transition+dispatch
             b.read(m_fgh.gAlbedoMetal);
             b.read(m_fgh.gNormalRough);
             b.read(m_fgh.gEmissiveAO);
@@ -3960,31 +3979,19 @@ void App::setupFrameGraph() {
             b.setPassType(FGPassType::Compute);
             b.write(m_fgh.ssgi, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
             b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
-                transitionImage(cmd, m_renderer.rt().ssgi.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-                    VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                    VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
-                    VK_PIPELINE_STAGE_2_CLEAR_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
                 VkClearColorValue zero{};
                 VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
                 vkCmdClearColorImage(cmd, m_renderer.rt().ssgi.image(),
                     VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &zero, 1, &range);
-                transitionImage(cmd, m_renderer.rt().ssgi.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                    VK_PIPELINE_STAGE_2_CLEAR_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
-                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                    VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
             });
         });
     }
 
     // --- VXGI Chain ---
-    bool needVoxelGrid = !fwd && (m_renderer.vxgiEnabled() || m_renderer.ddgiEnabled()
-        || m_renderer.sdfgiPass().enabled || m_renderer.lumenEnabled()
-        || m_renderer.restirPass().enabled);
     if (needVoxelGrid) {
         m_fg.addPass("VXGI-Chain", [&](FGBuilder& b) {
             b.setPassType(FGPassType::Compute);
+            b.setManualBarriers();  // 复杂 Pass：clear+voxelize+inject+mipmap+aniso 多步操作
             b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
                 // 1. Clear entire mip chain to 0
                 auto barrierAllMips = [&](VkImageLayout oldL, VkImageLayout newL,
@@ -4079,6 +4086,7 @@ void App::setupFrameGraph() {
         if (m_renderer.vxgiRelightEnabled()) {
             m_fg.addPass("VXGI-Relight", [&](FGBuilder& b) {
                 b.setPassType(FGPassType::Compute);
+                b.setManualBarriers();  // 复杂 Pass：multi-bounce ping-pong
                 b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
                     int bounces = m_renderer.lumenEnabled() ? 3 : 1;
 
@@ -4192,6 +4200,7 @@ void App::setupFrameGraph() {
         if (m_renderer.lumenEnabled() && m_renderer.vxgiSixAxisInited()) {
             m_fg.addPass("VXGI-6Axis", [&](FGBuilder& b) {
                 b.setPassType(FGPassType::Compute);
+                b.setManualBarriers();  // 复杂 Pass：多 image layout 过渡
                 b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
                     VkImageLayout axisOldL = m_renderer.lumenAtlasInited()
                         ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
@@ -4249,6 +4258,7 @@ void App::setupFrameGraph() {
     if (!fwd && m_renderer.sdfgiPass().enabled) {
         m_fg.addPass("SDFGI", [&](FGBuilder& b) {
             b.setPassType(FGPassType::Compute);
+            b.setManualBarriers();  // 复杂 Pass：bootstrap + compute
             b.read(m_fgh.gNormalRough);
             b.read(m_fgh.depth);
             b.read(m_fgh.ssgi);
@@ -4300,23 +4310,12 @@ void App::setupFrameGraph() {
     // --- RT GI ---
     bool rtGiActive = m_renderer.rtGiBound() && m_giIndexApplied == 10;
     if (!fwd && rtGiActive) {
+        // FrameGraph auto-barrier: rtGI → GENERAL（entry），rtGI → SR_O（exit 由 Lighting read 触发）
         m_fg.addPass("RTGI", [&](FGBuilder& b) {
             b.setPassType(FGPassType::RayTracing);
             b.write(m_fgh.rtGI);
             b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
-                transitionImage(cmd, m_renderer.rt().rtGI.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-                    VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
-                    VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
-                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                    VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
                 m_renderer.rtGi().record(cmd, m_renderer.rt());
-                transitionImage(cmd, m_renderer.rt().rtGI.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-                    VK_IMAGE_LAYOUT_GENERAL,
-                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                    VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
-                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                    VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
             });
         });
     } else if (!fwd && m_renderer.rtGiInited() && !rtGiActive) {
@@ -4324,20 +4323,10 @@ void App::setupFrameGraph() {
             b.setPassType(FGPassType::Compute);
             b.write(m_fgh.rtGI, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
             b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
-                transitionImage(cmd, m_renderer.rt().rtGI.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-                    VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                    VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
-                    VK_PIPELINE_STAGE_2_CLEAR_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
                 VkClearColorValue zero{};
                 VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
                 vkCmdClearColorImage(cmd, m_renderer.rt().rtGI.image(),
                     VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &zero, 1, &range);
-                transitionImage(cmd, m_renderer.rt().rtGI.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                    VK_PIPELINE_STAGE_2_CLEAR_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
-                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                    VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
             });
         });
     }
@@ -4346,6 +4335,7 @@ void App::setupFrameGraph() {
     if (!fwd && m_renderer.restirPass().enabled) {
         m_fg.addPass("ReSTIR", [&](FGBuilder& b) {
             b.setPassType(FGPassType::Compute);
+            b.setManualBarriers();  // 复杂 Pass：bootstrap + 条件 oldLayout 过渡
             b.write(m_fgh.restir);
             b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
                 m_renderer.restir().updateLights(m_renderer.demoLights());
@@ -4406,26 +4396,10 @@ void App::setupFrameGraph() {
             b.setPassType(FGPassType::Compute);
             b.write(m_fgh.restir, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
             b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
-                VkImageLayout restirOld = m_renderer.restirOutInited()
-                    ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
-                    : VK_IMAGE_LAYOUT_UNDEFINED;
-                transitionImage(cmd, m_renderer.rt().restir.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-                    restirOld, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                    m_renderer.restirOutInited() ? VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT
-                                       : VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT,
-                    m_renderer.restirOutInited() ? VK_ACCESS_2_SHADER_SAMPLED_READ_BIT : 0,
-                    VK_PIPELINE_STAGE_2_CLEAR_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
                 VkClearColorValue zero{};
                 VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
                 vkCmdClearColorImage(cmd, m_renderer.rt().restir.image(),
                     VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &zero, 1, &range);
-                transitionImage(cmd, m_renderer.rt().restir.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                    VK_PIPELINE_STAGE_2_CLEAR_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
-                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                    VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
-                m_renderer.restirOutInited() = true;
             });
         });
     }
@@ -4434,6 +4408,7 @@ void App::setupFrameGraph() {
     if (!fwd && m_renderer.ddgiEnabled()) {
         m_fg.addPass("DDGI", [&](FGBuilder& b) {
             b.setPassType(FGPassType::Compute);
+            b.setManualBarriers();  // 复杂 Pass：多 atlas barrier 管理
             b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
                 auto barrierAtlas = [&](VkImage img,
                                         VkImageLayout oldL, VkImageLayout newL,
@@ -4497,6 +4472,7 @@ void App::setupFrameGraph() {
     if (lumenActive) {
         m_fg.addPass("Lumen-Probe", [&](FGBuilder& b) {
             b.setPassType(FGPassType::RayTracing);
+            b.setManualBarriers();  // 复杂 Pass：bootstrap + 多 image 过渡 + dispatch
             b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
                 if (!m_renderer.lumenProbeInited()) {
                     m_renderer.lumenProbe().init(*m_device);
@@ -4554,6 +4530,7 @@ void App::setupFrameGraph() {
         });
         m_fg.addPass("Lumen-Filter", [&](FGBuilder& b) {
             b.setPassType(FGPassType::Compute);
+            b.setManualBarriers();  // 复杂 Pass：init + dispatch + copy + 多 barrier
             b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
                 if (!m_renderer.lumenFilterInited()) {
                     VkImageMemoryBarrier2 pb{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
@@ -4621,6 +4598,7 @@ void App::setupFrameGraph() {
         });
         m_fg.addPass("Lumen-Gather", [&](FGBuilder& b) {
             b.setPassType(FGPassType::Compute);
+            b.setManualBarriers();  // 复杂 Pass：bootstrap + 多 layout 过渡 + dispatch
             b.write(m_fgh.lumenGI);
             b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
                 if (!m_renderer.lumenGatherInited()) {
@@ -4675,29 +4653,10 @@ void App::setupFrameGraph() {
             b.setPassType(FGPassType::Compute);
             b.write(m_fgh.lumenGI, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
             b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
-                VkImageLayout oldL = m_renderer.lumenOutInited()
-                    ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
-                    : VK_IMAGE_LAYOUT_UNDEFINED;
-                VkPipelineStageFlags2 srcS = m_renderer.lumenOutInited()
-                    ? VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT
-                    : VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
-                VkAccessFlags2 srcA = m_renderer.lumenOutInited()
-                    ? VK_ACCESS_2_SHADER_SAMPLED_READ_BIT : 0;
-                transitionImage(cmd, m_renderer.rt().lumenGI.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-                    oldL, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                    srcS, srcA,
-                    VK_PIPELINE_STAGE_2_CLEAR_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
                 VkClearColorValue zero{};
                 VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
                 vkCmdClearColorImage(cmd, m_renderer.rt().lumenGI.image(),
                     VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &zero, 1, &range);
-                transitionImage(cmd, m_renderer.rt().lumenGI.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                    VK_PIPELINE_STAGE_2_CLEAR_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
-                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                    VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
-                m_renderer.lumenOutInited() = true;
             });
         });
     }
@@ -4706,6 +4665,7 @@ void App::setupFrameGraph() {
     if (!fwd && m_renderer.lpvEnabled()) {
         m_fg.addPass("LPV-Inject", [&](FGBuilder& b) {
             b.setPassType(FGPassType::Compute);
+            b.setManualBarriers();  // 复杂 Pass：compute + exit transition
             b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
                 m_renderer.lpvInject().record(cmd, m_renderer.kLpvResolution,
                     m_renderer.lpvGridMin(), m_renderer.lpvCellSize());
@@ -4720,6 +4680,7 @@ void App::setupFrameGraph() {
         });
         m_fg.addPass("LPV-Propagate", [&](FGBuilder& b) {
             b.setPassType(FGPassType::Compute);
+            b.setManualBarriers();  // 复杂 Pass：multi-iteration ping-pong barrier
             b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
                 auto barrierLpv = [&](const LpvGrid& g,
                                       VkImageLayout oldL, VkImageLayout newL,
@@ -4773,22 +4734,12 @@ void App::setupFrameGraph() {
 
     // --- RSM Sample ---
     if (!fwd && m_renderer.rsmSample().enabled) {
+        // FrameGraph auto-barrier: rsmGI → GENERAL（entry），rsmGI → SR_O（exit 由 Lighting read 触发）
         m_fg.addPass("RSM-Sample", [&](FGBuilder& b) {
             b.setPassType(FGPassType::Compute);
             b.write(m_fgh.rsmGI);
             b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
-                transitionImage(cmd, m_renderer.rt().rsmGI.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-                    VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
-                    VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
-                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                    VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
                 m_renderer.rsmSample().record(cmd, m_renderer.rt());
-                transitionImage(cmd, m_renderer.rt().rsmGI.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-                    VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                    VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
-                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                    VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
             });
         });
     } else if (!fwd && !m_renderer.rsmSample().enabled) {
@@ -4796,20 +4747,10 @@ void App::setupFrameGraph() {
             b.setPassType(FGPassType::Compute);
             b.write(m_fgh.rsmGI, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
             b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
-                transitionImage(cmd, m_renderer.rt().rsmGI.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-                    VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                    VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
-                    VK_PIPELINE_STAGE_2_CLEAR_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
                 VkClearColorValue zero{};
                 VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
                 vkCmdClearColorImage(cmd, m_renderer.rt().rsmGI.image(),
                     VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &zero, 1, &range);
-                transitionImage(cmd, m_renderer.rt().rsmGI.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                    VK_PIPELINE_STAGE_2_CLEAR_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
-                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                    VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
             });
         });
     }
@@ -4818,6 +4759,7 @@ void App::setupFrameGraph() {
     if (m_renderer.ndgiEnabled() && m_renderer.rtSupported()) {
         m_fg.addPass("NDGI", [&](FGBuilder& b) {
             b.setPassType(FGPassType::RayTracing);
+            b.setManualBarriers();  // RT dispatch，无 read/write 声明，内部管理 barrier
             b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
                 m_renderer.ndgiPass().record(cmd, m_renderer.ndgi(), m_renderer.frameIndex(),
                     m_renderer.ddgiOrigin(), m_renderer.ddgiSpacing());
@@ -4828,6 +4770,7 @@ void App::setupFrameGraph() {
 
     // --- Lighting ---
     if (!fwd) {
+        // FrameGraph auto-barrier: 所有 GBuffer+GI → SR_O（entry），hdrColor → GENERAL（entry+exit）
         m_fg.addPass("Lighting", [&](FGBuilder& b) {
             b.setPassType(FGPassType::Compute);
             b.read(m_fgh.gAlbedoMetal);
@@ -4845,11 +4788,6 @@ void App::setupFrameGraph() {
             b.read(m_fgh.lumenGI);
             b.write(m_fgh.hdrColor);
             b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
-                transitionImage(cmd, m_renderer.rt().hdrColor.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-                    VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
-                    VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
-                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                    VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
                 m_renderer.lighting().record(cmd, m_renderer.rt());
             });
         });
@@ -4857,8 +4795,11 @@ void App::setupFrameGraph() {
 
     // --- Skybox ---
     if (!fwd) {
+        // Skybox 使用 manual barrier：depth read 需要 DEPTH_STENCIL_ATTACHMENT_READ
+        // 而非 SAMPLED_READ，auto-barrier 的 access 推导不匹配
         m_fg.addPass("Skybox", [&](FGBuilder& b) {
             b.setPassType(FGPassType::Graphics);
+            b.setManualBarriers();
             b.read(m_fgh.depth);
             b.write(m_fgh.hdrColor);
             b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
@@ -4880,21 +4821,13 @@ void App::setupFrameGraph() {
     }
 
     // --- Copy hdrPrev ---
+    // FrameGraph auto-barrier: hdrColor → TRANSFER_SRC, hdrPrev → TRANSFER_DST（entry）
+    //                          hdrPrev → SHADER_READ_ONLY（exit, 由下一帧读触发）
     m_fg.addPass("Copy-hdrPrev", [&](FGBuilder& b) {
         b.setPassType(FGPassType::Compute);
         b.read(m_fgh.hdrColor, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
         b.write(m_fgh.hdrPrev, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
         b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
-            transitionImage(cmd, m_renderer.rt().hdrColor.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-                VK_IMAGE_LAYOUT_UNDEFINED,
-                VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
-                VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
-            transitionImage(cmd, m_renderer.rt().hdrPrev.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-                VK_IMAGE_LAYOUT_UNDEFINED,
-                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
-                VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
             VkImageCopy region{};
             region.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
             region.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
@@ -4903,12 +4836,6 @@ void App::setupFrameGraph() {
                 m_renderer.rt().hdrColor.image(), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                 m_renderer.rt().hdrPrev.image(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                 1, &region);
-            transitionImage(cmd, m_renderer.rt().hdrPrev.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
-                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
         });
     });
 
