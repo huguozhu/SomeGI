@@ -3491,7 +3491,7 @@ void App::run() {
             setupFrameGraph();
             m_fg.compile();
 
-            // 渲染使用旧管线（稳定）；execute 在 device lost 修复后启用
+            // 渲染使用旧管线；execute 在 device lost 修复后启用
             buildPipelineTable();
             m_renderer.pipeline().execute(cmd);
         } else {
@@ -3672,35 +3672,6 @@ void App::setupFrameGraph() {
     // 但 FrameGraph 的第一个 writer 可能在拓扑排序中靠后，
     // 导致前面的 draw pass 看到 UNDEFINED layout。
     // ════════════════════════════════════════════════════════════════
-
-    // --- 关键资源提前 Bootstrap（UNDEFINED→GENERAL） ---
-    m_fg.addPass("Resource-Bootstrap", [&](FGBuilder& b) {
-        b.setPassType(FGPassType::Compute);
-        b.setManualBarriers();
-        b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
-            auto toGeneral = [&](VkImage img) {
-                VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
-                b.srcStageMask = VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
-                b.srcAccessMask = 0;
-                b.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
-                                 VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT |
-                                 VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
-                b.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT |
-                                  VK_ACCESS_2_SHADER_SAMPLED_READ_BIT |
-                                  VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
-                b.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-                b.newLayout = VK_IMAGE_LAYOUT_GENERAL;
-                b.image = img;
-                b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-                VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-                di.imageMemoryBarrierCount = 1; di.pImageMemoryBarriers = &b;
-                vkCmdPipelineBarrier2(cmd, &di);
-            };
-            // hdrColor/hdrPrev: 在 FrameGraph 各 pass 的 descriptor 中被引用
-            toGeneral(m_renderer.rt().hdrColor.image());
-            toGeneral(m_renderer.rt().hdrPrev.image());
-        });
-    });
 
     // --- VXGI Bootstrap ---
     if (!needVoxelGrid) {
