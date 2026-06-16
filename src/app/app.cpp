@@ -1166,36 +1166,120 @@ void App::buildUI() {
 
             auto& fgDebug = m_fg.debug();
             if (ImGui::TreeNode("FrameGraph Debug")) {
-                if (ImGui::Button("Show Pass List")) fgDebug.showPassList = !fgDebug.showPassList;
-                ImGui::SameLine();
-                if (ImGui::Button("Show Aliases")) fgDebug.showAliasGroups = !fgDebug.showAliasGroups;
-                ImGui::SameLine();
-                if (ImGui::Button("Show Barriers")) fgDebug.showBarrierLog = !fgDebug.showBarrierLog;
+                auto& compiled = m_fg.compiledGraph();
+                ImGui::Text("Passes: %u active / %zu total | Resources: %zu | Alias Groups: %zu",
+                    (uint32_t)compiled.passOrder.size(), fgDebug.passes.size(),
+                    fgDebug.resources.size(), fgDebug.aliasGroups.size());
 
-                if (fgDebug.showPassList && ImGui::CollapsingHeader("Passes", ImGuiTreeNodeFlags_DefaultOpen)) {
-                    for (auto& p : fgDebug.passes) {
-                        const char* typeStr = "?";
-                        switch (p.passType) {
-                            case somegi::fg::FGPassType::Compute: typeStr = "C"; break;
-                            case somegi::fg::FGPassType::Graphics: typeStr = "G"; break;
-                            case somegi::fg::FGPassType::MeshShading: typeStr = "M"; break;
-                            case somegi::fg::FGPassType::RayTracing: typeStr = "R"; break;
+                // ---- Pass 执行列表 ----
+                if (ImGui::CollapsingHeader("Pass List", ImGuiTreeNodeFlags_DefaultOpen)) {
+                    if (ImGui::BeginTable("##fgpasstable", 6,
+                            ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
+                            ImGuiTableFlags_ScrollY | ImGuiTableFlags_SizingFixedFit)) {
+                        ImGui::TableSetupColumn("#");
+                        ImGui::TableSetupColumn("Name");
+                        ImGui::TableSetupColumn("T");
+                        ImGui::TableSetupColumn("Reads");
+                        ImGui::TableSetupColumn("Writes");
+                        ImGui::TableSetupColumn("Deps");
+                        ImGui::TableHeadersRow();
+
+                        for (auto& p : fgDebug.passes) {
+                            ImGui::TableNextRow();
+                            if (p.culled) ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0, 0x22AA2222);
+
+                            ImGui::TableNextColumn();
+                            if (!p.culled) ImGui::Text("%u", p.execOrder);
+                            else ImGui::TextColored(ImVec4(1,0.3f,0.3f,1), "[X]");
+
+                            ImGui::TableNextColumn();
+                            ImGui::Text("%s", p.name.c_str());
+
+                            ImGui::TableNextColumn();
+                            const char* t = "?";
+                            switch (p.passType) {
+                                case somegi::fg::FGPassType::Compute: t = "C"; break;
+                                case somegi::fg::FGPassType::Graphics: t = "G"; break;
+                                case somegi::fg::FGPassType::MeshShading: t = "M"; break;
+                                case somegi::fg::FGPassType::RayTracing: t = "R"; break;
+                            }
+                            ImGui::Text("%s", t);
+
+                            ImGui::TableNextColumn();
+                            ImGui::Text("%zu", p.reads.size());
+                            if (ImGui::IsItemHovered()) {
+                                ImGui::BeginTooltip();
+                                for (auto& r : p.reads) ImGui::BulletText("%s", r.c_str());
+                                ImGui::EndTooltip();
+                            }
+
+                            ImGui::TableNextColumn();
+                            ImGui::Text("%zu", p.writes.size());
+                            if (ImGui::IsItemHovered()) {
+                                ImGui::BeginTooltip();
+                                for (auto& w : p.writes) ImGui::BulletText("%s", w.c_str());
+                                ImGui::EndTooltip();
+                            }
+
+                            ImGui::TableNextColumn();
+                            ImGui::Text("%zu", p.deps.size());
+                            if (ImGui::IsItemHovered() && !p.deps.empty()) {
+                                ImGui::BeginTooltip();
+                                for (auto& d : p.deps) ImGui::BulletText("%s", d.c_str());
+                                ImGui::EndTooltip();
+                            }
                         }
-                        ImGui::Text("%s [%s] %s order=%u reads=%zu writes=%zu",
-                            p.culled ? "[CULLED]" : "", typeStr,
-                            p.name.c_str(), p.execOrder,
-                            p.reads.size(), p.writes.size());
+                        ImGui::EndTable();
                     }
                 }
-                if (fgDebug.showAliasGroups && ImGui::CollapsingHeader("Alias Groups")) {
+
+                // ---- 资源寿命图 ----
+                if (ImGui::CollapsingHeader("Resources")) {
+                    if (ImGui::BeginTable("##fgrestable", 6,
+                            ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY)) {
+                        ImGui::TableSetupColumn("Name");
+                        ImGui::TableSetupColumn("Type");
+                        ImGui::TableSetupColumn("Size");
+                        ImGui::TableSetupColumn("First");
+                        ImGui::TableSetupColumn("Last");
+                        ImGui::TableSetupColumn("Imported");
+                        ImGui::TableHeadersRow();
+
+                        uint32_t maxPass = 0;
+                        for (auto& p : fgDebug.passes)
+                            if (!p.culled && p.execOrder > maxPass) maxPass = p.execOrder;
+
+                        for (auto& r : fgDebug.resources) {
+                            ImGui::TableNextRow();
+                            ImGui::TableNextColumn(); ImGui::Text("%s", r.name.c_str());
+                            ImGui::TableNextColumn();
+                            ImGui::Text("%s", r.type == somegi::fg::FGResourceType::Texture ? "Tex" : "Buf");
+                            ImGui::TableNextColumn();
+                            if (r.sizeBytes >= 1024*1024) ImGui::Text("%.1f MB", r.sizeBytes / (1024.0f*1024.0f));
+                            else ImGui::Text("%u KB", r.sizeBytes / 1024);
+                            ImGui::TableNextColumn();
+                            ImGui::Text("%u", r.firstWritePass);
+                            ImGui::TableNextColumn();
+                            ImGui::Text("%u", r.lastReadPass);
+                            ImGui::TableNextColumn();
+                            ImGui::Text("%s", r.isImported ? "Y" : "");
+                        }
+                        ImGui::EndTable();
+                    }
+                }
+
+                // ---- 别名组 ----
+                if (!fgDebug.aliasGroups.empty() && ImGui::CollapsingHeader("Alias Groups")) {
                     for (auto& ag : fgDebug.aliasGroups) {
-                        ImGui::Text("Group %u: %u bytes (%u wasted)",
-                            ag.id, ag.totalBytes, ag.wastedBytes);
-                        for (auto& m : ag.members) {
+                        ImGui::Text("Group %u: %u KB (%u KB wasted)",
+                            ag.id, ag.totalBytes / 1024, ag.wastedBytes / 1024);
+                        for (auto& m : ag.members)
                             ImGui::BulletText("%s", m.c_str());
-                        }
                     }
+                } else if (ImGui::CollapsingHeader("Alias Groups")) {
+                    ImGui::TextDisabled("No alias groups (all lifetimes overlap, or no managed resources)");
                 }
+
                 ImGui::TreePop();
             }
         }
