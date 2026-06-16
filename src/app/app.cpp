@@ -3434,7 +3434,7 @@ void App::run() {
 
         // ---- Begin command buffer ----
         VkCommandBuffer cmd = m_cmds[frame.frameInFlight];
-        vkResetCommandBuffer(cmd, 0);
+        vkResetCommandBuffer(cmd, VK_COMMAND_BUFFER_RESET_RELEASE_RESOURCES_BIT);
         VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
         bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
         VK_CHECK(vkBeginCommandBuffer(cmd, &bi));
@@ -3485,13 +3485,10 @@ void App::run() {
 
         // ---- Execute render pipeline ----
         if (m_useFrameGraph) {
-            // FrameGraph 编译（DAG 分析 + 调试数据）
             m_fg.reset();
             m_fg.setAutoBarriers(true);
             setupFrameGraph();
             m_fg.compile();
-
-            // 渲染使用旧管线；execute 在 device lost 修复后启用
             buildPipelineTable();
             m_renderer.pipeline().execute(cmd);
         } else {
