@@ -4,6 +4,7 @@
 #include "fg_pass_node.h"
 #include "fg_resource_node.h"
 #include "fg_resources.h"
+#include <unordered_set>
 #include "core/device.h"
 #include "core/image.h"
 #include "core/buffer.h"
@@ -299,8 +300,50 @@ void FGExecutor::emitBarriers(VkCommandBuffer cmd,
         }
     };
 
-    for (auto& ref : pass.reads)  addBarrier(ref);
-    for (auto& ref : pass.writes) addBarrier(ref);
+    // 收集同一资源同时出现在 reads 和 writes 中的情况（readWrite 模式），
+    // 合并为单个 barrier 避免重复
+    std::unordered_set<FGResourceNode*> merged;
+    for (auto& wref : pass.writes) {
+        if (!wref.resource) continue;
+        for (auto& rref : pass.reads) {
+            if (rref.resource == wref.resource) {
+                merged.insert(wref.resource);
+
+                // 为合并的 read+write 发射单个 barrier：GENERAL + R/W access
+                VkImageLayout targetLayout = VK_IMAGE_LAYOUT_GENERAL;
+                VkAccessFlags2 access = VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+                VkPipelineStageFlags2 stages = wref.stages;
+
+                auto* res = wref.resource;
+                VkImageLayout currentLayout = res->state.layout;
+                bool prevManual = res->state.lastWriter && res->state.lastWriter->usesManualBarriers;
+                if (currentLayout != targetLayout || res->state.access != access || prevManual) {
+                    VkImageLayout oldLayout = (!prevManual || currentLayout != VK_IMAGE_LAYOUT_UNDEFINED)
+                        ? currentLayout : VK_IMAGE_LAYOUT_UNDEFINED;
+                    VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+                    b.srcStageMask = res->state.stage; b.srcAccessMask = res->state.access;
+                    b.dstStageMask = stages; b.dstAccessMask = access;
+                    b.oldLayout = oldLayout; b.newLayout = targetLayout;
+                    b.image = res->physicalTexture ? res->physicalTexture->image() : res->importedImage;
+                    b.subresourceRange = {static_cast<VkImageAspectFlags>(
+                        (res->desc.texture.usage & VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT)
+                            ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_COLOR_BIT),
+                        0, res->desc.texture.mipLevels, 0, res->desc.texture.arrayLayers};
+                    imgBarriers.push_back(b);
+                }
+                break;
+            }
+        }
+    }
+
+    for (auto& ref : pass.reads) {
+        if (merged.count(ref.resource)) continue;
+        addBarrier(ref);
+    }
+    for (auto& ref : pass.writes) {
+        if (merged.count(ref.resource)) continue;
+        addBarrier(ref);
+    }
 
     if (!imgBarriers.empty() || !bufBarriers.empty()) {
         VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
