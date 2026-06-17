@@ -784,7 +784,7 @@ void App::onSwapchainResized() {
     m_renderer.restirPass().bindResources(*m_device, m_renderer.restir(), m_renderer.vxgi(), m_renderer.rt(), m_renderer.gbuffer().frameUboHandle());
     m_renderer.restirOutInited() = false;
     m_renderer.restirBootstrapped() = false;
-    m_renderer.rsmSample().bindFrame(*m_device, m_renderer.rt(),
+    m_renderer.rsmSample().bindFrame(m_renderer.rt(),
         m_renderer.gbuffer().frameUboHandle(),
         m_renderer.rsmGeom().frameUboHandle(),
         m_renderer.rsmGeom().position(), m_renderer.rsmGeom().normal(), m_renderer.rsmGeom().flux());

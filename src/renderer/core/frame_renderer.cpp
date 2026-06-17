@@ -63,7 +63,7 @@ void FrameRenderer::init(Device& d, VkCommandPool pool, VkExtent2D extent,
     std::printf("[init] rsm geometry pass...\n");
     m_rsmGeom.init(d, 128);
     std::printf("[init] rsm sample pass...\n");
-    m_rsmSample.init(d);
+    m_rsmSample.init(*m_rhiDevice);
 
     // GI resources
     std::printf("[init] lpv resources...\n");
@@ -139,7 +139,7 @@ void FrameRenderer::init(Device& d, VkCommandPool pool, VkExtent2D extent,
     }
     m_restirPass.bindResources(d, m_restir, m_vxgi, m_rt, m_gbuffer.frameUboHandle());
 
-    m_rsmSample.bindFrame(d, m_rt, m_gbuffer.frameUboHandle(),
+    m_rsmSample.bindFrame(m_rt, m_gbuffer.frameUboHandle(),
         m_rsmGeom.frameUboHandle(),
         m_rsmGeom.position(), m_rsmGeom.normal(), m_rsmGeom.flux());
 
@@ -269,7 +269,7 @@ void FrameRenderer::onResize(Device& d, VkExtent2D newExtent,
     m_restirPass.bindResources(d, m_restir, m_vxgi, m_rt, m_gbuffer.frameUboHandle());
     m_restirOutInited = false;
     m_restirBootstrapped = false;
-    m_rsmSample.bindFrame(d, m_rt, m_gbuffer.frameUboHandle(),
+    m_rsmSample.bindFrame(m_rt, m_gbuffer.frameUboHandle(),
         m_rsmGeom.frameUboHandle(),
         m_rsmGeom.position(), m_rsmGeom.normal(), m_rsmGeom.flux());
     if (m_rtSupported) {
