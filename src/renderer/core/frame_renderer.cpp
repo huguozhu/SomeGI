@@ -182,7 +182,7 @@ void FrameRenderer::init(Device& d, VkCommandPool pool, VkExtent2D extent,
     // linearSampler comes from SceneGpu — caller sets after scene load
     std::printf("[init] aa passes...\n");
     m_taa.init(*m_rhiDevice);
-    m_smaa.init(d, extent);
+    m_smaa.init(d, *m_rhiDevice, extent);
     std::printf("[init] imgui pass...\n");
 
     m_cullPass.init(d, *m_rhiDevice, 4096);

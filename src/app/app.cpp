@@ -516,7 +516,7 @@ void App::applySceneSelection() {
         if (m_aaMethod == AAMethod::TAA || m_aaMethod == AAMethod::SMAA) {
             m_renderer.rt().ensureAaResources(*m_device);
             m_renderer.taa().bindResources(m_renderer.rt(), 0);
-            m_renderer.smaa().bindResources(*m_device, m_renderer.rt());
+            m_renderer.smaa().bindResources(m_renderer.rt());
         }
     }
 
@@ -726,7 +726,7 @@ void App::startBenchmark() {
             if (m_aaMethod == AAMethod::TAA || m_aaMethod == AAMethod::SMAA) {
                 m_renderer.rt().ensureAaResources(*m_device);
                 m_renderer.taa().bindResources(m_renderer.rt(), 0);
-                m_renderer.smaa().bindResources(*m_device, m_renderer.rt());
+                m_renderer.smaa().bindResources(m_renderer.rt());
                 m_renderer.aaHistoryNeedsInit() = true;
             } else {
                 m_renderer.rt().destroyAaResources();
@@ -752,7 +752,7 @@ void App::tickBenchmark(float dt) {
             if (m_aaMethod == AAMethod::TAA || m_aaMethod == AAMethod::SMAA) {
                 m_renderer.rt().ensureAaResources(*m_device);
                 m_renderer.taa().bindResources(m_renderer.rt(), 0);
-                m_renderer.smaa().bindResources(*m_device, m_renderer.rt());
+                m_renderer.smaa().bindResources(m_renderer.rt());
                 m_renderer.aaHistoryNeedsInit() = true;
             } else {
                 m_renderer.rt().destroyAaResources();
@@ -821,8 +821,8 @@ void App::onSwapchainResized() {
         m_renderer.rt().ensureAaResources(*m_device);
         m_renderer.taa().bindResources(m_renderer.rt(), 0);
         m_renderer.smaa().destroy();
-        m_renderer.smaa().init(*m_device, m_swap->extent());
-        m_renderer.smaa().bindResources(*m_device, m_renderer.rt());
+        m_renderer.smaa().init(*m_device, *m_renderer.rhiDevice(), m_swap->extent());
+        m_renderer.smaa().bindResources(m_renderer.rt());
     }
     m_renderer.bootstrapHdrPrev();   // fresh hdrPrev image — clear it before SSR can read
     m_renderer.bootstrapSsgiTemporal();
@@ -1222,7 +1222,7 @@ void App::buildUI() {
                             if (m_aaMethod == AAMethod::TAA || m_aaMethod == AAMethod::SMAA) {
                                 m_renderer.rt().ensureAaResources(*m_device);
                                 m_renderer.taa().bindResources(m_renderer.rt(), 0);
-                                m_renderer.smaa().bindResources(*m_device, m_renderer.rt());
+                                m_renderer.smaa().bindResources(m_renderer.rt());
                             } else {
                                 m_renderer.rt().destroyAaResources();
                                 m_renderer.tonemap().bindOutput(m_renderer.rt().ldrTonemap.view(), 0);
@@ -3453,8 +3453,8 @@ void App::recordPostProcessing(VkCommandBuffer cmd) {
                         VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
                         VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
                 } else {
-                    m_renderer.smaa().bindResources(*m_device, m_renderer.rt());
-                    m_renderer.smaa().bindOutput(*m_device, m_frameCtx.swapView);
+                    m_renderer.smaa().bindResources(m_renderer.rt());
+                    m_renderer.smaa().bindOutput(m_frameCtx.swapView);
                     m_renderer.smaa().record(cmd, m_renderer.rt());
                 }
                 writeTimestamp(cmd, m_renderer.kTsAA);
@@ -3545,7 +3545,7 @@ void App::recordPostProcessing(VkCommandBuffer cmd) {
                     VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
                     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
             } else {
-                m_renderer.smaa().bindResources(*m_device, m_renderer.rt());
+                m_renderer.smaa().bindResources(m_renderer.rt());
                 m_renderer.smaa().record(cmd, m_renderer.rt());
             }
             writeTimestamp(cmd, m_renderer.kTsAA);
@@ -5040,8 +5040,8 @@ void App::setupFrameGraph() {
                 b.read(m_fgh.aaHdr, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
                 b.write(m_fgh.swapImage, VK_IMAGE_LAYOUT_GENERAL);
                 b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
-                    m_renderer.smaa().bindResources(*m_device, m_renderer.rt());
-                    m_renderer.smaa().bindOutput(*m_device, m_frameCtx.swapView);
+                    m_renderer.smaa().bindResources(m_renderer.rt());
+                    m_renderer.smaa().bindOutput(m_frameCtx.swapView);
                     m_renderer.smaa().record(cmd, m_renderer.rt());
                 });
             });
