@@ -1,177 +1,74 @@
+// LpvInjectPass RHI — 7 bindings: 3 RSM + 3 LPV + GV storage。
+// barrier/clear 通过 nativeHandle 桥接（操作 VkImage，非 RHI 管理）。
+
 #include "renderer/gi/lpv/lpv_inject_pass.h"
 #include "core/device.h"
+#include "rhi/base/device.h"
+#include "rhi/base/descriptor.h"
+#include "rhi/base/pipeline_state.h"
+#include "rhi/base/command_buffer.h"
+#include "rhi/vulkan/vk_device.h"
+#include "rhi/vulkan/vk_shader.h"
+#include "rhi/vulkan/vk_texture.h"
+#include "rhi/vulkan/vk_command.h"
 #include "core/shader.h"
 #include <array>
 
 namespace somegi {
+namespace { struct InjectPC { uint32_t rsmSizeX,rsmSizeY,gridRes,_pad; float gridMinX,gridMinY,gridMinZ,cellSize; };
+static_assert(sizeof(InjectPC)==32); }
 
-namespace {
-struct InjectPC {
-    uint32_t rsmSizeX, rsmSizeY;
-    uint32_t gridResolution;
-    uint32_t _pad0;
-    float    gridMinX, gridMinY, gridMinZ;
-    float    cellSize;
-};
-static_assert(sizeof(InjectPC) == 32, "InjectPC must match shader push constant layout");
+LpvInjectPass::~LpvInjectPass() = default;
+
+void LpvInjectPass::init(rhi::RHIDevice& d, uint32_t rsmSize) {
+    m_rhiDevice=&d; m_rsmSize=rsmSize;
+    rhi::DescSetLayoutDesc ld; ld.debugName="LpvInject";
+    ld.bindings={{0,rhi::DescriptorType::SampledImage,1,rhi::ShaderStage::Compute},{1,rhi::DescriptorType::SampledImage,1,rhi::ShaderStage::Compute},{2,rhi::DescriptorType::SampledImage,1,rhi::ShaderStage::Compute},{3,rhi::DescriptorType::StorageImage,1,rhi::ShaderStage::Compute},{4,rhi::DescriptorType::StorageImage,1,rhi::ShaderStage::Compute},{5,rhi::DescriptorType::StorageImage,1,rhi::ShaderStage::Compute},{6,rhi::DescriptorType::StorageImage,1,rhi::ShaderStage::Compute}};
+    m_setLayout=d.createDescriptorSetLayout(ld); m_set=d.createDescriptorSet(*m_setLayout);
+    auto& vkD=static_cast<rhi::VkRHIDevice&>(d);
+    rhi::ShaderDesc sd; sd.stage=rhi::ShaderStage::Compute; sd.entryPoint="cs_main";
+    auto sh=rhi::VkRHIShader::createFromFile(vkD,sd,shaderDir()/"gi"/"lpv"/"lpv_inject.spv");
+    rhi::ComputePSODesc pd; pd.debugName="LpvInject"; pd.computeShader=sh.get(); pd.descriptorSetLayouts={m_setLayout.get()}; pd.pushConstants={{rhi::ShaderStage::Compute,0,sizeof(InjectPC)}};
+    m_pipeline=d.createComputePSO(pd);
 }
 
-void LpvInjectPass::init(Device& d, uint32_t rsmSize) {
-    m_device = &d;
-    m_rsmSize = rsmSize;
+void LpvInjectPass::destroy() { m_set.reset(); m_pipeline.reset(); m_setLayout.reset(); m_rhiDevice=nullptr; }
 
-    // set=0 layout：3 sampled (RSM) + 3 storage (LPV)。
-    // 0..2: RSM sampled, 3..5: LPV R/G/B storage, 6: GV storage (B.8)
-    std::array<VkDescriptorSetLayoutBinding, 7> b{};
-    for (uint32_t i = 0; i < 7; ++i) {
-        b[i].binding = i;
-        b[i].descriptorCount = 1;
-        b[i].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-        b[i].descriptorType = (i < 3) ? VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE
-                                      : VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+void LpvInjectPass::bindResources(const Image& rsmPos, const Image& rsmN, const Image& rsmFlux, const LpvGrid& grid, const Image& gv) {
+    if(!m_set)return; auto& vkD=static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
+    m_set->write({
+        {0,rhi::DescriptorType::SampledImage,rhi::VkRHITextureView::createNonOwning(vkD,rsmPos.view()).get()},
+        {1,rhi::DescriptorType::SampledImage,rhi::VkRHITextureView::createNonOwning(vkD,rsmN.view()).get()},
+        {2,rhi::DescriptorType::SampledImage,rhi::VkRHITextureView::createNonOwning(vkD,rsmFlux.view()).get()},
+        {3,rhi::DescriptorType::StorageImage,rhi::VkRHITextureView::createNonOwning(vkD,grid.lpvR.view()).get()},
+        {4,rhi::DescriptorType::StorageImage,rhi::VkRHITextureView::createNonOwning(vkD,grid.lpvG.view()).get()},
+        {5,rhi::DescriptorType::StorageImage,rhi::VkRHITextureView::createNonOwning(vkD,grid.lpvB.view()).get()},
+        {6,rhi::DescriptorType::StorageImage,rhi::VkRHITextureView::createNonOwning(vkD,gv.view()).get()},
+    });
+    m_lpvR=&grid.lpvR; m_lpvG=&grid.lpvG; m_lpvB=&grid.lpvB; m_gv=&gv;
+}
+
+void LpvInjectPass::record(rhi::RHICommandBuffer& cmd, uint32_t gr, const glm::vec3& gMin, float cs) {
+    if(!m_pipeline||!m_set)return;
+    VkCommandBuffer vkCmd=(VkCommandBuffer)(uintptr_t)cmd.nativeHandle();
+    auto barr=[&](VkImage img,VkImageLayout oldL,VkImageLayout newL,VkPipelineStageFlags2 ss,VkAccessFlags2 sa,VkPipelineStageFlags2 ds,VkAccessFlags2 da){
+        VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2}; b.srcStageMask=ss; b.srcAccessMask=sa; b.dstStageMask=ds; b.dstAccessMask=da; b.oldLayout=oldL; b.newLayout=newL; b.image=img; b.subresourceRange={VK_IMAGE_ASPECT_COLOR_BIT,0,1,0,1};
+        VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO}; di.imageMemoryBarrierCount=1; di.pImageMemoryBarriers=&b; vkCmdPipelineBarrier2(vkCmd,&di);
+    };
+    VkImage imgs[4]={m_lpvR->image(),m_lpvG->image(),m_lpvB->image(),m_gv->image()};
+    for(auto img:imgs){
+        barr(img,VK_IMAGE_LAYOUT_UNDEFINED,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT,0,VK_PIPELINE_STAGE_2_CLEAR_BIT,VK_ACCESS_2_TRANSFER_WRITE_BIT);
+        VkClearColorValue zero{}; VkImageSubresourceRange r{VK_IMAGE_ASPECT_COLOR_BIT,0,1,0,1};
+        vkCmdClearColorImage(vkCmd,img,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,&zero,1,&r);
+        barr(img,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,VK_IMAGE_LAYOUT_GENERAL,VK_PIPELINE_STAGE_2_CLEAR_BIT,VK_ACCESS_2_TRANSFER_WRITE_BIT,VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
     }
-
-    VkDescriptorSetLayoutCreateInfo li{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-    li.bindingCount = (uint32_t)b.size(); li.pBindings = b.data();
-    VK_CHECK(vkCreateDescriptorSetLayout(d.device(), &li, nullptr, &m_setLayout));
-
-    std::array<VkDescriptorPoolSize, 2> ps{{
-        {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 3},
-        {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 4},   // +1 for GV
-    }};
-    VkDescriptorPoolCreateInfo pci{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
-    pci.maxSets = 1; pci.poolSizeCount = (uint32_t)ps.size(); pci.pPoolSizes = ps.data();
-    VK_CHECK(vkCreateDescriptorPool(d.device(), &pci, nullptr, &m_pool));
-
-    VkDescriptorSetAllocateInfo dai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
-    dai.descriptorPool = m_pool; dai.descriptorSetCount = 1; dai.pSetLayouts = &m_setLayout;
-    VK_CHECK(vkAllocateDescriptorSets(d.device(), &dai, &m_set));
-
-    VkPushConstantRange pc{};
-    pc.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-    pc.size = sizeof(InjectPC);
-    VkPipelineLayoutCreateInfo plci{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
-    plci.setLayoutCount = 1; plci.pSetLayouts = &m_setLayout;
-    plci.pushConstantRangeCount = 1; plci.pPushConstantRanges = &pc;
-    VK_CHECK(vkCreatePipelineLayout(d.device(), &plci, nullptr, &m_pipelineLayout));
-
-    ShaderModule cs(d, shaderDir() / "gi" / "lpv" / "lpv_inject.spv");
-    VkPipelineShaderStageCreateInfo stage{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
-    stage.stage = VK_SHADER_STAGE_COMPUTE_BIT; stage.module = cs.handle(); stage.pName = "cs_main";
-    VkComputePipelineCreateInfo cpci{VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
-    cpci.stage = stage; cpci.layout = m_pipelineLayout;
-    VK_CHECK(vkCreateComputePipelines(d.device(), VK_NULL_HANDLE, 1, &cpci, nullptr, &m_pipeline));
+    cmd.bindPipelineState(*m_pipeline); cmd.bindDescriptorSet(0,*m_set);
+    InjectPC pc{(uint32_t)m_rsmSize,(uint32_t)m_rsmSize,gr,0,gMin.x,gMin.y,gMin.z,cs};
+    cmd.pushConstants(rhi::ShaderStage::Compute,&pc,sizeof(pc));
+    cmd.dispatch((m_rsmSize+7)/8,(m_rsmSize+7)/8,1);
 }
 
-void LpvInjectPass::destroy() {
-    if (!m_device) return;
-    auto dev = m_device->device();
-    if (m_pipeline)       vkDestroyPipeline(dev, m_pipeline, nullptr);
-    if (m_pipelineLayout) vkDestroyPipelineLayout(dev, m_pipelineLayout, nullptr);
-    if (m_pool)           vkDestroyDescriptorPool(dev, m_pool, nullptr);
-    if (m_setLayout)      vkDestroyDescriptorSetLayout(dev, m_setLayout, nullptr);
-    m_pipeline = VK_NULL_HANDLE; m_pipelineLayout = VK_NULL_HANDLE;
-    m_pool = VK_NULL_HANDLE; m_setLayout = VK_NULL_HANDLE;
-    m_device = nullptr;
-    m_lpvR = m_lpvG = m_lpvB = m_gv = VK_NULL_HANDLE;
+void LpvInjectPass::record(VkCommandBuffer vkCmd, uint32_t gr, const glm::vec3& gMin, float cs) {
+    rhi::VkRHICommandBuffer rhiCmd(static_cast<rhi::VkRHIDevice&>(*m_rhiDevice),vkCmd); record(rhiCmd,gr,gMin,cs);
 }
-
-void LpvInjectPass::bindResources(Device& d,
-                                  const Image& rsmPos, const Image& rsmN, const Image& rsmFlux,
-                                  const LpvGrid& grid, const Image& gv) {
-    auto sampledRO = [](VkImageView v) {
-        VkDescriptorImageInfo i{};
-        i.imageView = v; i.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        return i;
-    };
-    auto storageGen = [](VkImageView v) {
-        VkDescriptorImageInfo i{};
-        i.imageView = v; i.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-        return i;
-    };
-    VkDescriptorImageInfo rp = sampledRO(rsmPos.view());
-    VkDescriptorImageInfo rn = sampledRO(rsmN.view());
-    VkDescriptorImageInfo rf = sampledRO(rsmFlux.view());
-    VkDescriptorImageInfo lr = storageGen(grid.lpvR.view());
-    VkDescriptorImageInfo lg = storageGen(grid.lpvG.view());
-    VkDescriptorImageInfo lb = storageGen(grid.lpvB.view());
-    VkDescriptorImageInfo gvI = storageGen(gv.view());
-
-    std::array<VkWriteDescriptorSet, 7> w{};
-    auto setImg = [&](VkWriteDescriptorSet& W, uint32_t bi, VkDescriptorType t, const VkDescriptorImageInfo* p) {
-        W = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-        W.dstSet = m_set; W.dstBinding = bi; W.descriptorCount = 1;
-        W.descriptorType = t; W.pImageInfo = p;
-    };
-    setImg(w[0], 0, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, &rp);
-    setImg(w[1], 1, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, &rn);
-    setImg(w[2], 2, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, &rf);
-    setImg(w[3], 3, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, &lr);
-    setImg(w[4], 4, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, &lg);
-    setImg(w[5], 5, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, &lb);
-    setImg(w[6], 6, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, &gvI);
-    vkUpdateDescriptorSets(d.device(), (uint32_t)w.size(), w.data(), 0, nullptr);
-
-    m_lpvR = grid.lpvR.image();
-    m_lpvG = grid.lpvG.image();
-    m_lpvB = grid.lpvB.image();
-    m_gv   = gv.image();
-}
-
-void LpvInjectPass::record(VkCommandBuffer cmd, uint32_t gridResolution,
-                           const glm::vec3& gridMin, float cellSize) {
-    // 1. clear 三张 grid image 到 0。它们必须先转 TRANSFER_DST_OPTIMAL，
-    //    clear 后再转回 GENERAL 给 dispatch 写。这里 oldLayout 用 UNDEFINED
-    //    —— 上一帧结束 grid 是 SHADER_READ_ONLY（lighting 读完）或第一帧
-    //    UNDEFINED；都允许 discard。
-    auto barr = [&](VkImage img, VkImageLayout oldL, VkImageLayout newL,
-                    VkPipelineStageFlags2 srcStg, VkAccessFlags2 srcAcc,
-                    VkPipelineStageFlags2 dstStg, VkAccessFlags2 dstAcc) {
-        VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
-        b.srcStageMask = srcStg; b.srcAccessMask = srcAcc;
-        b.dstStageMask = dstStg; b.dstAccessMask = dstAcc;
-        b.oldLayout = oldL; b.newLayout = newL;
-        b.image = img;
-        b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-        VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-        di.imageMemoryBarrierCount = 1; di.pImageMemoryBarriers = &b;
-        vkCmdPipelineBarrier2(cmd, &di);
-    };
-    auto clear = [&](VkImage img) {
-        VkClearColorValue zero{};
-        VkImageSubresourceRange r{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-        vkCmdClearColorImage(cmd, img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                             &zero, 1, &r);
-    };
-
-    VkImage imgs[4] = {m_lpvR, m_lpvG, m_lpvB, m_gv};
-    for (auto img : imgs) {
-        barr(img, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-             VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
-             VK_PIPELINE_STAGE_2_CLEAR_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
-        clear(img);
-        barr(img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL,
-             VK_PIPELINE_STAGE_2_CLEAR_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
-             VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-             VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
-    }
-
-    // 2. dispatch inject。
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipeline);
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
-        m_pipelineLayout, 0, 1, &m_set, 0, nullptr);
-
-    InjectPC pc{};
-    pc.rsmSizeX = m_rsmSize; pc.rsmSizeY = m_rsmSize;
-    pc.gridResolution = gridResolution;
-    pc.gridMinX = gridMin.x; pc.gridMinY = gridMin.y; pc.gridMinZ = gridMin.z;
-    pc.cellSize = cellSize;
-    vkCmdPushConstants(cmd, m_pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT,
-                       0, sizeof(pc), &pc);
-
-    uint32_t gx = (m_rsmSize + 7) / 8;
-    uint32_t gy = (m_rsmSize + 7) / 8;
-    vkCmdDispatch(cmd, gx, gy, 1);
-}
-
-}
+} // namespace somegi

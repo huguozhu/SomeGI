@@ -144,7 +144,7 @@ void FrameRenderer::init(Device& d, VkCommandPool pool, VkExtent2D extent,
         m_rsmGeom.position(), m_rsmGeom.normal(), m_rsmGeom.flux());
 
     std::printf("[init] lpv inject pass...\n");
-    m_lpvInject.init(d, RsmGeometryPass::kRsmSize);
+    m_lpvInject.init(*m_rhiDevice, RsmGeometryPass::kRsmSize);
 
     std::printf("[init] vxgi voxelize/inject/mipmap pass...\n");
     m_vxgiVoxelize.init(d, 128);
@@ -166,7 +166,7 @@ void FrameRenderer::init(Device& d, VkCommandPool pool, VkExtent2D extent,
     std::printf("[init] prt bake pass...\n");
     m_prtBake.init(d);
     m_prtBake.bindResources(d, m_vxgi, m_prt);
-    m_lpvInject.bindResources(d, m_rsmGeom.position(), m_rsmGeom.normal(),
+    m_lpvInject.bindResources(m_rsmGeom.position(), m_rsmGeom.normal(),
                               m_rsmGeom.flux(), m_lpv.current(), m_lpv.gv());
     std::printf("[init] lpv propagate pass...\n");
     m_lpvProp.init(*m_rhiDevice);
