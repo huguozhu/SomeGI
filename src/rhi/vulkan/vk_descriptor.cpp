@@ -74,7 +74,7 @@ std::unique_ptr<RHIDescriptorSet> VkRHIDescSet::create(VkRHIDevice& device, cons
     std::map<VkDescriptorType, uint32_t> typeCounts;
     for (auto& b : layoutDesc.bindings) {
         VkDescriptorType vt = toVkDescType(b.type);
-        typeCounts[vt] = std::max(typeCounts[vt], b.count);  // 取最大 count
+        typeCounts[vt] += b.count;  // 累加同类型的所有 binding count
     }
     std::vector<VkDescriptorPoolSize> poolSizes;
     for (auto& [vt, cnt] : typeCounts)
