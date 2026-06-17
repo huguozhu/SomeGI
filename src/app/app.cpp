@@ -4728,7 +4728,6 @@ void App::setupFrameGraph() {
                 m_renderer.rt().ensureAaResources(*m_device);
                 m_renderer.tonemap().bindOutput(*m_device, m_renderer.rt().aaHdr.view(), m_frameCtx.frameInFlight);
                 m_renderer.tonemap().record(cmd, m_renderer.rt(), m_frameCtx.frameInFlight, true, 1.0f);
-                writeTimestamp(cmd, m_renderer.kTsTonemap);
             });
         });
 
@@ -4746,7 +4745,6 @@ void App::setupFrameGraph() {
                     m_renderer.taa().bindOutput(*m_device, m_frameCtx.swapView, m_frameCtx.frameInFlight);
                     m_renderer.taa().record(cmd, m_renderer.rt(), m_jitter, m_prevJitter,
                         m_frameCtx.invViewProj, m_prevViewProj, m_frameCtx.frameInFlight, m_taaBlendAlpha);
-                    writeTimestamp(cmd, m_renderer.kTsAA);
                 });
             });
 
@@ -4776,7 +4774,6 @@ void App::setupFrameGraph() {
                     m_renderer.smaa().bindResources(*m_device, m_renderer.rt());
                     m_renderer.smaa().bindOutput(*m_device, m_frameCtx.swapView);
                     m_renderer.smaa().record(cmd, m_renderer.rt());
-                    writeTimestamp(cmd, m_renderer.kTsAA);
                 });
             });
         }
