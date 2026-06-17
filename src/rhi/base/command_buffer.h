@@ -72,8 +72,9 @@ public:
     virtual void copyBuffer(const RHIBuffer& src, const RHIBuffer& dst, uint64_t size,
                             uint64_t srcOffset = 0, uint64_t dstOffset = 0) = 0;
     virtual void copyTexture(const RHITexture& src, const RHITexture& dst) = 0;
-    virtual void clearColor(const RHITextureView& view, float r, float g, float b, float a) = 0;
-    virtual void clearDepth(const RHITextureView& view, float depth, uint32_t stencil = 0) = 0;
+    // clearColor/clearDepth 需要 VkImage（非 VkImageView），因此接受 RHITexture
+    virtual void clearColor(const RHITexture& tex, float r, float g, float b, float a) = 0;
+    virtual void clearDepth(const RHITexture& tex, float depth, uint32_t stencil = 0) = 0;
 
     // ── Barrier ──
     // 纹理屏障（自动推断阶段和访问掩码）

@@ -59,8 +59,20 @@ std::unique_ptr<RHIPipelineState> VkRHIPipelineState::createGraphics(VkRHIDevice
     std::vector<VkVertexInputAttributeDescription> attrs;
     for (auto& b : desc.vertexInput.bindings)
         bindings.push_back({b.binding, b.stride, b.perInstance ? VK_VERTEX_INPUT_RATE_INSTANCE : VK_VERTEX_INPUT_RATE_VERTEX});
-    for (auto& a : desc.vertexInput.attributes)
-        attrs.push_back({a.location, a.binding, VK_FORMAT_R32G32B32_SFLOAT, a.offset}); // simplified
+    for (auto& a : desc.vertexInput.attributes) {
+        VkFormat vkFmt = VK_FORMAT_UNDEFINED;
+        switch (a.format) {
+            case VertexFormat::Float:  vkFmt = VK_FORMAT_R32_SFLOAT; break;
+            case VertexFormat::Float2: vkFmt = VK_FORMAT_R32G32_SFLOAT; break;
+            case VertexFormat::Float3: vkFmt = VK_FORMAT_R32G32B32_SFLOAT; break;
+            case VertexFormat::Float4: vkFmt = VK_FORMAT_R32G32B32A32_SFLOAT; break;
+            case VertexFormat::Uint:   vkFmt = VK_FORMAT_R32_UINT; break;
+            case VertexFormat::Uint2:  vkFmt = VK_FORMAT_R32G32_UINT; break;
+            case VertexFormat::Uint3:  vkFmt = VK_FORMAT_R32G32B32_UINT; break;
+            case VertexFormat::Uint4:  vkFmt = VK_FORMAT_R32G32B32A32_UINT; break;
+        }
+        attrs.push_back({a.location, a.binding, vkFmt, a.offset});
+    }
     vi.vertexBindingDescriptionCount = (uint32_t)bindings.size();
     vi.pVertexBindingDescriptions = bindings.data();
     vi.vertexAttributeDescriptionCount = (uint32_t)attrs.size();

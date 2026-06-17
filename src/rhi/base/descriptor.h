@@ -32,6 +32,9 @@ struct DescriptorBinding {
 struct DescSetLayoutDesc {
     std::vector<DescriptorBinding> bindings;
     const char* debugName = nullptr;
+    bool updateAfterBind = false;  // VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT
+    // 单个 binding 的 UPDATE_AFTER_BIND 标志（binding index → true）
+    std::vector<uint32_t> updateAfterBindBindings;
 };
 
 class RHIDescriptorSetLayout {

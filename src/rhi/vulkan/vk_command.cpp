@@ -161,15 +161,15 @@ void VkRHICommandBuffer::copyTexture(const RHITexture& src, const RHITexture& ds
     vkCmdCopyImage(m_cmd, (VkImage)(uintptr_t)src.nativeHandle(), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                    (VkImage)(uintptr_t)dst.nativeHandle(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
 }
-void VkRHICommandBuffer::clearColor(const RHITextureView& view, float r, float g, float b, float a) {
+void VkRHICommandBuffer::clearColor(const RHITexture& tex, float r, float g, float b, float a) {
     VkClearColorValue cv{r, g, b, a};
-    VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-    vkCmdClearColorImage(m_cmd, (VkImage)(uintptr_t)view.nativeHandle(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &cv, 1, &range);
+    VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, tex.mipLevels(), 0, 1};
+    vkCmdClearColorImage(m_cmd, (VkImage)(uintptr_t)tex.nativeHandle(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &cv, 1, &range);
 }
-void VkRHICommandBuffer::clearDepth(const RHITextureView& view, float depth, uint32_t stencil) {
+void VkRHICommandBuffer::clearDepth(const RHITexture& tex, float depth, uint32_t stencil) {
     VkClearDepthStencilValue cv{depth, stencil};
     VkImageSubresourceRange range{VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT, 0, 1, 0, 1};
-    vkCmdClearDepthStencilImage(m_cmd, (VkImage)(uintptr_t)view.nativeHandle(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &cv, 1, &range);
+    vkCmdClearDepthStencilImage(m_cmd, (VkImage)(uintptr_t)tex.nativeHandle(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &cv, 1, &range);
 }
 
 void VkRHICommandBuffer::textureBarrier(const RHITexture& tex, TextureLayout oldLayout, TextureLayout newLayout) {
