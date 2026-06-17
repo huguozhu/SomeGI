@@ -1,35 +1,22 @@
+// PrtBakePass — PRT 可见性烘焙 (Compute+sampler)，已迁移到 RHI。
 #pragma once
-#include "core/vk_common.h"
-#include "renderer/gi/vxgi/vxgi_resources.h"
-#include "renderer/gi/prt/prt_resources.h"
 #include <glm/glm.hpp>
-
-// PrtBakePass —— M8.1：一次性烘焙 PRT 体素 visibility transfer SH。
-// 算法见 shaders/gi/prt/prt_bake.slang。
-
-namespace somegi {
-class Device;
-
+#include <memory>
+#include <vulkan/vulkan.h>
+namespace somegi { class VxgiResources; class PrtResources;
+namespace rhi { class RHIDevice; class RHIDescriptorSetLayout; class RHIPipelineState; class RHIDescriptorSet; class RHICommandBuffer; }
 class PrtBakePass {
 public:
-    void init(Device& d);
+    ~PrtBakePass();
+    void init(rhi::RHIDevice& d);
     void destroy();
-    void bindResources(Device& d, const VxgiResources& vxgi, const PrtResources& prt);
-
-    // 预条件：voxelGrid 已 voxelize 且转 SHADER_READ_ONLY；prtTransfer 在 GENERAL。
-    void record(VkCommandBuffer cmd,
-                const glm::vec3& prtGridMin, float prtCellSize, uint32_t prtResolution,
-                const glm::vec3& vxgiGridMin, float vxgiCellSize, uint32_t vxgiResolution,
-                uint32_t numSamples = 64);
-
+    void bindResources(const VxgiResources& vxgi, const PrtResources& prt);
+    void record(rhi::RHICommandBuffer& cmd, const glm::vec3& prtGridMin, float prtCellSize, uint32_t prtRes, const glm::vec3& vxgiGridMin, float vxgiCellSize, uint32_t vxgiRes, uint32_t numSamples=64);
+    void record(VkCommandBuffer cmd, const glm::vec3& pgm, float pcs, uint32_t pr, const glm::vec3& vgm, float vcs, uint32_t vr, uint32_t ns=64);
 private:
-    Device* m_device = nullptr;
-    VkDescriptorSetLayout m_setLayout = VK_NULL_HANDLE;
-    VkPipelineLayout m_pipelineLayout = VK_NULL_HANDLE;
-    VkPipeline m_pipeline = VK_NULL_HANDLE;
-    VkDescriptorPool m_pool = VK_NULL_HANDLE;
-    VkDescriptorSet m_set = VK_NULL_HANDLE;
+    rhi::RHIDevice* m_rhiDevice = nullptr;
+    std::unique_ptr<rhi::RHIDescriptorSetLayout> m_setLayout;
+    std::unique_ptr<rhi::RHIPipelineState> m_pipeline;
+    std::unique_ptr<rhi::RHIDescriptorSet> m_set;
     VkSampler m_linearClamp = VK_NULL_HANDLE;
-};
-
-}
+}; } // namespace somegi

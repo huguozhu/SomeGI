@@ -164,8 +164,8 @@ void FrameRenderer::init(Device& d, VkCommandPool pool, VkExtent2D extent,
     }
 
     std::printf("[init] prt bake pass...\n");
-    m_prtBake.init(d);
-    m_prtBake.bindResources(d, m_vxgi, m_prt);
+    m_prtBake.init(*m_rhiDevice);
+    m_prtBake.bindResources(m_vxgi, m_prt);
     m_lpvInject.bindResources(m_rsmGeom.position(), m_rsmGeom.normal(),
                               m_rsmGeom.flux(), m_lpv.current(), m_lpv.gv());
     std::printf("[init] lpv propagate pass...\n");
