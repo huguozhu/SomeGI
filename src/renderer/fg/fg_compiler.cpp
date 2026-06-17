@@ -44,7 +44,8 @@ FGCompiler::CompiledGraph FGCompiler::compile(
 void FGCompiler::cullPasses(std::vector<FGPassNode*>& passes,
                              std::vector<FGResourceNode*>& resources) {
     (void)resources;
-    // 第一遍：标记 enabled=false
+
+    // 第一遍：标记 enabled=false 的 pass
     for (auto* p : passes) {
         if (p->culled) continue;
         if (!p->enabled) {
@@ -52,41 +53,85 @@ void FGCompiler::cullPasses(std::vector<FGPassNode*>& passes,
         }
     }
 
-    // 传播剔除：迭代直到稳定
-    bool changed = true;
-    while (changed) {
-        changed = false;
+    // ---- 构建资源↔Pass 关系图（O(n+e) 单次遍历） ----
+    // writersOf[r] = 写入资源 r 的所有 pass
+    std::unordered_map<FGResourceNode*, std::vector<FGPassNode*>> writersOf;
+    // consumerCount[r] = 资源 r 的外部消费者数
+    //   （不包含 write 该资源的 pass 自身的 read，即 readWrite 不算自消费）
+    std::unordered_map<FGResourceNode*, int> consumerCount;
 
-        for (auto* p : passes) {
-            if (p->culled) continue;
-
-            // 手动屏障 pass 不参与 cull：它们管理自己的私有资源，
-            // FrameGraph 不追踪这些资源的消费者关系
-            if (p->usesManualBarriers) continue;
-
-            bool anyConsumer = false;
+    for (auto* p : passes) {
+        if (p->culled) continue;
+        for (auto& w : p->writes) {
+            if (w.resource) writersOf[w.resource].push_back(p);
+        }
+        for (auto& r : p->reads) {
+            if (!r.resource) continue;
+            // 若同一 pass 也 write 此资源（readWrite），不视为外部消费者
+            bool isSelfWrite = false;
             for (auto& w : p->writes) {
-                if (!w.resource || w.resource->isImported) {
-                    anyConsumer = true;
-                    break;
-                }
-                for (auto* other : passes) {
-                    if (other == p || other->culled) continue;
-                    for (auto& r : other->reads) {
-                        if (r.resource == w.resource) {
-                            anyConsumer = true;
-                            break;
+                if (w.resource == r.resource) { isSelfWrite = true; break; }
+            }
+            if (!isSelfWrite) {
+                consumerCount[r.resource]++;  // operator[] 默认构造 0 再自增
+            }
+        }
+    }
+
+    // ---- 判断 pass 是否有外部消费者 ----
+    auto hasAnyConsumer = [&](FGPassNode* p) -> bool {
+        for (auto& w : p->writes) {
+            if (!w.resource) continue;
+            if (w.resource->isImported) return true;
+            auto it = consumerCount.find(w.resource);
+            if (it != consumerCount.end() && it->second > 0) return true;
+        }
+        return false;
+    };
+
+    // ---- 初始候选队列：所有无消费者的非 manual pass ----
+    std::queue<FGPassNode*> workQueue;
+    for (auto* p : passes) {
+        if (p->culled || p->usesManualBarriers) continue;
+        if (!hasAnyConsumer(p)) {
+            workQueue.push(p);
+        }
+    }
+
+    // ---- 传播剔除（work-queue 驱动，每 pass 最多处理一次） ----
+    while (!workQueue.empty()) {
+        auto* p = workQueue.front();
+        workQueue.pop();
+        if (p->culled) continue;  // 可能被多个资源触发重复入队
+
+        p->culled = true;
+        std::printf("[FGCompiler] culled: %s (no consumers)\n", p->name.c_str());
+
+        // 此 pass 读取的资源失去一个外部消费者
+        for (auto& r : p->reads) {
+            if (!r.resource) continue;
+            // readWrite 的同资源读不算外部消费者，已在计数时排除
+            bool isSelfWrite = false;
+            for (auto& w : p->writes) {
+                if (w.resource == r.resource) { isSelfWrite = true; break; }
+            }
+            if (isSelfWrite) continue;
+
+            auto it = consumerCount.find(r.resource);
+            if (it == consumerCount.end()) continue;
+            if (it->second > 0) it->second--;
+
+            // 若此资源不再有外部消费者，重新检查其写入者
+            if (it->second == 0 && !r.resource->isImported) {
+                auto wit = writersOf.find(r.resource);
+                if (wit != writersOf.end()) {
+                    for (auto* writer : wit->second) {
+                        if (writer->culled || writer->usesManualBarriers) continue;
+                        if (!hasAnyConsumer(writer)) {
+                            workQueue.push(writer);
                         }
                     }
-                    if (anyConsumer) break;
                 }
-                if (anyConsumer) break;
-            }
-
-            if (!anyConsumer) {
-                p->culled = true;
-                changed = true;
-                std::printf("[FGCompiler] culled: %s (no consumers)\n", p->name.c_str());
             }
         }
     }
@@ -207,11 +252,17 @@ void FGCompiler::computeAliasing(std::vector<FGResourceNode*>& resources,
             return a.sizeBytes > b.sizeBytes;
         });
 
-    // 贪心别名分配
-    for (auto& mr : managed) {
+    // 贪心别名分配 — 两阶段：
+    //   阶段1: 分配资源到组，暂存组号到局部数组
+    //   阶段2: 回写 aliasedGroup（避免 outGroups push_back 扩容导致指针/索引失效）
+    std::vector<uint32_t> assignedGroup(managed.size(), UINT32_MAX);
+
+    for (size_t i = 0; i < managed.size(); ++i) {
+        auto& mr = managed[i];
         bool placed = false;
 
-        for (auto& group : outGroups) {
+        for (size_t g = 0; g < outGroups.size(); ++g) {
+            auto& group = outGroups[g];
             bool overlap = false;
             for (auto* member : group.members) {
                 if (!(mr.resource->lastReadPass < member->firstWritePass ||
@@ -226,7 +277,7 @@ void FGCompiler::computeAliasing(std::vector<FGResourceNode*>& resources,
                 if (mr.sizeBytes > group.sizeBytes) {
                     group.sizeBytes = mr.sizeBytes;
                 }
-                mr.resource->aliasedGroup = (uint32_t)(&group - outGroups.data());
+                assignedGroup[i] = (uint32_t)g;
                 placed = true;
                 break;
             }
@@ -236,9 +287,14 @@ void FGCompiler::computeAliasing(std::vector<FGResourceNode*>& resources,
             AliasGroup newGroup;
             newGroup.sizeBytes = mr.sizeBytes;
             newGroup.members.push_back(mr.resource);
-            mr.resource->aliasedGroup = (uint32_t)outGroups.size();
+            assignedGroup[i] = (uint32_t)outGroups.size();
             outGroups.push_back(std::move(newGroup));
         }
+    }
+
+    // 阶段2: 回写 aliasedGroup（outGroups 不再变化，索引安全）
+    for (size_t i = 0; i < managed.size(); ++i) {
+        managed[i].resource->aliasedGroup = assignedGroup[i];
     }
 
     if (!outGroups.empty()) {

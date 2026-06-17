@@ -4,6 +4,7 @@
 #include "fg_pass_node.h"
 #include "fg_resource_node.h"
 #include "fg_resources.h"
+#include <algorithm>
 #include <unordered_set>
 #include "core/device.h"
 #include "core/image.h"
@@ -381,18 +382,33 @@ void FGExecutor::updateResourceStates(const FGPassNode& pass,
 // ---- 池回收 ----
 
 void FGExecutor::recycleUnused(uint64_t threshold) {
-    (void)threshold;
+    // 回收长时间未用的纹理池资源
+    // 注意：PooledTexture/PooledBuffer 持有 Image/Buffer 值对象，
+    // erase 时自动调用析构函数销毁 GPU 资源
+    m_texturePool.erase(
+        std::remove_if(m_texturePool.begin(), m_texturePool.end(),
+            [&](PooledTexture& pt) {
+                if (!pt.inUse && (m_currentFrame - pt.lastUsedFrame) > threshold) {
+                    // Image 析构函数随 PooledTexture 销毁自动释放 VkImage/VkImageView/VMA
+                    return true;
+                }
+                pt.inUse = false;  // 本帧使用的标记复位，下帧复用
+                return false;
+            }),
+        m_texturePool.end());
 
-    for (auto& pt : m_texturePool) {
-        if (pt.inUse) {
-            pt.inUse = false;
-        }
-    }
-    for (auto& pb : m_bufferPool) {
-        if (pb.inUse) {
-            pb.inUse = false;
-        }
-    }
+    // 回收长时间未用的 Buffer 池资源
+    m_bufferPool.erase(
+        std::remove_if(m_bufferPool.begin(), m_bufferPool.end(),
+            [&](PooledBuffer& pb) {
+                if (!pb.inUse && (m_currentFrame - pb.lastUsedFrame) > threshold) {
+                    // Buffer 析构函数随 PooledBuffer 销毁自动释放 VkBuffer/VMA
+                    return true;
+                }
+                pb.inUse = false;
+                return false;
+            }),
+        m_bufferPool.end());
 }
 
 // ---- 跨帧状态持久化 ----

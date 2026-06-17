@@ -30,7 +30,7 @@ FGHandle FrameGraph::importTexture(const char* name,
                                     const FGTextureDesc& desc,
                                     VkImageLayout initialLayout) {
     uint32_t idx = (uint32_t)m_resources.size();
-    FGHandle h{idx, 0};
+    FGHandle h{idx, m_resourceGeneration};
 
     FGResourceNode node;
     node.handle = h;
@@ -59,7 +59,7 @@ FGHandle FrameGraph::createBuffer(const char* name, const FGBufferDesc& desc) {
 
 FGHandle FrameGraph::addManagedResource(const FGResourceDesc& desc) {
     uint32_t idx = (uint32_t)m_resources.size();
-    FGHandle h{idx, 0};
+    FGHandle h{idx, m_resourceGeneration};
 
     FGResourceNode node;
     node.handle = h;
@@ -155,18 +155,24 @@ void FrameGraph::reset() {
     m_compiled = FGCompiler::CompiledGraph{};
     m_compiledThisFrame = false;
     m_viewCache = FGResources{};
+    ++m_resourceGeneration;  // 递增代数，使旧 FGHandle 失效
 }
 
 // ---- 资源查找 ----
 
 FGResourceNode* FrameGraph::findResource(FGHandle handle) {
     if (!handle.valid() || handle.index >= m_resources.size()) return nullptr;
-    return &m_resources[handle.index];
+    auto& res = m_resources[handle.index];
+    // 验证代数：若 handle 来自旧帧（reset 后 generation 递增），则不匹配
+    if (res.handle.generation != handle.generation) return nullptr;
+    return &res;
 }
 
 const FGResourceNode* FrameGraph::findResource(FGHandle handle) const {
     if (!handle.valid() || handle.index >= m_resources.size()) return nullptr;
-    return &m_resources[handle.index];
+    auto& res = m_resources[handle.index];
+    if (res.handle.generation != handle.generation) return nullptr;
+    return &res;
 }
 
 // ---- 视图缓存填充 ----

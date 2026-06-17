@@ -92,6 +92,7 @@ private:
 
     Device* m_device = nullptr;
     uint64_t m_frameIndex = 0;
+    uint32_t m_resourceGeneration = 0;  // 每帧递增，用于检测悬空 FGHandle
 
     // 用户声明的节点
     std::vector<FGPassNode>     m_passes;
