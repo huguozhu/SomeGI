@@ -19,7 +19,7 @@ void VxgiAnisoPass::init(rhi::RHIDevice& d,uint32_t ml){ m_rhiDevice=&d; m_mipLe
     rhi::DescSetLayoutDesc ld; ld.debugName="VxgiAniso"; ld.bindings={{0,rhi::DescriptorType::SampledImage,1,rhi::ShaderStage::Compute},{1,rhi::DescriptorType::SampledImage,1,rhi::ShaderStage::Compute},{2,rhi::DescriptorType::StorageImage,1,rhi::ShaderStage::Compute}};
     m_setLayout=d.createDescriptorSetLayout(ld); uint32_t n=ml-1; m_sets.resize(n); for(auto& s:m_sets)s=d.createDescriptorSet(*m_setLayout);
     auto& vkD=static_cast<rhi::VkRHIDevice&>(d); rhi::ShaderDesc sd; sd.stage=rhi::ShaderStage::Compute; sd.entryPoint="cs_main";
-    auto sh=rhi::VkRHIShader::createFromFile(vkD,sd,shaderDir()/"gi"/"vxgi"/"vxgi_aniso.spv");
+    auto sh=rhi::VkRHIShader::createFromFile(vkD,sd,shaderDir()/"gi"/"vxgi"/"vxgi_aniso_build.spv");
     rhi::ComputePSODesc pd; pd.debugName="VxgiAniso"; pd.computeShader=sh.get(); pd.descriptorSetLayouts={m_setLayout.get()}; pd.pushConstants={{rhi::ShaderStage::Compute,0,sizeof(AnisoPC)}};
     m_pipeline=d.createComputePSO(pd);
 }
