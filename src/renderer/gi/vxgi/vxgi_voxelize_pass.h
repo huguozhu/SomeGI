@@ -1,45 +1,28 @@
+// VxgiVoxelizePass — 场景三角形散射到体素 (Compute)，已迁移到 RHI。
 #pragma once
-#include "core/vk_common.h"
+#include "rhi/base/texture.h"  // RHITextureView 完整类型
 #include "scene/scene.h"
 #include "renderer/gi/vxgi/vxgi_resources.h"
 #include <glm/glm.hpp>
-
-// VxgiVoxelizePass —— M7.0：每帧把场景三角形 scatter 到 128³ voxel mip 0。
-// compute scatter（不是 GS 保守光栅），每 thread 一个三角形。算法见
-// shaders/gi/vxgi/vxgi_voxelize.slang。
-//
-// 调用方约定：record 之前 voxelGrid mip 0 已 transition 到 GENERAL（写）；
-// record 内部按 primitive 多次 dispatch（每次 push 不同的 model + material）；
-// record 结束后 voxelGrid mip 0 仍在 GENERAL，调用方再做后续 inject /
-// mipmap / barrier。
-
+#include <memory>
+#include <vulkan/vulkan.h>
 namespace somegi {
-class Device;
-
+namespace rhi { class RHIDevice; class RHIDescriptorSetLayout; class RHIPipelineState; class RHIDescriptorSet; class RHICommandBuffer; class RHITextureView; }
 class VxgiVoxelizePass {
 public:
-    void init(Device& d, uint32_t maxTextures);
+    ~VxgiVoxelizePass();
+    void init(rhi::RHIDevice& d, uint32_t maxTextures);
     void destroy();
-
-    // 写场景级 binding：vertex / index / material / texture array。voxelGrid
-    // 的 mip 0 view 从 VxgiResources 取，scene 切换 / VXGI 资源重建时调。
-    void bindScene(Device& d, const SceneGpu& gpu, uint32_t textureCount,
-                   const VxgiResources& vxgi);
-
-    // 录制：遍历 cpu.nodes / mesh.primitives，逐 primitive 推 push constants
-    // + dispatch (triCount + 63)/64。grid 几何参数（gridMin, cellSize,
-    // resolution）从 App 当前帧值传入。
-    void record(VkCommandBuffer cmd, const SceneCpu& cpu, const SceneGpu& gpu,
-                const glm::vec3& gridMin, float cellSize, uint32_t gridResolution);
-
+    void bindScene(const SceneGpu& gpu, uint32_t textureCount, const VxgiResources& vxgi);
+    void record(rhi::RHICommandBuffer& cmd, const SceneCpu& cpu, const SceneGpu& gpu, const glm::vec3& gridMin, float cellSize, uint32_t gridRes);
+    void record(VkCommandBuffer cmd, const SceneCpu& cpu, const SceneGpu& gpu, const glm::vec3& gridMin, float cellSize, uint32_t gridRes);
 private:
-    Device* m_device = nullptr;
-    VkDescriptorSetLayout m_setLayout = VK_NULL_HANDLE;
-    VkPipelineLayout m_pipelineLayout = VK_NULL_HANDLE;
-    VkPipeline m_pipeline = VK_NULL_HANDLE;
-    VkDescriptorPool m_pool = VK_NULL_HANDLE;
-    VkDescriptorSet m_set = VK_NULL_HANDLE;
-    uint32_t m_maxTextures = 0;
+    rhi::RHIDevice* m_rhiDevice = nullptr; uint32_t m_maxTextures = 0;
+    std::unique_ptr<rhi::RHIDescriptorSetLayout> m_setLayout;
+    std::unique_ptr<rhi::RHIPipelineState> m_pipeline;
+    std::unique_ptr<rhi::RHIDescriptorSet> m_set;
+    // 纹理数组视图缓存（每 scene 切时重建）
+    std::vector<std::unique_ptr<rhi::RHITextureView>> m_texViews;
+    std::vector<const rhi::RHITextureView*> m_texViewPtrs;
 };
-
-}
+} // namespace somegi

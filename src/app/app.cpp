@@ -500,7 +500,7 @@ void App::applySceneSelection() {
     m_renderer.gbuffer().bindScene(*m_device, m_sceneGpu, (uint32_t)m_sceneGpu.images.size());
     m_renderer.forward().bindScene(*m_device, m_sceneGpu, (uint32_t)m_sceneGpu.images.size());
     m_renderer.rsmGeom().bindScene(*m_device, m_sceneGpu, (uint32_t)m_sceneGpu.images.size());
-    m_renderer.vxgiVoxelize().bindScene(*m_device, m_sceneGpu, (uint32_t)m_sceneGpu.images.size(), m_renderer.vxgi());
+    m_renderer.vxgiVoxelize().bindScene(m_sceneGpu, (uint32_t)m_sceneGpu.images.size(), m_renderer.vxgi());
 
     // 绑定场景数据到阴影 pass
     m_renderer.shadow().bindScene(*m_device, m_sceneGpu);
@@ -1198,7 +1198,7 @@ void App::buildUI() {
                 uploadScene(*m_device, m_pool, m_scene, m_sceneGpu, m_useMipmaps);
                 m_renderer.gbuffer().bindScene(*m_device, m_sceneGpu, (uint32_t)m_sceneGpu.images.size());
                 m_renderer.rsmGeom().bindScene(*m_device, m_sceneGpu, (uint32_t)m_sceneGpu.images.size());
-                m_renderer.vxgiVoxelize().bindScene(*m_device, m_sceneGpu, (uint32_t)m_sceneGpu.images.size(), m_renderer.vxgi());
+                m_renderer.vxgiVoxelize().bindScene(m_sceneGpu, (uint32_t)m_sceneGpu.images.size(), m_renderer.vxgi());
             }
         }
         if (m_swap->hdrAvailable()) {

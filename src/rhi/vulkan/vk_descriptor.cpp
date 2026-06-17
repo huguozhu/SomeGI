@@ -117,7 +117,19 @@ void VkRHIDescSet::write(const std::vector<DescriptorWrite>& writes) {
         vw.descriptorCount = 1;
         vw.descriptorType = toVkDescType(w.type);
 
-        if (w.textureView) {
+        if (w.textureArrayCount > 0 && w.textureViewArray) {
+            // 纹理数组绑定（如 GBuffer/Voxelize 的 texture array）
+            vw.descriptorCount = w.textureArrayCount;
+            size_t baseIdx = imageInfos.size();
+            imageInfos.resize(baseIdx + w.textureArrayCount);
+            for (uint32_t ai = 0; ai < w.textureArrayCount; ++ai) {
+                VkImageView v = w.textureViewArray[ai]
+                    ? (VkImageView)(uintptr_t)w.textureViewArray[ai]->nativeHandle()
+                    : VK_NULL_HANDLE;
+                imageInfos[baseIdx + ai] = {VK_NULL_HANDLE, v, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+            }
+            vw.pImageInfo = &imageInfos[baseIdx];
+        } else if (w.textureView) {
             imageInfos.push_back({VK_NULL_HANDLE, (VkImageView)(uintptr_t)w.textureView->nativeHandle(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
             vw.pImageInfo = &imageInfos.back();
         }

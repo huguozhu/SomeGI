@@ -147,7 +147,7 @@ void FrameRenderer::init(Device& d, VkCommandPool pool, VkExtent2D extent,
     m_lpvInject.init(*m_rhiDevice, RsmGeometryPass::kRsmSize);
 
     std::printf("[init] vxgi voxelize/inject/mipmap pass...\n");
-    m_vxgiVoxelize.init(d, 128);
+    m_vxgiVoxelize.init(*m_rhiDevice, 128);
     m_vxgiInject.init(*m_rhiDevice, RsmGeometryPass::kRsmSize);
     m_vxgiInject.bindResources(m_rsmGeom.position(), m_rsmGeom.flux(), m_vxgi);
     m_vxgiMipmap.init(*m_rhiDevice, m_vxgi.mipLevels());
@@ -287,7 +287,7 @@ void FrameRenderer::bindScenePasses(Device& d, const SceneGpu& gpu, uint32_t tex
     m_gbuffer.bindScene(d, gpu, textureCount);
     m_forward.bindScene(d, gpu, textureCount);
     m_rsmGeom.bindScene(d, gpu, textureCount);
-    m_vxgiVoxelize.bindScene(d, gpu, textureCount, m_vxgi);
+    m_vxgiVoxelize.bindScene(gpu, textureCount, m_vxgi);
 }
 
 void FrameRenderer::applyGiSelection(int giIndex) {

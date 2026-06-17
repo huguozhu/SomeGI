@@ -56,6 +56,10 @@ struct DescriptorWrite {
     uint64_t bufferRange = 0;
     const void* sampler = nullptr;  // 原生 VkSampler / ID3D12DescriptorHeap / id<MTLSamplerState>
     const void* accelerationStructure = nullptr;  // 原生 VkAccelerationStructureKHR
+
+    // 纹理数组绑定（count > 1 时使用，与 textureView 互斥）
+    uint32_t textureArrayCount = 0;
+    const RHITextureView* const* textureViewArray = nullptr;
 };
 
 class RHIDescriptorSet {
