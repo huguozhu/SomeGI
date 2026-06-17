@@ -1,41 +1,21 @@
+// LumenGatherPass — Final Gather (Compute), 已迁移到 RHI。
 #pragma once
-#include "core/vk_common.h"
-#include <glm/glm.hpp>
-
-// LumenGatherPass —— L.5 Final Gather。
-//
-// 一个 compute dispatch：bilinear 插值屏幕 probe SH9 → irradiance 重建
-// → 乘 albedo/π → 写 rt.lumenGI。
-
-namespace somegi {
-class Device;
-class LumenResources;
-struct RenderTargets;
-
+#include <memory>
+#include <vulkan/vulkan.h>
+namespace somegi { class LumenResources; struct RenderTargets;
+namespace rhi { class RHIDevice; class RHIDescriptorSetLayout; class RHIPipelineState; class RHIDescriptorSet; class RHICommandBuffer; }
 class LumenGatherPass {
 public:
-    void init(Device& d);
+    ~LumenGatherPass();
+    void init(rhi::RHIDevice& d);
     void destroy();
-
-    // 一次性 bind（per-resize）
-    // useFiltered: true = 读 filteredAtlas（L.4 打开时），false = 读 probeAtlas
-    void bindResources(Device& d, const LumenResources& res,
-                       const RenderTargets& rt, VkBuffer frameUbo,
-                       bool useFiltered);
-
-    // 每帧 dispatch
-    void record(VkCommandBuffer cmd, const LumenResources& res,
-                const RenderTargets& rt, uint32_t debugMode = 0);
-
+    void bindResources(const LumenResources& res, const RenderTargets& rt, VkBuffer frameUbo, bool useFiltered);
+    void record(rhi::RHICommandBuffer& cmd, const LumenResources& res, const RenderTargets& rt, uint32_t debugMode=0);
+    void record(VkCommandBuffer cmd, const LumenResources& res, const RenderTargets& rt, uint32_t debugMode=0);
 private:
-    Device* m_device = nullptr;
-
-    VkDescriptorSetLayout m_setLayout = VK_NULL_HANDLE;
-    VkPipelineLayout m_pipelineLayout = VK_NULL_HANDLE;
-    VkPipeline m_pipeline = VK_NULL_HANDLE;
-    VkDescriptorPool m_pool = VK_NULL_HANDLE;
-    VkDescriptorSet m_set = VK_NULL_HANDLE;
+    rhi::RHIDevice* m_rhiDevice = nullptr;
+    std::unique_ptr<rhi::RHIDescriptorSetLayout> m_setLayout;
+    std::unique_ptr<rhi::RHIPipelineState> m_pipeline;
+    std::unique_ptr<rhi::RHIDescriptorSet> m_set;
     VkSampler m_pointClamp = VK_NULL_HANDLE;
-};
-
-}
+}; } // namespace somegi

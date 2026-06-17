@@ -807,11 +807,11 @@ void App::onSwapchainResized() {
                                             m_renderer.vxgiSixAxisInited());
         }
         if (m_renderer.lumenFilterInited()) {
-            m_renderer.lumenFilter().bindResources(*m_device, m_renderer.lumen(), m_renderer.rt(),
+            m_renderer.lumenFilter().bindResources( m_renderer.lumen(), m_renderer.rt(),
                                              m_renderer.gbuffer().frameUboHandle());
         }
         if (m_renderer.lumenGatherInited()) {
-            m_renderer.lumenGather().bindResources(*m_device, m_renderer.lumen(), m_renderer.rt(),
+            m_renderer.lumenGather().bindResources(m_renderer.lumen(), m_renderer.rt(),
                                              m_renderer.gbuffer().frameUboHandle(), true);
         }
     }
@@ -2837,8 +2837,8 @@ void App::registerPipelineSteps() {
                 pdi.imageMemoryBarrierCount = 1; pdi.pImageMemoryBarriers = &pb;
                 vkCmdPipelineBarrier2(cmd, &pdi);
 
-                m_renderer.lumenFilter().init(*m_device);
-                m_renderer.lumenFilter().bindResources(*m_device, m_renderer.lumen(), m_renderer.rt(),
+                m_renderer.lumenFilter().init(*m_renderer.rhiDevice());
+                m_renderer.lumenFilter().bindResources( m_renderer.lumen(), m_renderer.rt(),
                                                  m_renderer.gbuffer().frameUboHandle());
                 m_renderer.lumenFilterInited() = true;
             }
@@ -2894,8 +2894,8 @@ void App::registerPipelineSteps() {
         .enabled = false,
         .record = [this](VkCommandBuffer cmd) {
             if (!m_renderer.lumenGatherInited()) {
-                m_renderer.lumenGather().init(*m_device);
-                m_renderer.lumenGather().bindResources(*m_device, m_renderer.lumen(), m_renderer.rt(),
+                m_renderer.lumenGather().init(*m_renderer.rhiDevice());
+                m_renderer.lumenGather().bindResources(m_renderer.lumen(), m_renderer.rt(),
                                                  m_renderer.gbuffer().frameUboHandle(), true);
                 m_renderer.lumenGatherInited() = true;
             }
@@ -4678,8 +4678,8 @@ void App::setupFrameGraph() {
                     pdi.imageMemoryBarrierCount = 1; pdi.pImageMemoryBarriers = &pb;
                     vkCmdPipelineBarrier2(cmd, &pdi);
 
-                    m_renderer.lumenFilter().init(*m_device);
-                    m_renderer.lumenFilter().bindResources(*m_device, m_renderer.lumen(), m_renderer.rt(),
+                    m_renderer.lumenFilter().init(*m_renderer.rhiDevice());
+                    m_renderer.lumenFilter().bindResources( m_renderer.lumen(), m_renderer.rt(),
                                                      m_renderer.gbuffer().frameUboHandle());
                     m_renderer.lumenFilterInited() = true;
                 }
@@ -4734,8 +4734,8 @@ void App::setupFrameGraph() {
             b.write(m_fgh.lumenGI);
             b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
                 if (!m_renderer.lumenGatherInited()) {
-                    m_renderer.lumenGather().init(*m_device);
-                    m_renderer.lumenGather().bindResources(*m_device, m_renderer.lumen(), m_renderer.rt(),
+                    m_renderer.lumenGather().init(*m_renderer.rhiDevice());
+                    m_renderer.lumenGather().bindResources(m_renderer.lumen(), m_renderer.rt(),
                                                      m_renderer.gbuffer().frameUboHandle(), true);
                     m_renderer.lumenGatherInited() = true;
                 }
