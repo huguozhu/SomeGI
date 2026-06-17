@@ -130,7 +130,7 @@ void FrameRenderer::init(Device& d, VkCommandPool pool, VkExtent2D extent,
 
     if (rtSupported) {
         std::printf("[init] rt gi pass...\n");
-        m_rtGiPass.init(d);
+        m_rtGiPass.init(*m_rhiDevice);
         m_rtGiInited = true;
     }
     if (rtSupported) {

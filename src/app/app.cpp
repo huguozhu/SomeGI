@@ -448,7 +448,7 @@ void App::applySceneSelection() {
         m_renderer.rtAS().build(*m_device, m_pool, m_scene, m_sceneGpu);
         m_renderer.rtGiBound() = (m_renderer.rtAS().instanceCount() > 0);
         if (m_renderer.rtGiBound()) {
-            m_renderer.rtGi().bindFrame(*m_device, m_renderer.rt(), m_renderer.gbuffer().frameUboHandle(), m_renderer.rtAS(), m_sceneGpu);
+            m_renderer.rtGi().bindFrame(m_renderer.rt(), m_renderer.gbuffer().frameUboHandle(), m_renderer.rtAS(), m_sceneGpu);
         }
         // 绑定 TLAS 到 ShadowPass（RT shadow 用）
         m_renderer.shadow().bindTLAS(*m_device, m_renderer.rtAS().tlas());
@@ -790,7 +790,7 @@ void App::onSwapchainResized() {
         m_renderer.rsmGeom().position(), m_renderer.rsmGeom().normal(), m_renderer.rsmGeom().flux());
     // M9：swapchain resize 后 rtGI 换新 view → 重绑 RT pass。
     if (m_renderer.rtSupported() && m_renderer.rtGiBound()) {
-        m_renderer.rtGi().bindFrame(*m_device, m_renderer.rt(), m_renderer.gbuffer().frameUboHandle(), m_renderer.rtAS(), m_sceneGpu);
+        m_renderer.rtGi().bindFrame(m_renderer.rt(), m_renderer.gbuffer().frameUboHandle(), m_renderer.rtAS(), m_sceneGpu);
         // M10：resize 后重绑 ReSTIR RT shade 的 TLAS
         m_renderer.restirPass().bindResourcesRt(*m_device, m_renderer.restir(), m_renderer.rt(),
             m_renderer.gbuffer().frameUboHandle(), m_renderer.rtAS().tlas());

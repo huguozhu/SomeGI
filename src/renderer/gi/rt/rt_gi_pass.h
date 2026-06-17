@@ -1,37 +1,27 @@
+// RtGiPass — 硬件 RT GI (Ray Query, Compute)，已迁移到 RHI。
 #pragma once
+#include "rhi/base/texture.h"
 #include "renderer/core/render_targets.h"
 #include "renderer/gi/rt/scene_rt_as.h"
-
-namespace somegi {
-
-class Device;
-struct SceneGpu;
-
-// RtGiPass — M9 硬件光线追踪 GI（Ray Query 风格）。
-//
-// 使用 KHR_ray_query 在 compute shader 内发 ray，无需 RT pipeline。
-// 每像素发 1 条 cosine-hemisphere ray，命中后计算该点的太阳直接光
-// （含 shadow ray），输出到 rtGI（RGBA16F）。
-//
-// 依赖：TLAS（SceneRtAS）+ 场景 SSBO（顶点/索引/材质）。
-//
-// 仅当 Device::features().accelStruct && .rayQuery 为 true 时初始化。
+#include <memory>
+#include <vulkan/vulkan.h>
+namespace somegi { struct SceneGpu;
+namespace rhi { class RHIDevice; class RHIDescriptorSetLayout; class RHIPipelineState; class RHIDescriptorSet; class RHICommandBuffer; }
 class RtGiPass {
 public:
-    void init(Device& d);
+    ~RtGiPass();
+    void init(rhi::RHIDevice& d);
     void destroy();
-    void bindFrame(Device& d, const RenderTargets& rt, VkBuffer frameUbo,
-                   const SceneRtAS& rtAS, const SceneGpu& sceneGpu);
+    void bindFrame(const RenderTargets& rt, VkBuffer frameUbo, const SceneRtAS& rtAS, const SceneGpu& sceneGpu);
+    void record(rhi::RHICommandBuffer& cmd, const RenderTargets& rt);
     void record(VkCommandBuffer cmd, const RenderTargets& rt);
-
 private:
-    Device* m_device = nullptr;
-    VkDescriptorSetLayout m_setLayout = VK_NULL_HANDLE;
-    VkPipelineLayout m_pipelineLayout = VK_NULL_HANDLE;
-    VkPipeline m_pipeline = VK_NULL_HANDLE;
-    VkDescriptorPool m_pool = VK_NULL_HANDLE;
-    VkDescriptorSet m_set = VK_NULL_HANDLE;
+    rhi::RHIDevice* m_rhiDevice = nullptr;
+    std::unique_ptr<rhi::RHIDescriptorSetLayout> m_setLayout;
+    std::unique_ptr<rhi::RHIPipelineState> m_pipeline;
+    std::unique_ptr<rhi::RHIDescriptorSet> m_set;
     VkSampler m_linearClamp = VK_NULL_HANDLE;
+    std::vector<std::unique_ptr<rhi::RHITextureView>> m_texViews;
+    std::vector<const rhi::RHITextureView*> m_texViewPtrs;
 };
-
-}
+} // namespace somegi
