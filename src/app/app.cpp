@@ -140,12 +140,103 @@ void saveAllSceneStates(const std::map<std::string, SceneState>& states,
         f << "\n";
     }
 }
+
+// ============================================================
+// AppSettings — 全局渲染设置持久化（GI/AA/MSAA/阴影 等）
+// ============================================================
+constexpr const char* kAppSettingsPath = "assets/app_settings.ini";
+
+struct AppSettings {
+    int giIndex        = 1;   // GI 方法 (0=None, 1=IBL, ...)
+    int shadowIndex    = 1;   // 阴影方法
+    int aoMethod       = 1;   // AO 方法 (0=None, 1=SSAO, 2=GTAO)
+    int aaMethod       = 1;   // AA 方法 (0=None, 1=MSAA, 2=TAA, 3=SMAA)
+    int renderingMode  = 0;   // 0=Deferred, 1=Forward
+    int msaaSamples    = 4;   // MSAA 采样数 (1/2/4/8/16)
+    bool useFrameGraph = true;
+    bool useGpuCulling = false;
+    bool useHiZOcclusion = false;
+    bool useMipmaps    = true;
+    bool useMeshShader = false;
+    float taaBlendAlpha = 0.92f;
+    int shadowRtRays   = 8;      // RT Soft shadow 采样数
+    float shadowRtRadius = 0.05f;// RT Soft shadow 太阳半径
+};
+
+AppSettings loadAppSettings() {
+    AppSettings cfg;
+    std::ifstream f(kAppSettingsPath);
+    if (!f) return cfg;
+    std::string line;
+    while (std::getline(f, line)) {
+        size_t b = line.find_first_not_of(" \t\r");
+        if (b == std::string::npos || line[b] == '#') continue;
+        size_t e = line.find_last_not_of(" \t\r");
+        std::string s = line.substr(b, e - b + 1);
+        std::istringstream is(s);
+        std::string key;
+        if (!(is >> key)) continue;
+        if (key == "gi.index")           is >> cfg.giIndex;
+        else if (key == "shadow.index")  is >> cfg.shadowIndex;
+        else if (key == "ao.method")     is >> cfg.aoMethod;
+        else if (key == "aa.method")     is >> cfg.aaMethod;
+        else if (key == "rendering")     is >> cfg.renderingMode;
+        else if (key == "msaa.samples")  is >> cfg.msaaSamples;
+        else if (key == "fg.enabled")    is >> cfg.useFrameGraph;
+        else if (key == "cull.gpu")      is >> cfg.useGpuCulling;
+        else if (key == "cull.hiz")      is >> cfg.useHiZOcclusion;
+        else if (key == "mipmaps")       is >> cfg.useMipmaps;
+        else if (key == "mesh.shader")   is >> cfg.useMeshShader;
+        else if (key == "taa.blend")     is >> cfg.taaBlendAlpha;
+        else if (key == "shadow.rt.rays")   is >> cfg.shadowRtRays;
+        else if (key == "shadow.rt.radius") is >> cfg.shadowRtRadius;
+    }
+    return cfg;
+}
+
+void saveAppSettings(const AppSettings& cfg) {
+    std::ofstream f(kAppSettingsPath);
+    if (!f) return;
+    f << "# AppSettings — 全局渲染设置（自动保存）\n";
+    f << "gi.index "       << cfg.giIndex       << "\n";
+    f << "shadow.index "   << cfg.shadowIndex    << "\n";
+    f << "ao.method "      << cfg.aoMethod       << "\n";
+    f << "aa.method "      << cfg.aaMethod       << "\n";
+    f << "rendering "      << cfg.renderingMode  << "\n";
+    f << "msaa.samples "   << cfg.msaaSamples    << "\n";
+    f << "fg.enabled "     << (cfg.useFrameGraph ? 1 : 0) << "\n";
+    f << "cull.gpu "       << (cfg.useGpuCulling ? 1 : 0) << "\n";
+    f << "cull.hiz "       << (cfg.useHiZOcclusion ? 1 : 0) << "\n";
+    f << "mipmaps "        << (cfg.useMipmaps ? 1 : 0) << "\n";
+    f << "mesh.shader "    << (cfg.useMeshShader ? 1 : 0) << "\n";
+    f << "taa.blend "      << cfg.taaBlendAlpha << "\n";
+    f << "shadow.rt.rays " << cfg.shadowRtRays << "\n";
+    f << "shadow.rt.radius " << cfg.shadowRtRadius << "\n";
+}
 }
 
 App::App() {
     WindowDesc wd; wd.title = "SomeGI"; wd.width = 800; wd.height = 450;
     m_window = std::make_unique<Window>(wd);
     m_device = std::make_unique<Device>(*m_window, /*validation=*/true);
+
+    // 从文件恢复全局渲染设置（基础字段在 renderer.init() 前应用，
+    // shadow/mesh-shader 等依赖 renderer 的字段在 init() 之后应用）
+    AppSettings loadedCfg = loadAppSettings();
+    {
+        m_currentGiIndex     = loadedCfg.giIndex;
+        m_currentShadowIndex = loadedCfg.shadowIndex;
+        m_aoMethod           = (AOMethod)loadedCfg.aoMethod;
+        m_aaMethod           = (AAMethod)loadedCfg.aaMethod;
+        m_renderingMode      = (RenderingMode)loadedCfg.renderingMode;
+        m_msaaSamples        = (VkSampleCountFlagBits)loadedCfg.msaaSamples;
+        m_useFrameGraph      = loadedCfg.useFrameGraph;
+        m_useGpuCulling      = loadedCfg.useGpuCulling;
+        m_useHiZOcclusion    = loadedCfg.useHiZOcclusion;
+        m_useMipmaps         = loadedCfg.useMipmaps;
+        m_taaBlendAlpha      = loadedCfg.taaBlendAlpha;
+        std::printf("[init] loaded app settings from %s\n", kAppSettingsPath);
+    }
 
     try {
     // Clamp default MSAA to device-supported sample counts
@@ -202,6 +293,14 @@ App::App() {
     // Delegate all rendering setup to FrameRenderer
     m_renderer.init(*m_device, m_pool, m_swap->extent(), m_msaaSamples,
                     rtSupported, m_swap->format(), m_window->handle());
+
+    // 应用依赖 renderer 的持久化设置
+    if (loadedCfg.useMeshShader && m_renderer.meshShaderSupported())
+        m_renderer.setUseMeshShader(true);
+    if (loadedCfg.shadowRtRays >= 4 && loadedCfg.shadowRtRays <= 32)
+        m_renderer.shadow().rtRayCount() = loadedCfg.shadowRtRays;
+    if (loadedCfg.shadowRtRadius >= 0.01f && loadedCfg.shadowRtRadius <= 0.10f)
+        m_renderer.shadow().rtSunRadius() = loadedCfg.shadowRtRadius;
 
     // 初始化 FrameGraph（实验性）
     m_fg.init(*m_device);
@@ -1627,6 +1726,26 @@ void App::buildUI() {
     }
     ImGui::End();
     (void)io;
+
+    // 全局渲染设置有变更即保存
+    {
+        AppSettings cfg;
+        cfg.giIndex        = m_currentGiIndex;
+        cfg.shadowIndex    = m_currentShadowIndex;
+        cfg.aoMethod       = (int)m_aoMethod;
+        cfg.aaMethod       = (int)m_aaMethod;
+        cfg.renderingMode  = (int)m_renderingMode;
+        cfg.msaaSamples    = (int)m_msaaSamples;
+        cfg.useFrameGraph  = m_useFrameGraph;
+        cfg.useGpuCulling  = m_useGpuCulling;
+        cfg.useHiZOcclusion = m_useHiZOcclusion;
+        cfg.useMipmaps     = m_useMipmaps;
+        cfg.useMeshShader  = m_renderer.useMeshShader();
+        cfg.taaBlendAlpha  = m_taaBlendAlpha;
+        cfg.shadowRtRays   = m_renderer.shadow().rtRayCount();
+        cfg.shadowRtRadius = m_renderer.shadow().rtSunRadius();
+        saveAppSettings(cfg);
+    }
 }
 
 // ============================================================
