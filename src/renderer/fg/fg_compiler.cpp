@@ -226,6 +226,44 @@ void FGCompiler::computeLifetimes(std::vector<FGPassNode*>& passes,
 
 void FGCompiler::computeAliasing(std::vector<FGResourceNode*>& resources,
                                   std::vector<AliasGroup>& outGroups) {
+    // ---- 辅助：估算资源字节数 ----
+    auto estimateSize = [](const FGResourceDesc& desc) -> uint32_t {
+        if (desc.type == FGResourceType::Texture) {
+            auto& t = desc.texture;
+            uint32_t pixelSize = 4;  // 默认 RGBA8
+            switch (t.format) {
+                case VK_FORMAT_R8_UNORM:                   pixelSize = 1; break;
+                case VK_FORMAT_R8G8B8A8_UNORM:             pixelSize = 4; break;
+                case VK_FORMAT_R16G16B16A16_SFLOAT:        pixelSize = 8; break;
+                case VK_FORMAT_R16G16_SFLOAT:              pixelSize = 4; break;
+                case VK_FORMAT_R32_SFLOAT:                 pixelSize = 4; break;
+                case VK_FORMAT_D32_SFLOAT:                 pixelSize = 4; break;
+                case VK_FORMAT_B8G8R8A8_UNORM:             pixelSize = 4; break;
+                default: break;
+            }
+            return t.extent.width * t.extent.height * t.extent.depth * pixelSize;
+        } else {
+            return (uint32_t)desc.buffer.size;
+        }
+    };
+
+    // ---- 辅助：检查两资源是否可别名（格式/mip/采样数兼容） ----
+    auto canAlias = [](const FGResourceNode& a, const FGResourceNode& b) -> bool {
+        if (a.desc.type != b.desc.type) return false;
+        if (a.desc.type == FGResourceType::Texture) {
+            auto& ta = a.desc.texture;
+            auto& tb = b.desc.texture;
+            if (ta.format     != tb.format)     return false;
+            if (ta.samples    != tb.samples)    return false;
+            if (ta.mipLevels  != tb.mipLevels)  return false;
+            if (ta.arrayLayers != tb.arrayLayers) return false;
+            if (ta.isCubemap  != tb.isCubemap)  return false;
+            // extent 可不同：组用最大 extent，VkImage 创建时使用该值
+        }
+        // Buffer：大小可不同，组用最大 size
+        return true;
+    };
+
     struct ManagedRes {
         FGResourceNode* resource;
         uint32_t sizeBytes;
@@ -234,16 +272,7 @@ void FGCompiler::computeAliasing(std::vector<FGResourceNode*>& resources,
 
     for (auto* res : resources) {
         if (!res || res->isImported) continue;
-
-        uint32_t size = 4 * 1024 * 1024;
-        if (res->desc.type == FGResourceType::Texture) {
-            auto& t = res->desc.texture;
-            size = t.extent.width * t.extent.height * t.extent.depth * 4;
-        } else {
-            size = (uint32_t)res->desc.buffer.size;
-        }
-
-        managed.push_back({res, size});
+        managed.push_back({res, estimateSize(res->desc)});
     }
 
     // 按大小降序排列
@@ -263,6 +292,9 @@ void FGCompiler::computeAliasing(std::vector<FGResourceNode*>& resources,
 
         for (size_t g = 0; g < outGroups.size(); ++g) {
             auto& group = outGroups[g];
+            // 兼容性检查：新资源必须与组内已有成员格式兼容
+            if (!canAlias(*mr.resource, *group.members[0])) continue;
+
             bool overlap = false;
             for (auto* member : group.members) {
                 if (!(mr.resource->lastReadPass < member->firstWritePass ||
