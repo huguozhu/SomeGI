@@ -55,6 +55,28 @@ struct FGDebug {
     bool showResources   = false;
     bool showAliasGroups = false;
     bool showBarrierLog  = false;
+    bool showTimeline    = false;  // 资源布局时间线
+
+    // ---- 资源布局时间线 ----
+    // 每个资源的每个 pass 边界处的布局状态
+    struct LayoutSnapshot {
+        VkImageLayout layout = VK_IMAGE_LAYOUT_UNDEFINED;
+        VkAccessFlags2 access = 0;
+        bool barrierEmitted = false;   // 此 pass 前是否发射了 barrier
+    };
+    struct ResourceTimeline {
+        std::string resourceName;
+        VkFormat format = VK_FORMAT_UNDEFINED;
+        std::vector<LayoutSnapshot> snapshots;  // [passIndex] = 进入 pass 前的布局
+    };
+    std::vector<ResourceTimeline> timelines;
+    std::vector<std::string> timelinePassNames;  // 列标题
+
+    // 在 FGExecutor::execute() 期间填充
+    void recordLayout(FGHandle handle, const char* name, VkFormat fmt,
+                      uint32_t passIndex, VkImageLayout layout,
+                      VkAccessFlags2 access, bool barrier);
+    void finishTimeline(uint32_t passCount);
 
     // 编译后填充
     void populate(const FGCompiler::CompiledGraph& compiled,

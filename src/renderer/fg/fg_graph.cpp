@@ -124,7 +124,9 @@ void FrameGraph::compile() {
 void FrameGraph::execute(VkCommandBuffer cmd) {
     if (!m_compiledThisFrame) return;
     populateViewCache();
+    m_executor.setDebug(&m_debug);
     m_executor.execute(cmd, m_compiled, m_viewCache);
+    m_debug.finishTimeline((uint32_t)m_compiled.passOrder.size());
     ++m_frameIndex;
 }
 

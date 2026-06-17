@@ -93,5 +93,41 @@ void FGDebug::applyTimestamps(const std::vector<float>& gpuMs) {
     }
 }
 
+void FGDebug::recordLayout(FGHandle handle, const char* name, VkFormat fmt,
+                            uint32_t passIndex, VkImageLayout layout,
+                            VkAccessFlags2 access, bool barrier) {
+    // 查找或创建资源时间线
+    ResourceTimeline* tl = nullptr;
+    for (auto& t : timelines) {
+        if (t.resourceName == name) { tl = &t; break; }
+    }
+    if (!tl) {
+        ResourceTimeline rt;
+        rt.resourceName = name ? name : "?";
+        rt.format = fmt;
+        rt.snapshots.resize(passIndex + 1, {VK_IMAGE_LAYOUT_UNDEFINED, 0, false});
+        timelines.push_back(std::move(rt));
+        tl = &timelines.back();
+    }
+
+    // 扩展到足够长度
+    if (tl->snapshots.size() <= passIndex)
+        tl->snapshots.resize(passIndex + 1, {VK_IMAGE_LAYOUT_UNDEFINED, 0, false});
+
+    tl->snapshots[passIndex] = {layout, access, barrier};
+}
+
+void FGDebug::finishTimeline(uint32_t passCount) {
+    timelinePassNames.clear();
+    for (auto& p : passes)
+        timelinePassNames.push_back(p.name);
+
+    // 确保所有时间线都有完整长度
+    for (auto& tl : timelines) {
+        if (tl.snapshots.size() < passCount)
+            tl.snapshots.resize(passCount, {VK_IMAGE_LAYOUT_UNDEFINED, 0, false});
+    }
+}
+
 } // namespace fg
 } // namespace somegi

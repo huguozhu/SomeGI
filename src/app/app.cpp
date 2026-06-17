@@ -1286,6 +1286,69 @@ void App::buildUI() {
                     ImGui::TextDisabled("No alias groups (all lifetimes overlap, or no managed resources)");
                 }
 
+                // ---- 资源布局时间线 ----
+                if (!fgDebug.timelines.empty() && ImGui::CollapsingHeader("Layout Timeline")) {
+                    auto& tls = fgDebug.timelines;
+                    auto& names = fgDebug.timelinePassNames;
+
+                    // 布局→颜色和缩写
+                    auto layoutInfo = [](VkImageLayout l) -> std::pair<ImU32, const char*> {
+                        switch (l) {
+                            case VK_IMAGE_LAYOUT_UNDEFINED:              return {0xFF333333, "---"};
+                            case VK_IMAGE_LAYOUT_GENERAL:                return {0xFF4488CC, "GEN"};
+                            case VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL: return {0xFFCC6644, "COL"};
+                            case VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL:
+                            case VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL: return {0xFF44AA66, "DEP"};
+                            case VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL: return {0xFFAA44CC, "SRO"};
+                            case VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL:   return {0xFFCCAA44, "TSR"};
+                            case VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL:   return {0xFF44AACC, "TDT"};
+                            case VK_IMAGE_LAYOUT_PRESENT_SRC_KHR:        return {0xFFCCCC44, "PRE"};
+                            default: return {0xFF555555, "???"};
+                        }
+                    };
+
+                    if (ImGui::BeginTable("##fgtimeline", (int)names.size() + 1,
+                            ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
+                            ImGuiTableFlags_ScrollX | ImGuiTableFlags_ScrollY |
+                            ImGuiTableFlags_SizingFixedFit)) {
+                        ImGui::TableSetupColumn("Resource");
+                        for (auto& n : names)
+                            ImGui::TableSetupColumn(n.c_str());
+                        ImGui::TableHeadersRow();
+
+                        for (auto& tl : tls) {
+                            ImGui::TableNextRow();
+                            ImGui::TableNextColumn();
+                            ImGui::Text("%s", tl.resourceName.c_str());
+
+                            for (size_t pi = 0; pi < names.size(); ++pi) {
+                                ImGui::TableNextColumn();
+                                if (pi < tl.snapshots.size()) {
+                                    auto& s = tl.snapshots[pi];
+                                    auto [color, label] = layoutInfo(s.layout);
+                                    if (s.layout == VK_IMAGE_LAYOUT_UNDEFINED) {
+                                        ImGui::TextDisabled("---");
+                                    } else {
+                                        ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(color), "%s%s",
+                                            label, s.barrierEmitted ? " B" : "");
+                                    }
+                                    if (ImGui::IsItemHovered()) {
+                                        ImGui::BeginTooltip();
+                                        ImGui::Text("Pass: %s", pi < names.size() ? names[pi].c_str() : "?");
+                                        ImGui::Text("Layout: 0x%X", (uint32_t)s.layout);
+                                        ImGui::Text("Access: 0x%X", (uint32_t)s.access);
+                                        ImGui::Text("Barrier: %s", s.barrierEmitted ? "Y" : "N");
+                                        ImGui::EndTooltip();
+                                    }
+                                } else {
+                                    ImGui::TextDisabled("-");
+                                }
+                            }
+                        }
+                        ImGui::EndTable();
+                    }
+                }
+
                 ImGui::TreePop();
             }
         }

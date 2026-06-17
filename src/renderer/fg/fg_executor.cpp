@@ -108,6 +108,19 @@ void FGExecutor::execute(VkCommandBuffer cmd,
                 }
             }
         }
+
+        // 记录本 pass 执行后的资源布局（用于调试可视化）
+        if (m_debug) {
+            uint32_t pi = pass->topologicalIndex;
+            for (auto* res : compiled.resources) {
+                if (!res || res->desc.type != FGResourceType::Texture) continue;
+                bool hasBarrier = (m_autoBarriers && !pass->usesManualBarriers);
+                m_debug->recordLayout(res->handle,
+                    res->desc.debugName ? res->desc.debugName : "?",
+                    res->desc.texture.format,
+                    pi, res->state.layout, res->state.access, hasBarrier);
+            }
+        }
     }
 
     m_tsCount = tsIdx;

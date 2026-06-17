@@ -3,6 +3,7 @@
 #include "fg_common.h"
 #include "fg_compiler.h"
 #include "fg_resource_node.h"
+#include "fg_debug.h"
 #include "core/image.h"
 #include "core/buffer.h"
 #include <vector>
@@ -34,6 +35,9 @@ class FGExecutor {
 public:
     void init(Device& device);
     void destroy();
+
+    // 绑定 FGDebug 用于资源布局时间线记录
+    void setDebug(struct FGDebug* debug) { m_debug = debug; }
 
     // GPU timestamp 池（可选，调用 initTimestamps 后启用）
     void initTimestamps(Device& d, uint32_t maxPasses);
@@ -115,6 +119,9 @@ private:
     void restoreResourceStates(std::vector<FGResourceNode*>& resources);
 
     std::unordered_map<std::string, FGResourceNode::BarrierState> m_persistentState;
+
+    // ---- 资源布局时间线记录 ----
+    struct FGDebug* m_debug = nullptr;
 
     // ---- GPU Timestamp ----
     VkQueryPool m_timestampPool = VK_NULL_HANDLE;
