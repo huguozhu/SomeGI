@@ -105,6 +105,9 @@ private:
 
         // Shadow mask
         somegi::fg::FGHandle shadowMask;
+
+        // Swapchain（每帧导入，初始布局 UNDEFINED）
+        somegi::fg::FGHandle swapImage;
     };
     FGH m_fgh = {};
 

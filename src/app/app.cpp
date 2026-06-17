@@ -3173,10 +3173,11 @@ void App::recordIndirectDraws(VkCommandBuffer cmd, uint32_t frameInFlight, const
 void App::recordPostProcessing(VkCommandBuffer cmd) {
     bool hdrActive = m_swap->hdrEnabled();
     bool aaActive = (m_aaMethod == AAMethod::TAA || m_aaMethod == AAMethod::SMAA);
-    bool fgHandlesTonemap = m_useFrameGraph && hdrActive && aaActive;
+    // FrameGraph 路径：HDR+AA 时 FG 统一处理 Tonemap + TAA/SMAA + Copy-aaHistory
+    bool fgHandlesPostAA = m_useFrameGraph && hdrActive && aaActive;
 
     // hdrColor → SHADER_READ_ONLY：FrameGraph AA 模式下由 Tonemap pass auto-barrier 处理
-    if (!fgHandlesTonemap) {
+    if (!fgHandlesPostAA) {
         transitionImage(cmd, m_renderer.rt().hdrColor.image(), VK_IMAGE_ASPECT_COLOR_BIT,
             VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
@@ -3187,7 +3188,9 @@ void App::recordPostProcessing(VkCommandBuffer cmd) {
     if (hdrActive) {
         // === HDR path ===
         if (aaActive) {
-            if (!fgHandlesTonemap) {
+            // FrameGraph 路径：Tonemap+TAA/SMAA+Copy-aaHistory 已由 FG 处理，
+            // swapImage 已被 TAA/SMAA pass 写入为 GENERAL
+            if (!fgHandlesPostAA) {
                 m_renderer.rt().ensureAaResources(*m_device);
                 transitionImage(cmd, m_renderer.rt().aaHdr.image(), VK_IMAGE_ASPECT_COLOR_BIT,
                     VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
@@ -3196,53 +3199,53 @@ void App::recordPostProcessing(VkCommandBuffer cmd) {
                 m_renderer.tonemap().bindOutput(*m_device, m_renderer.rt().aaHdr.view(), m_frameCtx.frameInFlight);
                 m_renderer.tonemap().record(cmd, m_renderer.rt(), m_frameCtx.frameInFlight, true, 1.0f);
                 writeTimestamp(cmd, m_renderer.kTsTonemap);
-            }
 
-            // aaHdr: FrameGraph Tonemap 写入后布局为 GENERAL，需手动转到 SR_O 供 TAA/SMAA 读取
-            transitionImage(cmd, m_renderer.rt().aaHdr.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-                VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
-                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT);
-
-            transitionImage(cmd, m_frameCtx.swapImage, VK_IMAGE_ASPECT_COLOR_BIT,
-                VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
-                VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
-                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
-
-            if (m_aaMethod == AAMethod::TAA) {
-                m_renderer.taa().bindResources(*m_device, m_renderer.rt(), m_frameCtx.frameInFlight);
-                m_renderer.taa().bindOutput(*m_device, m_frameCtx.swapView, m_frameCtx.frameInFlight);
-                m_renderer.taa().record(cmd, m_renderer.rt(), m_jitter, m_prevJitter,
-                            m_frameCtx.invViewProj, m_prevViewProj, m_frameCtx.frameInFlight, m_taaBlendAlpha);
-                // Copy aaHdr → aaHistory for next frame
+                // aaHdr: Tonemap 写入后布局为 GENERAL → SR_O 供 TAA/SMAA 读取
                 transitionImage(cmd, m_renderer.rt().aaHdr.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
-                    VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
-                transitionImage(cmd, m_renderer.rt().aaHistory.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-                    VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                    VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
+                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT);
+
+                transitionImage(cmd, m_frameCtx.swapImage, VK_IMAGE_ASPECT_COLOR_BIT,
+                    VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
                     VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
-                    VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
-                VkImageCopy histCopy{};
-                histCopy.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-                histCopy.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-                histCopy.extent = {m_renderer.rt().extent.width, m_renderer.rt().extent.height, 1};
-                vkCmdCopyImage(cmd, m_renderer.rt().aaHdr.image(), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                               m_renderer.rt().aaHistory.image(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &histCopy);
-                transitionImage(cmd, m_renderer.rt().aaHdr.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-                    VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                    VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_READ_BIT,
-                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
-                transitionImage(cmd, m_renderer.rt().aaHistory.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                    VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
-                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
-            } else {
-                m_renderer.smaa().bindResources(*m_device, m_renderer.rt());
-                m_renderer.smaa().bindOutput(*m_device, m_frameCtx.swapView);
-                m_renderer.smaa().record(cmd, m_renderer.rt());
+                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
+
+                if (m_aaMethod == AAMethod::TAA) {
+                    m_renderer.taa().bindResources(*m_device, m_renderer.rt(), m_frameCtx.frameInFlight);
+                    m_renderer.taa().bindOutput(*m_device, m_frameCtx.swapView, m_frameCtx.frameInFlight);
+                    m_renderer.taa().record(cmd, m_renderer.rt(), m_jitter, m_prevJitter,
+                                m_frameCtx.invViewProj, m_prevViewProj, m_frameCtx.frameInFlight, m_taaBlendAlpha);
+                    // Copy aaHdr → aaHistory for next frame
+                    transitionImage(cmd, m_renderer.rt().aaHdr.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
+                        VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
+                    transitionImage(cmd, m_renderer.rt().aaHistory.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                        VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                        VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
+                        VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
+                    VkImageCopy histCopy{};
+                    histCopy.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+                    histCopy.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+                    histCopy.extent = {m_renderer.rt().extent.width, m_renderer.rt().extent.height, 1};
+                    vkCmdCopyImage(cmd, m_renderer.rt().aaHdr.image(), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                                   m_renderer.rt().aaHistory.image(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &histCopy);
+                    transitionImage(cmd, m_renderer.rt().aaHdr.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                        VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                        VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_READ_BIT,
+                        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+                    transitionImage(cmd, m_renderer.rt().aaHistory.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                        VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+                } else {
+                    m_renderer.smaa().bindResources(*m_device, m_renderer.rt());
+                    m_renderer.smaa().bindOutput(*m_device, m_frameCtx.swapView);
+                    m_renderer.smaa().record(cmd, m_renderer.rt());
+                }
+                writeTimestamp(cmd, m_renderer.kTsAA);
             }
-            writeTimestamp(cmd, m_renderer.kTsAA);
         } else {
             // No AA: tonemap writes directly to swapchain
             transitionImage(cmd, m_frameCtx.swapImage, VK_IMAGE_ASPECT_COLOR_BIT,
@@ -3724,6 +3727,14 @@ void App::setupFrameGraph() {
             VK_IMAGE_LAYOUT_UNDEFINED);
     }
 
+    // Swapchain 图像（每帧导入，acquire 后布局为 UNDEFINED）
+    // 注意：不使用 debugName，避免 persistentState 跨帧恢复错误的布局
+    //       （vkAcquireNextImageKHR 每帧将 swapImage 重置为 UNDEFINED）
+    m_fgh.swapImage = m_fg.importTexture(nullptr, m_frameCtx.swapImage,
+        {ext, m_swap->format(), 1, 1, VK_SAMPLE_COUNT_1_BIT,
+         VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT},
+        VK_IMAGE_LAYOUT_UNDEFINED);
+
     // ================================================================
     // 注册所有 Pass（按执行顺序）
     // 注意：FrameGraph 会自动插入 barrier，不需要手动 transitionImage
@@ -3734,107 +3745,6 @@ void App::setupFrameGraph() {
     bool needVoxelGrid = !fwd && (m_renderer.vxgiEnabled() || m_renderer.ddgiEnabled()
         || m_renderer.sdfgiPass().enabled || m_renderer.lumenEnabled()
         || m_renderer.restirPass().enabled);
-
-    // ════════════════════════════════════════════════════════════════
-    // Bootstrap passes — 必须在所有 draw/dispatch 之前运行！
-    // 某些 descriptor set 可能引用 FrameGraph 资源（如 hdrColor），
-    // 但 FrameGraph 的第一个 writer 可能在拓扑排序中靠后，
-    // 导致前面的 draw pass 看到 UNDEFINED layout。
-    // ════════════════════════════════════════════════════════════════
-
-    // --- 关键资源提前 Bootstrap（UNDEFINED→GENERAL） ---
-    m_fg.addPass("Resource-Bootstrap", [&](FGBuilder& b) {
-        b.setPassType(FGPassType::Compute);
-        b.setManualBarriers();
-        b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
-            if (m_renderer.frameIndex() > 0) return;  // 仅首帧执行
-            auto toGeneral = [&](VkImage img) {
-                transitionImage(cmd, img, VK_IMAGE_ASPECT_COLOR_BIT,
-                    VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
-                    VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
-                    VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
-                    VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT);
-            };
-            toGeneral(m_renderer.rt().hdrColor.image());
-            toGeneral(m_renderer.rt().hdrPrev.image());
-        });
-    });
-
-    // --- VXGI Bootstrap ---
-    if (!needVoxelGrid) {
-        m_fg.addPass("VXGI-Bootstrap", [&](FGBuilder& b) {
-            b.setPassType(FGPassType::Compute);
-            b.setManualBarriers();
-            b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
-                if (m_renderer.frameIndex() > 0) return;  // 仅首帧执行
-                auto transitionToSRO = [&](VkImage img, uint32_t mipLevels) {
-                    VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
-                    b.srcStageMask = VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
-                    b.srcAccessMask = 0;
-                    b.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-                    b.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
-                    b.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-                    b.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-                    b.image = img;
-                    b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, mipLevels, 0, 1};
-                    VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-                    di.imageMemoryBarrierCount = 1; di.pImageMemoryBarriers = &b;
-                    vkCmdPipelineBarrier2(cmd, &di);
-                };
-                transitionToSRO(m_renderer.vxgi().image().image(), m_renderer.vxgi().mipLevels());
-                transitionToSRO(m_renderer.vxgi().aniso().image(), m_renderer.vxgi().mipLevels());
-            });
-        });
-    }
-
-    // --- DDGI Bootstrap ---
-    if (!fwd && !m_renderer.ddgiEnabled()) {
-        m_fg.addPass("DDGI-Bootstrap", [&](FGBuilder& b) {
-            b.setPassType(FGPassType::Compute);
-            b.setManualBarriers();
-            b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
-                if (m_renderer.frameIndex() > 0) return;  // 仅首帧执行
-                auto barrierAtlas = [&](VkImage img) {
-                    VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
-                    b.srcStageMask = VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
-                    b.srcAccessMask = 0;
-                    b.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-                    b.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
-                    b.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-                    b.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-                    b.image = img;
-                    b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-                    VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-                    di.imageMemoryBarrierCount = 1; di.pImageMemoryBarriers = &b;
-                    vkCmdPipelineBarrier2(cmd, &di);
-                };
-                barrierAtlas(m_renderer.ddgi().irradiance().image());
-                barrierAtlas(m_renderer.ddgi().distance().image());
-                m_renderer.ddgiAtlasInited() = true;
-            });
-        });
-    }
-
-    // --- LPV Bootstrap ---
-    if (!fwd && !m_renderer.lpvEnabled()) {
-        m_fg.addPass("LPV-Bootstrap", [&](FGBuilder& b) {
-            b.setPassType(FGPassType::Compute);
-            b.setManualBarriers();
-            b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
-                if (m_renderer.frameIndex() > 0) return;  // 仅首帧执行
-                VkImage imgs[3] = {m_renderer.lpv().current().lpvR.image(),
-                                   m_renderer.lpv().current().lpvG.image(),
-                                   m_renderer.lpv().current().lpvB.image()};
-                for (auto img : imgs) {
-                    transitionImage(cmd, img, VK_IMAGE_ASPECT_COLOR_BIT,
-                        VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                        VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
-                        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                        VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
-                }
-            });
-        });
-    }
 
     // ════════════════════════════════════════════════════════════════
     // 注意：必须先声明 GBuffer/Forward（写 depth），再声明 Shadow（读 depth），
@@ -4924,9 +4834,59 @@ void App::setupFrameGraph() {
                 writeTimestamp(cmd, m_renderer.kTsTonemap);
             });
         });
+
+        // --- TAA / SMAA ---
+        // 读取 aaHdr + depth(+aaHistory in TAA)，写入 swapImage
+        if (m_aaMethod == AAMethod::TAA) {
+            m_fg.addPass("TAA", [&](FGBuilder& b) {
+                b.setPassType(FGPassType::Compute);
+                b.read(m_fgh.aaHdr, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+                b.read(m_fgh.aaHistory, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+                b.read(m_fgh.depth, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+                b.write(m_fgh.swapImage, VK_IMAGE_LAYOUT_GENERAL);
+                b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
+                    m_renderer.taa().bindResources(*m_device, m_renderer.rt(), m_frameCtx.frameInFlight);
+                    m_renderer.taa().bindOutput(*m_device, m_frameCtx.swapView, m_frameCtx.frameInFlight);
+                    m_renderer.taa().record(cmd, m_renderer.rt(), m_jitter, m_prevJitter,
+                        m_frameCtx.invViewProj, m_prevViewProj, m_frameCtx.frameInFlight, m_taaBlendAlpha);
+                    writeTimestamp(cmd, m_renderer.kTsAA);
+                });
+            });
+
+            // --- Copy aaHdr → aaHistory（下一帧 TAA 的历史输入）---
+            m_fg.addPass("Copy-aaHistory", [&](FGBuilder& b) {
+                b.setPassType(FGPassType::Compute);
+                b.read(m_fgh.aaHdr, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+                b.write(m_fgh.aaHistory, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+                b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
+                    VkImageCopy region{};
+                    region.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+                    region.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+                    region.extent = {m_renderer.rt().extent.width, m_renderer.rt().extent.height, 1};
+                    vkCmdCopyImage(cmd,
+                        m_renderer.rt().aaHdr.image(), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                        m_renderer.rt().aaHistory.image(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                        1, &region);
+                });
+            });
+        } else {
+            // SMAA：只需 aaHdr 输入，内部 m_edgeTex 自行管理 barrier
+            m_fg.addPass("SMAA", [&](FGBuilder& b) {
+                b.setPassType(FGPassType::Compute);
+                b.read(m_fgh.aaHdr, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+                b.write(m_fgh.swapImage, VK_IMAGE_LAYOUT_GENERAL);
+                b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
+                    m_renderer.smaa().bindResources(*m_device, m_renderer.rt());
+                    m_renderer.smaa().bindOutput(*m_device, m_frameCtx.swapView);
+                    m_renderer.smaa().record(cmd, m_renderer.rt());
+                    writeTimestamp(cmd, m_renderer.kTsAA);
+                });
+            });
+        }
     }
 
-    // TAA/SMAA/ImGui 由 recordPostProcessing 统一处理，暂不纳入 FrameGraph
+    // 注：TAA/SMAA/Copy-aaHistory 的 barrier 由 FrameGraph 自动管理。
+    //      ImGui 和最终 swapImage→PRESENT 过渡仍由 recordPostProcessing 处理。
 }
 
 }

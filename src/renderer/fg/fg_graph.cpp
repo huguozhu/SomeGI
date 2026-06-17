@@ -42,7 +42,7 @@ FGHandle FrameGraph::importTexture(const char* name,
     node.state.layout = initialLayout;
 
     m_resources.push_back(std::move(node));
-    m_resourceNameMap[name] = idx;
+    if (name) m_resourceNameMap[name] = idx;  // nullptr 用于无需持久化的资源（如 swapchain）
     return h;
 }
 
