@@ -3628,133 +3628,9 @@ void App::setupFrameGraph() {
     using namespace somegi::fg;
     auto ext2d = m_swap->extent();
     VkExtent3D ext{ext2d.width, ext2d.height, 1};
-    auto& rt = m_renderer.rt();
 
-    // ================================================================
-    // 导入持久纹理资源（跨帧存活，FrameGraph 不管理其生命周期）
-    // ================================================================
-
-    // GBuffer (resolved, single-sample) —— 初始布局为 UNDEFINED（首帧由 GBuffer pass 写入）
-    m_fgh.gAlbedoMetal = m_fg.importTexture("gAlbedoMetal", rt.gAlbedoMetal.image(),
-        {ext, rt.gAlbedoMetal.format(), 1, 1, VK_SAMPLE_COUNT_1_BIT,
-         VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT},
-        VK_IMAGE_LAYOUT_UNDEFINED);
-    m_fgh.gNormalRough = m_fg.importTexture("gNormalRough", rt.gNormalRough.image(),
-        {ext, rt.gNormalRough.format(), 1, 1, VK_SAMPLE_COUNT_1_BIT,
-         VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT},
-        VK_IMAGE_LAYOUT_UNDEFINED);
-    m_fgh.gEmissiveAO = m_fg.importTexture("gEmissiveAO", rt.gEmissiveAO.image(),
-        {ext, rt.gEmissiveAO.format(), 1, 1, VK_SAMPLE_COUNT_1_BIT,
-         VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT},
-        VK_IMAGE_LAYOUT_UNDEFINED);
-    m_fgh.depth = m_fg.importTexture("depth", rt.depth.image(),
-        {ext, VK_FORMAT_D32_SFLOAT, 1, 1, VK_SAMPLE_COUNT_1_BIT,
-         VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT},
-        VK_IMAGE_LAYOUT_UNDEFINED);
-
-    // GBuffer MSAA
-    m_fgh.gAlbedoMetalMs = m_fg.importTexture("gAlbedoMetalMs", rt.gAlbedoMetalMs.image(),
-        {ext, rt.gAlbedoMetalMs.format(), 1, 1, m_msaaSamples,
-         VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT}, VK_IMAGE_LAYOUT_UNDEFINED);
-    m_fgh.gNormalRoughMs = m_fg.importTexture("gNormalRoughMs", rt.gNormalRoughMs.image(),
-        {ext, rt.gNormalRoughMs.format(), 1, 1, m_msaaSamples,
-         VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT}, VK_IMAGE_LAYOUT_UNDEFINED);
-    m_fgh.gEmissiveAOMs = m_fg.importTexture("gEmissiveAOMs", rt.gEmissiveAOMs.image(),
-        {ext, rt.gEmissiveAOMs.format(), 1, 1, m_msaaSamples,
-         VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT}, VK_IMAGE_LAYOUT_UNDEFINED);
-    m_fgh.depthMs = m_fg.importTexture("depthMs", rt.depthMs.image(),
-        {ext, VK_FORMAT_D32_SFLOAT, 1, 1, m_msaaSamples,
-         VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT}, VK_IMAGE_LAYOUT_UNDEFINED);
-
-    // AO
-    m_fgh.ssao = m_fg.importTexture("ssao", rt.ssao.image(),
-        {ext, VK_FORMAT_R8_UNORM, 1, 1, VK_SAMPLE_COUNT_1_BIT,
-         VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT},
-        VK_IMAGE_LAYOUT_UNDEFINED);
-
-    // SSR
-    m_fgh.ssr = m_fg.importTexture("ssr", rt.ssr.image(),
-        {ext, VK_FORMAT_R16G16B16A16_SFLOAT, 1, 1, VK_SAMPLE_COUNT_1_BIT,
-         VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT},
-        VK_IMAGE_LAYOUT_UNDEFINED);
-
-    // SSGI
-    m_fgh.ssgi = m_fg.importTexture("ssgi", rt.ssgi.image(),
-        {ext, VK_FORMAT_R16G16B16A16_SFLOAT, 1, 1, VK_SAMPLE_COUNT_1_BIT,
-         VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT},
-        VK_IMAGE_LAYOUT_UNDEFINED);
-    m_fgh.ssgiPrev = m_fg.importTexture("ssgiPrev", rt.ssgiPrev.image(),
-        {ext, VK_FORMAT_R16G16B16A16_SFLOAT, 1, 1, VK_SAMPLE_COUNT_1_BIT,
-         VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT},
-        VK_IMAGE_LAYOUT_UNDEFINED);
-
-    // HDR
-    m_fgh.hdrColor = m_fg.importTexture("hdrColor", rt.hdrColor.image(),
-        {ext, VK_FORMAT_R16G16B16A16_SFLOAT, 1, 1, VK_SAMPLE_COUNT_1_BIT,
-         VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT},
-        VK_IMAGE_LAYOUT_UNDEFINED);
-    m_fgh.hdrPrev = m_fg.importTexture("hdrPrev", rt.hdrPrev.image(),
-        {ext, VK_FORMAT_R16G16B16A16_SFLOAT, 1, 1, VK_SAMPLE_COUNT_1_BIT,
-         VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT},
-        VK_IMAGE_LAYOUT_UNDEFINED);
-
-    // LDR
-    m_fgh.ldrTonemap = m_fg.importTexture("ldrTonemap", rt.ldrTonemap.image(),
-        {ext, VK_FORMAT_B8G8R8A8_UNORM, 1, 1, VK_SAMPLE_COUNT_1_BIT,
-         VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT},
-        VK_IMAGE_LAYOUT_UNDEFINED);
-
-    // RT GI
-    m_fgh.rtGI = m_fg.importTexture("rtGI", rt.rtGI.image(),
-        {ext, VK_FORMAT_R16G16B16A16_SFLOAT, 1, 1, VK_SAMPLE_COUNT_1_BIT,
-         VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT},
-        VK_IMAGE_LAYOUT_UNDEFINED);
-
-    // ReSTIR
-    m_fgh.restir = m_fg.importTexture("restir", rt.restir.image(),
-        {ext, VK_FORMAT_R16G16B16A16_SFLOAT, 1, 1, VK_SAMPLE_COUNT_1_BIT,
-         VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT},
-        VK_IMAGE_LAYOUT_UNDEFINED);
-
-    // RSM GI
-    m_fgh.rsmGI = m_fg.importTexture("rsmGI", rt.rsmGI.image(),
-        {ext, VK_FORMAT_R16G16B16A16_SFLOAT, 1, 1, VK_SAMPLE_COUNT_1_BIT,
-         VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT},
-        VK_IMAGE_LAYOUT_UNDEFINED);
-
-    // Lumen GI
-    m_fgh.lumenGI = m_fg.importTexture("lumenGI", rt.lumenGI.image(),
-        {ext, VK_FORMAT_R16G16B16A16_SFLOAT, 1, 1, VK_SAMPLE_COUNT_1_BIT,
-         VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT},
-        VK_IMAGE_LAYOUT_UNDEFINED);
-
-    // Shadow mask
-    m_fgh.shadowMask = m_fg.importTexture("shadowMask",
-        m_renderer.shadow().shadowMask().image(),
-        {ext, VK_FORMAT_R8_UNORM, 1, 1, VK_SAMPLE_COUNT_1_BIT,
-         VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT},
-        VK_IMAGE_LAYOUT_UNDEFINED);
-
-    // AA
     bool aaEnabled = (m_aaMethod == AAMethod::TAA || m_aaMethod == AAMethod::SMAA);
-    if (aaEnabled) {
-        m_fgh.aaHdr = m_fg.importTexture("aaHdr", rt.aaHdr.image(),
-            {ext, VK_FORMAT_R16G16B16A16_SFLOAT, 1, 1, VK_SAMPLE_COUNT_1_BIT,
-             VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT},
-            VK_IMAGE_LAYOUT_UNDEFINED);
-        m_fgh.aaHistory = m_fg.importTexture("aaHistory", rt.aaHistory.image(),
-            {ext, VK_FORMAT_R16G16B16A16_SFLOAT, 1, 1, VK_SAMPLE_COUNT_1_BIT,
-             VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT},
-            VK_IMAGE_LAYOUT_UNDEFINED);
-    }
-
-    // Swapchain 图像（每帧导入，acquire 后布局为 UNDEFINED）
-    // 注意：不使用 debugName，避免 persistentState 跨帧恢复错误的布局
-    //       （vkAcquireNextImageKHR 每帧将 swapImage 重置为 UNDEFINED）
-    m_fgh.swapImage = m_fg.importTexture(nullptr, m_frameCtx.swapImage,
-        {ext, m_swap->format(), 1, 1, VK_SAMPLE_COUNT_1_BIT,
-         VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT},
-        VK_IMAGE_LAYOUT_UNDEFINED);
+    setupFgImports(ext, aaEnabled);
 
     // ================================================================
     // 注册所有 Pass（按执行顺序）
@@ -4908,6 +4784,133 @@ void App::setupFrameGraph() {
 
     // 注：TAA/SMAA/Copy-aaHistory 的 barrier 由 FrameGraph 自动管理。
     //      ImGui 和最终 swapImage→PRESENT 过渡仍由 recordPostProcessing 处理。
+}
+
+// ================================================================
+// setupFgImports — 导入所有持久纹理资源到 FrameGraph
+// ================================================================
+void App::setupFgImports(VkExtent3D ext, bool aaEnabled) {
+    using namespace somegi::fg;
+    auto& rt = m_renderer.rt();
+
+    // GBuffer (resolved, single-sample)
+    m_fgh.gAlbedoMetal = m_fg.importTexture("gAlbedoMetal", rt.gAlbedoMetal.image(),
+        {ext, rt.gAlbedoMetal.format(), 1, 1, VK_SAMPLE_COUNT_1_BIT,
+         VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT},
+        VK_IMAGE_LAYOUT_UNDEFINED);
+    m_fgh.gNormalRough = m_fg.importTexture("gNormalRough", rt.gNormalRough.image(),
+        {ext, rt.gNormalRough.format(), 1, 1, VK_SAMPLE_COUNT_1_BIT,
+         VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT},
+        VK_IMAGE_LAYOUT_UNDEFINED);
+    m_fgh.gEmissiveAO = m_fg.importTexture("gEmissiveAO", rt.gEmissiveAO.image(),
+        {ext, rt.gEmissiveAO.format(), 1, 1, VK_SAMPLE_COUNT_1_BIT,
+         VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT},
+        VK_IMAGE_LAYOUT_UNDEFINED);
+    m_fgh.depth = m_fg.importTexture("depth", rt.depth.image(),
+        {ext, VK_FORMAT_D32_SFLOAT, 1, 1, VK_SAMPLE_COUNT_1_BIT,
+         VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT},
+        VK_IMAGE_LAYOUT_UNDEFINED);
+
+    // GBuffer MSAA
+    m_fgh.gAlbedoMetalMs = m_fg.importTexture("gAlbedoMetalMs", rt.gAlbedoMetalMs.image(),
+        {ext, rt.gAlbedoMetalMs.format(), 1, 1, m_msaaSamples,
+         VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT}, VK_IMAGE_LAYOUT_UNDEFINED);
+    m_fgh.gNormalRoughMs = m_fg.importTexture("gNormalRoughMs", rt.gNormalRoughMs.image(),
+        {ext, rt.gNormalRoughMs.format(), 1, 1, m_msaaSamples,
+         VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT}, VK_IMAGE_LAYOUT_UNDEFINED);
+    m_fgh.gEmissiveAOMs = m_fg.importTexture("gEmissiveAOMs", rt.gEmissiveAOMs.image(),
+        {ext, rt.gEmissiveAOMs.format(), 1, 1, m_msaaSamples,
+         VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT}, VK_IMAGE_LAYOUT_UNDEFINED);
+    m_fgh.depthMs = m_fg.importTexture("depthMs", rt.depthMs.image(),
+        {ext, VK_FORMAT_D32_SFLOAT, 1, 1, m_msaaSamples,
+         VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT}, VK_IMAGE_LAYOUT_UNDEFINED);
+
+    // AO
+    m_fgh.ssao = m_fg.importTexture("ssao", rt.ssao.image(),
+        {ext, VK_FORMAT_R8_UNORM, 1, 1, VK_SAMPLE_COUNT_1_BIT,
+         VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT},
+        VK_IMAGE_LAYOUT_UNDEFINED);
+
+    // SSR
+    m_fgh.ssr = m_fg.importTexture("ssr", rt.ssr.image(),
+        {ext, VK_FORMAT_R16G16B16A16_SFLOAT, 1, 1, VK_SAMPLE_COUNT_1_BIT,
+         VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT},
+        VK_IMAGE_LAYOUT_UNDEFINED);
+
+    // SSGI
+    m_fgh.ssgi = m_fg.importTexture("ssgi", rt.ssgi.image(),
+        {ext, VK_FORMAT_R16G16B16A16_SFLOAT, 1, 1, VK_SAMPLE_COUNT_1_BIT,
+         VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT},
+        VK_IMAGE_LAYOUT_UNDEFINED);
+    m_fgh.ssgiPrev = m_fg.importTexture("ssgiPrev", rt.ssgiPrev.image(),
+        {ext, VK_FORMAT_R16G16B16A16_SFLOAT, 1, 1, VK_SAMPLE_COUNT_1_BIT,
+         VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT},
+        VK_IMAGE_LAYOUT_UNDEFINED);
+
+    // HDR
+    m_fgh.hdrColor = m_fg.importTexture("hdrColor", rt.hdrColor.image(),
+        {ext, VK_FORMAT_R16G16B16A16_SFLOAT, 1, 1, VK_SAMPLE_COUNT_1_BIT,
+         VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT},
+        VK_IMAGE_LAYOUT_UNDEFINED);
+    m_fgh.hdrPrev = m_fg.importTexture("hdrPrev", rt.hdrPrev.image(),
+        {ext, VK_FORMAT_R16G16B16A16_SFLOAT, 1, 1, VK_SAMPLE_COUNT_1_BIT,
+         VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT},
+        VK_IMAGE_LAYOUT_UNDEFINED);
+
+    // LDR
+    m_fgh.ldrTonemap = m_fg.importTexture("ldrTonemap", rt.ldrTonemap.image(),
+        {ext, VK_FORMAT_B8G8R8A8_UNORM, 1, 1, VK_SAMPLE_COUNT_1_BIT,
+         VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT},
+        VK_IMAGE_LAYOUT_UNDEFINED);
+
+    // RT GI
+    m_fgh.rtGI = m_fg.importTexture("rtGI", rt.rtGI.image(),
+        {ext, VK_FORMAT_R16G16B16A16_SFLOAT, 1, 1, VK_SAMPLE_COUNT_1_BIT,
+         VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT},
+        VK_IMAGE_LAYOUT_UNDEFINED);
+
+    // ReSTIR
+    m_fgh.restir = m_fg.importTexture("restir", rt.restir.image(),
+        {ext, VK_FORMAT_R16G16B16A16_SFLOAT, 1, 1, VK_SAMPLE_COUNT_1_BIT,
+         VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT},
+        VK_IMAGE_LAYOUT_UNDEFINED);
+
+    // RSM GI
+    m_fgh.rsmGI = m_fg.importTexture("rsmGI", rt.rsmGI.image(),
+        {ext, VK_FORMAT_R16G16B16A16_SFLOAT, 1, 1, VK_SAMPLE_COUNT_1_BIT,
+         VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT},
+        VK_IMAGE_LAYOUT_UNDEFINED);
+
+    // Lumen GI
+    m_fgh.lumenGI = m_fg.importTexture("lumenGI", rt.lumenGI.image(),
+        {ext, VK_FORMAT_R16G16B16A16_SFLOAT, 1, 1, VK_SAMPLE_COUNT_1_BIT,
+         VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT},
+        VK_IMAGE_LAYOUT_UNDEFINED);
+
+    // Shadow mask
+    m_fgh.shadowMask = m_fg.importTexture("shadowMask",
+        m_renderer.shadow().shadowMask().image(),
+        {ext, VK_FORMAT_R8_UNORM, 1, 1, VK_SAMPLE_COUNT_1_BIT,
+         VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT},
+        VK_IMAGE_LAYOUT_UNDEFINED);
+
+    // AA intermediates
+    if (aaEnabled) {
+        m_fgh.aaHdr = m_fg.importTexture("aaHdr", rt.aaHdr.image(),
+            {ext, VK_FORMAT_R16G16B16A16_SFLOAT, 1, 1, VK_SAMPLE_COUNT_1_BIT,
+             VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT},
+            VK_IMAGE_LAYOUT_UNDEFINED);
+        m_fgh.aaHistory = m_fg.importTexture("aaHistory", rt.aaHistory.image(),
+            {ext, VK_FORMAT_R16G16B16A16_SFLOAT, 1, 1, VK_SAMPLE_COUNT_1_BIT,
+             VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT},
+            VK_IMAGE_LAYOUT_UNDEFINED);
+    }
+
+    // Swapchain（每帧导入，不使用 debugName 避免 persistentState 跨帧错乱）
+    m_fgh.swapImage = m_fg.importTexture(nullptr, m_frameCtx.swapImage,
+        {ext, m_swap->format(), 1, 1, VK_SAMPLE_COUNT_1_BIT,
+         VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT},
+        VK_IMAGE_LAYOUT_UNDEFINED);
 }
 
 }

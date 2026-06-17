@@ -203,6 +203,7 @@ private:
     void registerPipelineSteps();
     void buildPipelineTable();
     void setupFrameGraph();
+    void setupFgImports(VkExtent3D ext, bool aaEnabled);
     void writeTimestamp(VkCommandBuffer cmd, uint32_t slot);
 
     // Frame loop helpers (extracted from run())
