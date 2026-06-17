@@ -773,7 +773,7 @@ void App::onSwapchainResized() {
                          m_renderer.lpv().current(), m_renderer.vxgi(), m_renderer.prt(), m_renderer.ddgi(),
                          m_renderer.ddgi().probeStates().handle());
     m_renderer.ssao().bindFrame(m_renderer.rt());
-    m_renderer.gtao().bindFrame(*m_device, m_renderer.rt(), m_renderer.gbuffer().frameUboHandle());
+    m_renderer.gtao().bindFrame(m_renderer.rt());
     m_renderer.ssr().bindFrame(*m_device, m_renderer.rt(), m_renderer.gbuffer().frameUboHandle());
     m_renderer.ssgi().bindFrame(*m_device, m_renderer.rt(), m_renderer.gbuffer().frameUboHandle());
     m_renderer.gtgi().bindFrame(*m_device, m_renderer.rt(), m_renderer.gbuffer().frameUboHandle());

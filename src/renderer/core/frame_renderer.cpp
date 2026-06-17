@@ -107,8 +107,8 @@ void FrameRenderer::init(Device& d, VkCommandPool pool, VkExtent2D extent,
     m_ssao.init(*m_rhiDevice);
     m_ssao.bindFrame(m_rt);
     std::printf("[init] gtao pass...\n");
-    m_gtao.init(d);
-    m_gtao.bindFrame(d, m_rt, m_gbuffer.frameUboHandle());
+    m_gtao.init(*m_rhiDevice);
+    m_gtao.bindFrame(m_rt);
     std::printf("[init] ssr pass...\n");
     m_ssr.init(d);
     m_ssr.bindFrame(d, m_rt, m_gbuffer.frameUboHandle());
@@ -260,7 +260,7 @@ void FrameRenderer::onResize(Device& d, VkExtent2D newExtent,
                          m_lpv.current(), m_vxgi, m_prt, m_ddgi,
                          m_ddgi.probeStates().handle());
     m_ssao.bindFrame(m_rt);
-    m_gtao.bindFrame(d, m_rt, m_gbuffer.frameUboHandle());
+    m_gtao.bindFrame(m_rt);
     m_ssr.bindFrame(d, m_rt, m_gbuffer.frameUboHandle());
     m_ssgi.bindFrame(d, m_rt, m_gbuffer.frameUboHandle());
     m_gtgi.bindFrame(d, m_rt, m_gbuffer.frameUboHandle());
