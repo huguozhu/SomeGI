@@ -13,6 +13,7 @@ public:
     static std::unique_ptr<RHIShader> createFromFile(VkRHIDevice& device, const ShaderDesc& desc, const std::filesystem::path& spvPath);
     ~VkRHIShader() override;
     ShaderStage stage() const override { return m_desc.stage; }
+    const char* entryPoint() const override { return m_desc.entryPoint; }
     void* nativeHandle() const override { return (void*)m_module; }
 private:
     VkRHIDevice& m_device;

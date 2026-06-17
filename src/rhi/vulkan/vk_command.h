@@ -88,6 +88,8 @@ public:
 private:
     VkRHIDevice& m_device;
     VkCommandBuffer m_cmd;
+    VkPipelineLayout m_boundLayout = VK_NULL_HANDLE;  // 最近一次 bindPipelineState 的布局
+    VkPipelineBindPoint m_bindPoint = VK_PIPELINE_BIND_POINT_COMPUTE;
 };
 
 } // namespace rhi

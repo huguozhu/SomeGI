@@ -99,24 +99,25 @@ void VkRHICommandBuffer::setScissor(int32_t x, int32_t y, uint32_t w, uint32_t h
 
 void VkRHICommandBuffer::bindPipelineState(const RHIPipelineState& pso) {
     auto* vkpso = static_cast<const VkRHIPipelineState*>(&pso);
-    vkCmdBindPipeline(m_cmd, VK_PIPELINE_BIND_POINT_COMPUTE, (VkPipeline)(uintptr_t)pso.nativeHandle());
-    (void)vkpso; // 后续通过 pso 缓存 pipeline layout
+    m_bindPoint = vkpso->bindPoint();
+    m_boundLayout = vkpso->layout();
+    vkCmdBindPipeline(m_cmd, m_bindPoint, (VkPipeline)(uintptr_t)pso.nativeHandle());
 }
 void VkRHICommandBuffer::bindDescriptorSet(uint32_t slot, const RHIDescriptorSet& set) {
     VkDescriptorSet ds = (VkDescriptorSet)(uintptr_t)set.nativeHandle();
-    vkCmdBindDescriptorSets(m_cmd, VK_PIPELINE_BIND_POINT_COMPUTE, VK_NULL_HANDLE, slot, 1, &ds, 0, nullptr);
+    vkCmdBindDescriptorSets(m_cmd, m_bindPoint, m_boundLayout, slot, 1, &ds, 0, nullptr);
 }
 void VkRHICommandBuffer::bindDescriptorSets(uint32_t firstSlot, uint32_t count,
                                              const RHIDescriptorSet* const* sets) {
     std::vector<VkDescriptorSet> vkSets(count);
     for (uint32_t i = 0; i < count; ++i)
         vkSets[i] = (VkDescriptorSet)(uintptr_t)sets[i]->nativeHandle();
-    vkCmdBindDescriptorSets(m_cmd, VK_PIPELINE_BIND_POINT_COMPUTE, VK_NULL_HANDLE,
+    vkCmdBindDescriptorSets(m_cmd, m_bindPoint, m_boundLayout,
                             firstSlot, count, vkSets.data(), 0, nullptr);
 }
 void VkRHICommandBuffer::pushConstants(ShaderStage stage, const void* data, uint32_t size, uint32_t offset) {
     (void)stage;
-    vkCmdPushConstants(m_cmd, VK_NULL_HANDLE, VK_SHADER_STAGE_ALL, offset, size, data);
+    vkCmdPushConstants(m_cmd, m_boundLayout, VK_SHADER_STAGE_ALL, offset, size, data);
 }
 
 void VkRHICommandBuffer::bindVertexBuffer(const RHIBuffer& buffer, uint64_t offset) {

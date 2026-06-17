@@ -45,7 +45,7 @@ std::unique_ptr<RHIPipelineState> VkRHIPipelineState::createGraphics(VkRHIDevice
         VkPipelineShaderStageCreateInfo si{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
         si.stage = stage;
         si.module = (VkShaderModule)(uintptr_t)shader->nativeHandle();
-        si.pName = "main";
+        si.pName = shader->entryPoint();  // 使用 ShaderDesc 中指定的入口函数名
         stages.push_back(si);
     };
     addStage(desc.vertexShader, VK_SHADER_STAGE_VERTEX_BIT);
@@ -152,6 +152,7 @@ std::unique_ptr<RHIPipelineState> VkRHIPipelineState::createGraphics(VkRHIDevice
     gci.pNext = &dr;
     gci.renderPass = VK_NULL_HANDLE;
     vkCreateGraphicsPipelines(vkd, VK_NULL_HANDLE, 1, &gci, nullptr, &pso->m_pipeline);
+    pso->m_bindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
 
     return pso;
 }
@@ -183,9 +184,10 @@ std::unique_ptr<RHIPipelineState> VkRHIPipelineState::createCompute(VkRHIDevice&
     ci.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
     ci.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
     ci.stage.module = (VkShaderModule)(uintptr_t)desc.computeShader->nativeHandle();
-    ci.stage.pName = "main";
+    ci.stage.pName = desc.computeShader->entryPoint();
     ci.layout = pso->m_pipelineLayout;
     vkCreateComputePipelines(vkd, VK_NULL_HANDLE, 1, &ci, nullptr, &pso->m_pipeline);
+    pso->m_bindPoint = VK_PIPELINE_BIND_POINT_COMPUTE;
 
     return pso;
 }
@@ -207,7 +209,7 @@ std::unique_ptr<RHIPipelineState> VkRHIPipelineState::createRayTracing(VkRHIDevi
         if (!shader) continue;
         VkPipelineShaderStageCreateInfo si{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
         si.module = (VkShaderModule)(uintptr_t)shader->nativeHandle();
-        si.pName = "main";
+        si.pName = shader->entryPoint();
         switch (shader->stage()) {
             case ShaderStage::RayGen:        si.stage = VK_SHADER_STAGE_RAYGEN_BIT_KHR; break;
             case ShaderStage::RayMiss:       si.stage = VK_SHADER_STAGE_MISS_BIT_KHR; break;
@@ -273,6 +275,7 @@ std::unique_ptr<RHIPipelineState> VkRHIPipelineState::createRayTracing(VkRHIDevi
     // 使用 vkb dispatch 表调用（支持按需加载的扩展函数）
     device.dispatch().createRayTracingPipelinesKHR(
         VK_NULL_HANDLE, VK_NULL_HANDLE, 1, &ci, nullptr, &pso->m_pipeline);
+    pso->m_bindPoint = VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR;
 
     return pso;
 }
