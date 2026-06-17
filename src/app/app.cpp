@@ -3520,6 +3520,7 @@ void App::run() {
             m_flyer.update(m_camera, dt, m_window->handle());
         }
         buildUI();
+        m_renderer.imgui().saveSettings();  // 窗口/控件变更有修改就保存
         applySceneSelection();
 
         if (!wantKbd && ImGui::IsKeyPressed(ImGuiKey_F2)) {
