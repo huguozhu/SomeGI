@@ -169,8 +169,8 @@ void FrameRenderer::init(Device& d, VkCommandPool pool, VkExtent2D extent,
     m_lpvInject.bindResources(d, m_rsmGeom.position(), m_rsmGeom.normal(),
                               m_rsmGeom.flux(), m_lpv.current(), m_lpv.gv());
     std::printf("[init] lpv propagate pass...\n");
-    m_lpvProp.init(d);
-    m_lpvProp.bindResources(d, m_lpv.current(), m_lpv.next(), m_lpv.gv());
+    m_lpvProp.init(*m_rhiDevice);
+    m_lpvProp.bindResources(m_lpv.current(), m_lpv.next(), m_lpv.gv());
 
     bootstrapHdrPrev();
     bootstrapSsgiTemporal();
