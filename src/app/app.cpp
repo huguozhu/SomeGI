@@ -774,7 +774,7 @@ void App::onSwapchainResized() {
                          m_renderer.ddgi().probeStates().handle());
     m_renderer.ssao().bindFrame(m_renderer.rt());
     m_renderer.gtao().bindFrame(m_renderer.rt());
-    m_renderer.ssr().bindFrame(*m_device, m_renderer.rt(), m_renderer.gbuffer().frameUboHandle());
+    m_renderer.ssr().bindFrame(m_renderer.rt(), m_renderer.gbuffer().frameUboHandle());
     m_renderer.ssgi().bindFrame(*m_device, m_renderer.rt(), m_renderer.gbuffer().frameUboHandle());
     m_renderer.gtgi().bindFrame(*m_device, m_renderer.rt(), m_renderer.gbuffer().frameUboHandle());
     // SDFGI trace 也读 rt.gNormalRough/depth/ssgi → resize 后重绑。
