@@ -1,4 +1,5 @@
 #pragma once
+#include "rhi/base/device.h"
 #include "core/buffer.h"
 #include "core/shader.h"
 #include "scene/scene.h"
@@ -13,7 +14,7 @@ class Device;
 
 class ForwardPass {
 public:
-    void init(Device& d, VkFormat colorFmt, VkFormat depthFmt, uint32_t maxTextures);
+    void init(Device& d, rhi::RHIDevice& rhiDevice, VkFormat colorFmt, VkFormat depthFmt, uint32_t maxTextures);
     void destroy();
 
     // 绑定 IBL 预烘焙资源到 set=1（init 之后、首帧之前调用一次）
@@ -50,6 +51,7 @@ private:
     void destroyPipeline();
 
     Device* m_device = nullptr;
+    rhi::RHIDevice* m_rhiDevice = nullptr;
     VkFormat m_colorFmt = VK_FORMAT_UNDEFINED;
     VkFormat m_depthFmt = VK_FORMAT_UNDEFINED;
 

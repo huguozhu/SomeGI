@@ -1,4 +1,5 @@
 #pragma once
+#include "rhi/base/device.h"
 #include "core/image.h"
 #include "core/buffer.h"
 #include <glm/glm.hpp>
@@ -42,7 +43,7 @@ constexpr int kShadowCount = (int)(sizeof(kShadows) / sizeof(kShadows[0]));
 
 class ShadowPass {
 public:
-    void init(Device& d, VkExtent2D shadowMapSize, VkExtent2D outputSize);
+    void init(Device& d, rhi::RHIDevice& rhiDevice, VkExtent2D shadowMapSize, VkExtent2D outputSize);
     void destroy();
 
     // Per-frame record: dispatches based on m_method
@@ -117,6 +118,7 @@ private:
     void destroyPipelines();
 
     Device* m_device = nullptr;
+    rhi::RHIDevice* m_rhiDevice = nullptr;
     ShadowMethod m_method = ShadowMethod::HardShadowMap;
     uint32_t m_currentFrameIndex = 0;  // 用于 RT soft shadow 随机种子
 

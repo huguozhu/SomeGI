@@ -310,7 +310,7 @@ App::App() {
     m_fg.initTimestamps(*m_device, 32);  // GPU timestamp profiling: 最多 32 个 active pass
 
     // Init ImGui on the separate debug window
-    m_renderer.imgui().init(*m_device, m_imguiWin->handle(), m_imguiSwap->format(), kFramesInFlight);
+    m_renderer.imgui().init(*m_device, *m_renderer.rhiDevice(), m_imguiWin->handle(), m_imguiSwap->format(), kFramesInFlight);
 
     // Register all rendering steps into the pipeline table
     registerPipelineSteps();
@@ -3633,7 +3633,7 @@ void App::renderDebugWindow() {
         WindowDesc iwd; iwd.title = "SomeGI Debug"; iwd.width = 600; iwd.height = 900;
         m_imguiWin = std::make_unique<Window>(iwd);
         m_imguiSwap = std::make_unique<Swapchain>(*m_device, *m_imguiWin);
-        m_renderer.imgui().init(*m_device, m_imguiWin->handle(), m_imguiSwap->format(), kFramesInFlight);
+        m_renderer.imgui().init(*m_device, *m_renderer.rhiDevice(), m_imguiWin->handle(), m_imguiSwap->format(), kFramesInFlight);
         return;
     }
     auto f = m_imguiSwap->acquireNextFrame();

@@ -60,8 +60,9 @@ static_assert(sizeof(PCSS_PC) == 40, "PCSS_PC must match shader push constant la
 // 公共接口
 // ────────────────────────────────────────────────────────────────────────────
 
-void ShadowPass::init(Device& d, VkExtent2D shadowMapSize, VkExtent2D outputSize) {
+void ShadowPass::init(Device& d, rhi::RHIDevice& rhiDevice, VkExtent2D shadowMapSize, VkExtent2D outputSize) {
     m_device = &d;
+    m_rhiDevice = &rhiDevice;
     m_shadowMapSize = shadowMapSize;
     m_outputSize = outputSize;
 

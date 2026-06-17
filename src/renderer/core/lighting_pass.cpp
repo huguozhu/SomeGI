@@ -25,8 +25,9 @@ struct LightingPC {
 static_assert(sizeof(LightingPC) == 16, "LightingPC must match shader push constant layout");
 }
 
-void LightingPass::init(Device& d) {
+void LightingPass::init(Device& d, rhi::RHIDevice& rhiDevice) {
     m_device = &d;
+    m_rhiDevice = &rhiDevice;
 
     // === Set=0 layout ===
     // 0: UBO (FrameUniforms)

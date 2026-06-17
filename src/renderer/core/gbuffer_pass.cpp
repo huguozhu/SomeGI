@@ -14,11 +14,12 @@ struct PC {
 static_assert(sizeof(PC) == 80, "PC must match shader push constant layout");
 }
 
-void GBufferPass::init(Device& d,
+void GBufferPass::init(Device& d, rhi::RHIDevice& rhiDevice,
                        VkFormat rt0Fmt, VkFormat rt1Fmt, VkFormat rt2Fmt,
                        VkFormat depthFmt, uint32_t maxTextures,
                        VkSampleCountFlagBits msaaSamples) {
     m_device = &d;
+    m_rhiDevice = &rhiDevice;
     m_rt0Fmt = rt0Fmt; m_rt1Fmt = rt1Fmt; m_rt2Fmt = rt2Fmt;
     m_depthFmt = depthFmt;
     m_maxTextures = maxTextures;

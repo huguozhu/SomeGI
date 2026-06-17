@@ -56,10 +56,10 @@ void FrameRenderer::init(Device& d, VkCommandPool pool, VkExtent2D extent,
 
     // Core passes
     std::printf("[init] gbuffer pass...\n");
-    m_gbuffer.init(d, VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_R16G16B16A16_SFLOAT,
+    m_gbuffer.init(d, *m_rhiDevice, VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_R16G16B16A16_SFLOAT,
                    VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_D32_SFLOAT, 128, msaaSamples);
     std::printf("[init] forward pass...\n");
-    m_forward.init(d, VK_FORMAT_R16G16B16A16_SFLOAT, VK_FORMAT_D32_SFLOAT, 128);
+    m_forward.init(d, *m_rhiDevice, VK_FORMAT_R16G16B16A16_SFLOAT, VK_FORMAT_D32_SFLOAT, 128);
     std::printf("[init] rsm geometry pass...\n");
     m_rsmGeom.init(d, *m_rhiDevice, 128);
     std::printf("[init] rsm sample pass...\n");
@@ -86,10 +86,10 @@ void FrameRenderer::init(Device& d, VkCommandPool pool, VkExtent2D extent,
     m_ndgiInited = false;
 
     std::printf("[init] shadow pass...\n");
-    m_shadow.init(d, {2048, 2048}, extent);
+    m_shadow.init(d, *m_rhiDevice, {2048, 2048}, extent);
 
     std::printf("[init] lighting pass...\n");
-    m_lighting.init(d);
+    m_lighting.init(d, *m_rhiDevice);
     m_lighting.bindShadowMask(d, m_shadow.shadowMask().view());
     m_lighting.bindFrame(d, m_rt, m_gbuffer.frameUboHandle(),
                          m_lpv.current(), m_vxgi, m_prt, m_ddgi,

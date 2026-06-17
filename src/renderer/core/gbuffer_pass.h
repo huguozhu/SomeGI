@@ -1,4 +1,5 @@
 #pragma once
+#include "rhi/base/device.h"
 #include "core/buffer.h"
 #include "core/shader.h"
 #include "scene/scene.h"
@@ -14,7 +15,7 @@ class Device;
 // evaluated in the LightingPass (compute) that consumes this output.
 class GBufferPass {
 public:
-    void init(Device& d,
+    void init(Device& d, rhi::RHIDevice& rhiDevice,
               VkFormat rt0Fmt, VkFormat rt1Fmt, VkFormat rt2Fmt,
               VkFormat depthFmt, uint32_t maxTextures,
               VkSampleCountFlagBits msaaSamples = VK_SAMPLE_COUNT_1_BIT);
@@ -52,6 +53,7 @@ private:
     void destroyPipeline();
 
     Device* m_device = nullptr;
+    rhi::RHIDevice* m_rhiDevice = nullptr;
     VkFormat m_rt0Fmt = VK_FORMAT_UNDEFINED;
     VkFormat m_rt1Fmt = VK_FORMAT_UNDEFINED;
     VkFormat m_rt2Fmt = VK_FORMAT_UNDEFINED;

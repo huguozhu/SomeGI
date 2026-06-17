@@ -1,4 +1,5 @@
 #pragma once
+#include "rhi/base/device.h"
 #include "core/buffer.h"
 #include "renderer/core/render_targets.h"
 #include "renderer/gi/lpv/lpv_grid.h"
@@ -24,7 +25,7 @@ class Device;
 
 class LightingPass {
 public:
-    void init(Device& d);
+    void init(Device& d, rhi::RHIDevice& rhiDevice);
     void destroy();
 
     // 绑定 IBL 预烘焙资源到 set=1，创建 pipeline（仅调用一次，init 之后）
@@ -58,6 +59,7 @@ private:
     void destroyPipeline();
 
     Device* m_device = nullptr;
+    rhi::RHIDevice* m_rhiDevice = nullptr;
 
     // set=0
     VkDescriptorSetLayout m_setLayout = VK_NULL_HANDLE;

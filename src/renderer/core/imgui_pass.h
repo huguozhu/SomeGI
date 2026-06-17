@@ -1,5 +1,6 @@
 #pragma once
 #include "core/vk_common.h"
+#include "rhi/base/device.h"
 #include <functional>
 
 struct GLFWwindow;
@@ -9,7 +10,7 @@ class Device;
 
 class ImGuiPass {
 public:
-    void init(Device& d, GLFWwindow* window, VkFormat swapchainFormat, uint32_t imageCount);
+    void init(Device& d, rhi::RHIDevice& rhiDevice, GLFWwindow* window, VkFormat swapchainFormat, uint32_t imageCount);
     void destroy();
 
     void newFrame();

@@ -7,7 +7,7 @@
 
 namespace somegi {
 
-void ImGuiPass::init(Device& d, GLFWwindow* window, VkFormat swapchainFormat, uint32_t imageCount) {
+void ImGuiPass::init(Device& d, rhi::RHIDevice&, GLFWwindow* window, VkFormat swapchainFormat, uint32_t imageCount) {
     m_device = &d;
 
     VkDescriptorPoolSize ps[] = {

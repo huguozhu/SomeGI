@@ -14,8 +14,9 @@ struct PC {
 static_assert(sizeof(PC) == 80, "PC must match shader push constant layout");
 }
 
-void ForwardPass::init(Device& d, VkFormat colorFmt, VkFormat depthFmt, uint32_t maxTextures) {
+void ForwardPass::init(Device& d, rhi::RHIDevice& rhiDevice, VkFormat colorFmt, VkFormat depthFmt, uint32_t maxTextures) {
     m_device = &d;
+    m_rhiDevice = &rhiDevice;
     m_colorFmt = colorFmt;
     m_depthFmt = depthFmt;
     m_maxTextures = maxTextures;
