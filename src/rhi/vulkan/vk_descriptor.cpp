@@ -126,17 +126,16 @@ void VkRHIDescSet::write(const std::vector<DescriptorWrite>& writes) {
             imageInfos.push_back({(VkSampler)(uintptr_t)w.sampler, VK_NULL_HANDLE, VK_IMAGE_LAYOUT_UNDEFINED});
             vw.pImageInfo = &imageInfos.back();
         }
+        if (w.accelerationStructure) {
+            // TLAS 绑定（VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR）
+            asInfos.push_back({VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR});
+            asInfos.back().accelerationStructureCount = 1;
+            asInfos.back().pAccelerationStructures = (const VkAccelerationStructureKHR*)w.accelerationStructure;
+            vw.pNext = &asInfos.back();
+        }
         if (w.buffer) {
-            if (w.type == DescriptorType::AccelerationStructure) {
-                // TLAS 通过 buffer 的 nativeHandle 获取底层 VkAccelerationStructureKHR
-                asInfos.push_back({VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR});
-                asInfos.back().accelerationStructureCount = 1;
-                asInfos.back().pAccelerationStructures = (const VkAccelerationStructureKHR*)(uintptr_t)w.buffer->nativeHandle();
-                vw.pNext = &asInfos.back();
-            } else {
-                bufferInfos.push_back({(VkBuffer)(uintptr_t)w.buffer->nativeHandle(), w.bufferOffset, w.bufferRange ? w.bufferRange : VK_WHOLE_SIZE});
-                vw.pBufferInfo = &bufferInfos.back();
-            }
+            bufferInfos.push_back({(VkBuffer)(uintptr_t)w.buffer->nativeHandle(), w.bufferOffset, w.bufferRange ? w.bufferRange : VK_WHOLE_SIZE});
+            vw.pBufferInfo = &bufferInfos.back();
         }
         vkWrites.push_back(vw);
     }

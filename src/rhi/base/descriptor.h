@@ -55,6 +55,7 @@ struct DescriptorWrite {
     uint64_t bufferOffset = 0;
     uint64_t bufferRange = 0;
     const void* sampler = nullptr;  // 原生 VkSampler / ID3D12DescriptorHeap / id<MTLSamplerState>
+    const void* accelerationStructure = nullptr;  // 原生 VkAccelerationStructureKHR
 };
 
 class RHIDescriptorSet {
