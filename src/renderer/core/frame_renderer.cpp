@@ -176,7 +176,7 @@ void FrameRenderer::init(Device& d, VkCommandPool pool, VkExtent2D extent,
     bootstrapSsgiTemporal();
 
     std::printf("[init] skybox pass...\n");
-    m_skybox.init(d, VK_FORMAT_R16G16B16A16_SFLOAT, VK_FORMAT_D32_SFLOAT);
+    m_skybox.init(d, *m_rhiDevice, VK_FORMAT_R16G16B16A16_SFLOAT, VK_FORMAT_D32_SFLOAT);
 
     std::printf("[init] tonemap pass...\n");
     // linearSampler comes from SceneGpu — caller sets after scene load

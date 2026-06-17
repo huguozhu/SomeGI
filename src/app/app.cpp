@@ -334,7 +334,7 @@ App::App() {
     std::printf("[init] env (skybox.hdr) load + bake...\n");
     bakeEnvIbl();
     std::printf("[init] env bake done.\n");
-    m_renderer.skybox().bindEnv(*m_device, m_renderer.envIbl().envCube.view(),
+    m_renderer.skybox().bindEnv(m_renderer.envIbl().envCube.view(),
                                 m_renderer.envIbl().linear);
     m_renderer.lighting().bindIblResources(*m_device, m_renderer.envIbl());
     m_renderer.forward().bindIblResources(*m_device, m_renderer.envIbl());

@@ -101,6 +101,9 @@ enum class ShaderStage : uint32_t {
     RayClosestHit = 1 << 7,
     RayAnyHit  = 1 << 8,
 };
+inline constexpr ShaderStage operator|(ShaderStage a, ShaderStage b) {
+    return static_cast<ShaderStage>(static_cast<uint32_t>(a) | static_cast<uint32_t>(b));
+}
 
 enum class ShaderFormat { SPIRV, DXIL, MSL };
 

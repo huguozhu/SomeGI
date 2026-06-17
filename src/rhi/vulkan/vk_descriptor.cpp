@@ -96,6 +96,11 @@ void VkRHIDescSet::write(const std::vector<DescriptorWrite>& writes) {
             imageInfos.push_back({VK_NULL_HANDLE, (VkImageView)(uintptr_t)w.textureView->nativeHandle(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
             vw.pImageInfo = &imageInfos.back();
         }
+        if (w.sampler) {
+            // 独立 Sampler 绑定（VK_DESCRIPTOR_TYPE_SAMPLER）
+            imageInfos.push_back({(VkSampler)(uintptr_t)w.sampler, VK_NULL_HANDLE, VK_IMAGE_LAYOUT_UNDEFINED});
+            vw.pImageInfo = &imageInfos.back();
+        }
         if (w.buffer) {
             if (w.type == DescriptorType::AccelerationStructure) {
                 // TLAS 通过 buffer 的 nativeHandle 获取底层 VkAccelerationStructureKHR
