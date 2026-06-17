@@ -204,6 +204,8 @@ private:
     void buildPipelineTable();
     void setupFrameGraph();
     void setupFgImports(VkExtent3D ext, bool aaEnabled);
+    void addFgVxgiPasses(bool needVoxelGrid);
+    void addFgLumenPasses(bool fwd);
     void writeTimestamp(VkCommandBuffer cmd, uint32_t slot);
 
     // Frame loop helpers (extracted from run())

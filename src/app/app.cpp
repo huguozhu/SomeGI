@@ -3850,273 +3850,7 @@ void App::setupFrameGraph() {
         });
     }
 
-    // --- VXGI Chain ---
-    if (needVoxelGrid) {
-        m_fg.addPass("VXGI-Chain", [&](FGBuilder& b) {
-            b.setPassType(FGPassType::Compute);
-            b.setManualBarriers();  // 复杂 Pass：clear+voxelize+inject+mipmap+aniso 多步操作
-            b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
-                // 1. Clear entire mip chain to 0
-                auto barrierAllMips = [&](VkImageLayout oldL, VkImageLayout newL,
-                                           VkPipelineStageFlags2 srcStg, VkAccessFlags2 srcAcc,
-                                           VkPipelineStageFlags2 dstStg, VkAccessFlags2 dstAcc) {
-                    VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
-                    b.srcStageMask = srcStg; b.srcAccessMask = srcAcc;
-                    b.dstStageMask = dstStg; b.dstAccessMask = dstAcc;
-                    b.oldLayout = oldL; b.newLayout = newL;
-                    b.image = m_renderer.vxgi().image().image();
-                    b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT,
-                                          0, m_renderer.vxgi().mipLevels(), 0, 1};
-                    VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-                    di.imageMemoryBarrierCount = 1; di.pImageMemoryBarriers = &b;
-                    vkCmdPipelineBarrier2(cmd, &di);
-                };
-                barrierAllMips(VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                    VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
-                    VK_PIPELINE_STAGE_2_CLEAR_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
-                VkClearColorValue zeroV{};
-                VkImageSubresourceRange rg{VK_IMAGE_ASPECT_COLOR_BIT,
-                                           0, m_renderer.vxgi().mipLevels(), 0, 1};
-                vkCmdClearColorImage(cmd, m_renderer.vxgi().image().image(),
-                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &zeroV, 1, &rg);
-                barrierAllMips(VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL,
-                    VK_PIPELINE_STAGE_2_CLEAR_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
-                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                    VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
-
-                // 2. Voxelize: scatter all primitives to mip 0
-                m_renderer.vxgiVoxelize().record(cmd, m_scene, m_sceneGpu,
-                    m_renderer.vxgiGridMin(), m_renderer.vxgiCellSize(), m_renderer.kVxgiResolution);
-
-                // 3. Inject: RSM flux → voxel mip 0 RGB
-                {
-                    VkImageMemoryBarrier2 vbar{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
-                    vbar.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-                    vbar.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-                    vbar.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-                    vbar.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-                    vbar.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
-                    vbar.newLayout = VK_IMAGE_LAYOUT_GENERAL;
-                    vbar.image = m_renderer.vxgi().image().image();
-                    vbar.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-                    VkDependencyInfo vdi{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-                    vdi.imageMemoryBarrierCount = 1; vdi.pImageMemoryBarriers = &vbar;
-                    vkCmdPipelineBarrier2(cmd, &vdi);
-                }
-                m_renderer.vxgiInject().record(cmd, m_renderer.kVxgiResolution,
-                    m_renderer.vxgiGridMin(), m_renderer.vxgiCellSize());
-
-                // 4. Mipmap: iterate src mip i → dst mip i+1
-                m_renderer.vxgiMipmap().record(cmd, m_renderer.vxgi());
-
-                // 5. Final mip → SHADER_READ_ONLY
-                {
-                    VkImageMemoryBarrier2 fb{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
-                    fb.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-                    fb.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-                    fb.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-                    fb.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
-                    fb.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
-                    fb.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-                    fb.image = m_renderer.vxgi().image().image();
-                    fb.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT,
-                                           m_renderer.vxgi().mipLevels() - 1, 1, 0, 1};
-                    VkDependencyInfo fdi{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-                    fdi.imageMemoryBarrierCount = 1; fdi.pImageMemoryBarriers = &fb;
-                    vkCmdPipelineBarrier2(cmd, &fdi);
-                }
-
-                // 6. Aniso alpha mipchain: UNDEFINED → SHADER_READ_ONLY
-                {
-                    VkImageMemoryBarrier2 ab{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
-                    ab.srcStageMask = VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
-                    ab.srcAccessMask = 0;
-                    ab.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-                    ab.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
-                    ab.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-                    ab.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-                    ab.image = m_renderer.vxgi().aniso().image();
-                    ab.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT,
-                                           0, m_renderer.vxgi().mipLevels(), 0, 1};
-                    VkDependencyInfo adi{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-                    adi.imageMemoryBarrierCount = 1; adi.pImageMemoryBarriers = &ab;
-                    vkCmdPipelineBarrier2(cmd, &adi);
-                }
-                m_renderer.vxgiAniso().record(cmd, m_renderer.vxgi());
-            });
-        });
-
-        if (m_renderer.vxgiRelightEnabled()) {
-            m_fg.addPass("VXGI-Relight", [&](FGBuilder& b) {
-                b.setPassType(FGPassType::Compute);
-                b.setManualBarriers();  // 复杂 Pass：multi-bounce ping-pong
-                b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
-                    int bounces = m_renderer.lumenEnabled() ? 3 : 1;
-
-                    auto transImg = [&](VkImage img, VkImageLayout oldL, VkImageLayout newL,
-                                        VkPipelineStageFlags2 srcS, VkAccessFlags2 srcA,
-                                        VkPipelineStageFlags2 dstS, VkAccessFlags2 dstA) {
-                        VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
-                        b.srcStageMask = srcS; b.srcAccessMask = srcA;
-                        b.dstStageMask = dstS; b.dstAccessMask = dstA;
-                        b.oldLayout = oldL; b.newLayout = newL;
-                        b.image = img;
-                        b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-                        VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-                        di.imageMemoryBarrierCount = 1; di.pImageMemoryBarriers = &b;
-                        vkCmdPipelineBarrier2(cmd, &di);
-                    };
-
-                    auto blitScratchToVoxel = [&](VkImage srcImg) {
-                        transImg(m_renderer.vxgi().image().image(),
-                            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                            VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                            VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
-                            VK_PIPELINE_STAGE_2_COPY_BIT,
-                            VK_ACCESS_2_TRANSFER_WRITE_BIT);
-                        transImg(srcImg,
-                            VK_IMAGE_LAYOUT_GENERAL,
-                            VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                            VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                            VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
-                            VK_PIPELINE_STAGE_2_COPY_BIT,
-                            VK_ACCESS_2_TRANSFER_READ_BIT);
-                        VkImageCopy region{};
-                        region.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-                        region.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-                        region.extent = {m_renderer.kVxgiResolution, m_renderer.kVxgiResolution, m_renderer.kVxgiResolution};
-                        vkCmdCopyImage(cmd,
-                            srcImg, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                            m_renderer.vxgi().image().image(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                            1, &region);
-                        transImg(m_renderer.vxgi().image().image(),
-                            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                            VK_PIPELINE_STAGE_2_COPY_BIT,
-                            VK_ACCESS_2_TRANSFER_WRITE_BIT,
-                            VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                            VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
-                    };
-
-                    // Bounce 1: read voxelGrid → write scratch
-                    transImg(m_renderer.vxgi().relightScratch().image(),
-                        VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
-                        VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
-                        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                        VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
-                    m_renderer.vxgiRelight().record(cmd, m_renderer.vxgiRelight().voxelSet(),
-                        m_renderer.kVxgiResolution, m_renderer.vxgi().mipLevels(),
-                        m_renderer.vxgiCellSize(), m_renderer.vxgiGridMin(),
-                        m_renderer.vxgiRelightStrength());
-
-                    if (bounces >= 2) {
-                        transImg(m_renderer.vxgi().relightScratch().image(),
-                            VK_IMAGE_LAYOUT_GENERAL,
-                            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                            VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                            VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
-                            VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                            VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
-                        transImg(m_renderer.vxgi().relightScratch2().image(),
-                            VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
-                            VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
-                            VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                            VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
-                        // Bounce 2: read scratch → write scratch2
-                        m_renderer.vxgiRelight().record(cmd, m_renderer.vxgiRelight().pingSet0(),
-                            m_renderer.kVxgiResolution, m_renderer.vxgi().mipLevels(),
-                            m_renderer.vxgiCellSize(), m_renderer.vxgiGridMin(),
-                            m_renderer.vxgiRelightStrength());
-
-                        if (bounces >= 3) {
-                            transImg(m_renderer.vxgi().relightScratch2().image(),
-                                VK_IMAGE_LAYOUT_GENERAL,
-                                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                                VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
-                                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                                VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
-                            transImg(m_renderer.vxgi().relightScratch().image(),
-                                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                                VK_IMAGE_LAYOUT_GENERAL,
-                                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                                VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
-                                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                                VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
-                            // Bounce 3: read scratch2 → write scratch
-                            m_renderer.vxgiRelight().record(cmd, m_renderer.vxgiRelight().pingSet1(),
-                                m_renderer.kVxgiResolution, m_renderer.vxgi().mipLevels(),
-                                m_renderer.vxgiCellSize(), m_renderer.vxgiGridMin(),
-                                m_renderer.vxgiRelightStrength());
-                            blitScratchToVoxel(m_renderer.vxgi().relightScratch().image());
-                        } else {
-                            blitScratchToVoxel(m_renderer.vxgi().relightScratch2().image());
-                        }
-                    } else {
-                        blitScratchToVoxel(m_renderer.vxgi().relightScratch().image());
-                    }
-                });
-            });
-        }
-
-        if (m_renderer.lumenEnabled() && m_renderer.vxgiSixAxisInited()) {
-            m_fg.addPass("VXGI-6Axis", [&](FGBuilder& b) {
-                b.setPassType(FGPassType::Compute);
-                b.setManualBarriers();  // 复杂 Pass：多 image layout 过渡
-                b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
-                    VkImageLayout axisOldL = m_renderer.lumenAtlasInited()
-                        ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
-                        : VK_IMAGE_LAYOUT_UNDEFINED;
-                    VkPipelineStageFlags2 axisSrcS = m_renderer.lumenAtlasInited()
-                        ? VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT
-                        : VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
-                    VkAccessFlags2 axisSrcA = m_renderer.lumenAtlasInited()
-                        ? VK_ACCESS_2_SHADER_SAMPLED_READ_BIT : 0u;
-
-                    auto transAxisToGeneral = [&](VkImage img) {
-                        VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
-                        b.srcStageMask = axisSrcS; b.srcAccessMask = axisSrcA;
-                        b.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-                        b.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-                        b.oldLayout = axisOldL;
-                        b.newLayout = VK_IMAGE_LAYOUT_GENERAL;
-                        b.image = img;
-                        b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-                        VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-                        di.imageMemoryBarrierCount = 1; di.pImageMemoryBarriers = &b;
-                        vkCmdPipelineBarrier2(cmd, &di);
-                    };
-                    transAxisToGeneral(m_renderer.vxgi().sixAxisX().image());
-                    transAxisToGeneral(m_renderer.vxgi().sixAxisY().image());
-                    transAxisToGeneral(m_renderer.vxgi().sixAxisZ().image());
-
-                    m_renderer.vxgi6Axis().record(cmd, m_renderer.kVxgiResolution,
-                        m_renderer.vxgi().mipLevels(), m_renderer.vxgiCellSize(),
-                        m_renderer.vxgiGridMin(), m_renderer.vxgiRelightStrength());
-
-                    auto transAxisToSRO = [&](VkImage img) {
-                        VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
-                        b.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-                        b.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-                        b.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-                        b.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
-                        b.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
-                        b.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-                        b.image = img;
-                        b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-                        VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-                        di.imageMemoryBarrierCount = 1; di.pImageMemoryBarriers = &b;
-                        vkCmdPipelineBarrier2(cmd, &di);
-                    };
-                    transAxisToSRO(m_renderer.vxgi().sixAxisX().image());
-                    transAxisToSRO(m_renderer.vxgi().sixAxisY().image());
-                    transAxisToSRO(m_renderer.vxgi().sixAxisZ().image());
-                });
-            });
-        }
-    }
-
+    addFgVxgiPasses(needVoxelGrid);
     // --- SDFGI ---
     if (!fwd && m_renderer.sdfgiPass().enabled) {
         m_fg.addPass("SDFGI", [&](FGBuilder& b) {
@@ -4330,200 +4064,7 @@ void App::setupFrameGraph() {
         });
     }
 
-    // --- Lumen ---
-    bool lumenActive = !fwd && m_renderer.lumenEnabled();
-    if (lumenActive) {
-        m_fg.addPass("Lumen-Probe", [&](FGBuilder& b) {
-            b.setPassType(FGPassType::RayTracing);
-            b.setManualBarriers();  // 复杂 Pass：bootstrap + 多 image 过渡 + dispatch
-            b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
-                if (!m_renderer.lumenProbeInited()) {
-                    m_renderer.lumenProbe().init(*m_device);
-                    m_renderer.lumenProbe().bindResources(*m_device, m_renderer.lumen(), m_renderer.rtAS(), m_sceneGpu,
-                                                    m_renderer.vxgi(), m_renderer.rt(), m_renderer.gbuffer().frameUboHandle(),
-                                                    m_renderer.vxgiSixAxisInited());
-                    m_renderer.lumenProbeInited() = true;
-                }
-                // Transition probe + filtered atlas to GENERAL
-                {
-                    VkImageLayout oldL = m_renderer.lumenAtlasInited()
-                        ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
-                        : VK_IMAGE_LAYOUT_UNDEFINED;
-                    VkPipelineStageFlags2 srcS = m_renderer.lumenAtlasInited()
-                        ? VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT
-                        : VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
-                    VkAccessFlags2 srcA = m_renderer.lumenAtlasInited()
-                        ? VK_ACCESS_2_SHADER_SAMPLED_READ_BIT : 0u;
-                    auto transToGeneral = [&](VkImage img) {
-                        VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
-                        b.srcStageMask = srcS; b.srcAccessMask = srcA;
-                        b.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-                        b.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-                        b.oldLayout = oldL;
-                        b.newLayout = VK_IMAGE_LAYOUT_GENERAL;
-                        b.image = img;
-                        b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-                        VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-                        di.imageMemoryBarrierCount = 1; di.pImageMemoryBarriers = &b;
-                        vkCmdPipelineBarrier2(cmd, &di);
-                    };
-                    transToGeneral(m_renderer.lumen().probeAtlas().image());
-                    transToGeneral(m_renderer.lumen().filteredAtlas().image());
-                    m_renderer.lumenAtlasInited() = true;
-                }
-                m_renderer.lumenProbe().record(cmd, m_renderer.lumen(), m_renderer.frameIndex(),
-                    m_renderer.vxgiSixAxisInited() ? 1u : 0u);
-
-                // ProbeAtlas GENERAL → SR_O for filter
-                {
-                    VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
-                    b.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-                    b.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-                    b.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-                    b.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
-                    b.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
-                    b.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-                    b.image = m_renderer.lumen().probeAtlas().image();
-                    b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-                    VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-                    di.imageMemoryBarrierCount = 1; di.pImageMemoryBarriers = &b;
-                    vkCmdPipelineBarrier2(cmd, &di);
-                }
-            });
-        });
-        m_fg.addPass("Lumen-Filter", [&](FGBuilder& b) {
-            b.setPassType(FGPassType::Compute);
-            b.setManualBarriers();  // 复杂 Pass：init + dispatch + copy + 多 barrier
-            b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
-                if (!m_renderer.lumenFilterInited()) {
-                    VkImageMemoryBarrier2 pb{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
-                    pb.srcStageMask = VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
-                    pb.srcAccessMask = 0;
-                    pb.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-                    pb.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
-                    pb.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-                    pb.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-                    pb.image = m_renderer.lumen().prevAtlas().image();
-                    pb.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-                    VkDependencyInfo pdi{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-                    pdi.imageMemoryBarrierCount = 1; pdi.pImageMemoryBarriers = &pb;
-                    vkCmdPipelineBarrier2(cmd, &pdi);
-
-                    m_renderer.lumenFilter().init(*m_device);
-                    m_renderer.lumenFilter().bindResources(*m_device, m_renderer.lumen(), m_renderer.rt(),
-                                                     m_renderer.gbuffer().frameUboHandle());
-                    m_renderer.lumenFilterInited() = true;
-                }
-                m_renderer.lumenFilter().record(cmd, m_renderer.lumen(), m_renderer.rt());
-
-                // Copy filteredAtlas → prevAtlas for next frame
-                auto imgBarrier = [&](VkImage img, VkImageLayout oldL, VkImageLayout newL,
-                                      VkPipelineStageFlags2 srcS, VkAccessFlags2 srcA,
-                                      VkPipelineStageFlags2 dstS, VkAccessFlags2 dstA) {
-                    VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
-                    b.srcStageMask = srcS; b.srcAccessMask = srcA;
-                    b.dstStageMask = dstS; b.dstAccessMask = dstA;
-                    b.oldLayout = oldL; b.newLayout = newL;
-                    b.image = img;
-                    b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-                    VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-                    di.imageMemoryBarrierCount = 1; di.pImageMemoryBarriers = &b;
-                    vkCmdPipelineBarrier2(cmd, &di);
-                };
-
-                imgBarrier(m_renderer.lumen().filteredAtlas().image(),
-                    VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
-                    VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
-                imgBarrier(m_renderer.lumen().prevAtlas().image(),
-                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
-                    VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
-
-                VkImageCopy region{};
-                region.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-                region.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-                region.extent = {m_renderer.lumen().atlasWidth(), m_renderer.lumen().atlasHeight(), 1};
-                vkCmdCopyImage(cmd,
-                    m_renderer.lumen().filteredAtlas().image(), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                    m_renderer.lumen().prevAtlas().image(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                    1, &region);
-
-                imgBarrier(m_renderer.lumen().filteredAtlas().image(),
-                    VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                    VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_READ_BIT,
-                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
-                imgBarrier(m_renderer.lumen().prevAtlas().image(),
-                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                    VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
-                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
-            });
-        });
-        m_fg.addPass("Lumen-Gather", [&](FGBuilder& b) {
-            b.setPassType(FGPassType::Compute);
-            b.setManualBarriers();  // 复杂 Pass：bootstrap + 多 layout 过渡 + dispatch
-            b.write(m_fgh.lumenGI);
-            b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
-                if (!m_renderer.lumenGatherInited()) {
-                    m_renderer.lumenGather().init(*m_device);
-                    m_renderer.lumenGather().bindResources(*m_device, m_renderer.lumen(), m_renderer.rt(),
-                                                     m_renderer.gbuffer().frameUboHandle(), true);
-                    m_renderer.lumenGatherInited() = true;
-                }
-                {
-                    VkImageLayout oldL = m_renderer.lumenOutInited()
-                        ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
-                        : VK_IMAGE_LAYOUT_UNDEFINED;
-                    VkAccessFlags2 srcA = m_renderer.lumenOutInited()
-                        ? VK_ACCESS_2_SHADER_SAMPLED_READ_BIT : 0;
-                    VkPipelineStageFlags2 srcS = m_renderer.lumenOutInited()
-                        ? VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT
-                        : VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
-                    VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
-                    b.srcStageMask = srcS; b.srcAccessMask = srcA;
-                    b.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-                    b.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-                    b.oldLayout = oldL;
-                    b.newLayout = VK_IMAGE_LAYOUT_GENERAL;
-                    b.image = m_renderer.rt().lumenGI.image();
-                    b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-                    VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-                    di.imageMemoryBarrierCount = 1; di.pImageMemoryBarriers = &b;
-                    vkCmdPipelineBarrier2(cmd, &di);
-                }
-                m_renderer.lumenGather().record(cmd, m_renderer.lumen(), m_renderer.rt(),
-                    (uint32_t)m_renderer.lumenDebugMode());
-
-                {
-                    VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
-                    b.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-                    b.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-                    b.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-                    b.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
-                    b.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
-                    b.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-                    b.image = m_renderer.rt().lumenGI.image();
-                    b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-                    VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-                    di.imageMemoryBarrierCount = 1; di.pImageMemoryBarriers = &b;
-                    vkCmdPipelineBarrier2(cmd, &di);
-                }
-                m_renderer.lumenOutInited() = true;
-            });
-        });
-    } else if (!fwd) {
-        m_fg.addPass("Lumen-Clear", [&](FGBuilder& b) {
-            b.setPassType(FGPassType::Compute);
-            b.write(m_fgh.lumenGI, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
-            b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
-                VkClearColorValue zero{};
-                VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-                vkCmdClearColorImage(cmd, m_renderer.rt().lumenGI.image(),
-                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &zero, 1, &range);
-            });
-        });
-    }
-
+    addFgLumenPasses(fwd);
     // --- LPV ---
     if (!fwd && m_renderer.lpvEnabled()) {
         m_fg.addPass("LPV-Inject", [&](FGBuilder& b) {
@@ -4910,4 +4451,471 @@ void App::setupFgImports(VkExtent3D ext, bool aaEnabled) {
         VK_IMAGE_LAYOUT_UNDEFINED);
 }
 
+void App::addFgVxgiPasses(bool needVoxelGrid) {
+    using namespace somegi::fg;
+    // --- VXGI Chain ---
+    if (needVoxelGrid) {
+        m_fg.addPass("VXGI-Chain", [&](FGBuilder& b) {
+            b.setPassType(FGPassType::Compute);
+            b.setManualBarriers();  // 复杂 Pass：clear+voxelize+inject+mipmap+aniso 多步操作
+            b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
+                // 1. Clear entire mip chain to 0
+                auto barrierAllMips = [&](VkImageLayout oldL, VkImageLayout newL,
+                                           VkPipelineStageFlags2 srcStg, VkAccessFlags2 srcAcc,
+                                           VkPipelineStageFlags2 dstStg, VkAccessFlags2 dstAcc) {
+                    VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+                    b.srcStageMask = srcStg; b.srcAccessMask = srcAcc;
+                    b.dstStageMask = dstStg; b.dstAccessMask = dstAcc;
+                    b.oldLayout = oldL; b.newLayout = newL;
+                    b.image = m_renderer.vxgi().image().image();
+                    b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT,
+                                          0, m_renderer.vxgi().mipLevels(), 0, 1};
+                    VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+                    di.imageMemoryBarrierCount = 1; di.pImageMemoryBarriers = &b;
+                    vkCmdPipelineBarrier2(cmd, &di);
+                };
+                barrierAllMips(VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                    VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
+                    VK_PIPELINE_STAGE_2_CLEAR_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
+                VkClearColorValue zeroV{};
+                VkImageSubresourceRange rg{VK_IMAGE_ASPECT_COLOR_BIT,
+                                           0, m_renderer.vxgi().mipLevels(), 0, 1};
+                vkCmdClearColorImage(cmd, m_renderer.vxgi().image().image(),
+                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &zeroV, 1, &rg);
+                barrierAllMips(VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL,
+                    VK_PIPELINE_STAGE_2_CLEAR_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                    VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
+
+                // 2. Voxelize: scatter all primitives to mip 0
+                m_renderer.vxgiVoxelize().record(cmd, m_scene, m_sceneGpu,
+                    m_renderer.vxgiGridMin(), m_renderer.vxgiCellSize(), m_renderer.kVxgiResolution);
+
+                // 3. Inject: RSM flux → voxel mip 0 RGB
+                {
+                    VkImageMemoryBarrier2 vbar{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+                    vbar.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                    vbar.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+                    vbar.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                    vbar.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+                    vbar.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+                    vbar.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+                    vbar.image = m_renderer.vxgi().image().image();
+                    vbar.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+                    VkDependencyInfo vdi{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+                    vdi.imageMemoryBarrierCount = 1; vdi.pImageMemoryBarriers = &vbar;
+                    vkCmdPipelineBarrier2(cmd, &vdi);
+                }
+                m_renderer.vxgiInject().record(cmd, m_renderer.kVxgiResolution,
+                    m_renderer.vxgiGridMin(), m_renderer.vxgiCellSize());
+
+                // 4. Mipmap: iterate src mip i → dst mip i+1
+                m_renderer.vxgiMipmap().record(cmd, m_renderer.vxgi());
+
+                // 5. Final mip → SHADER_READ_ONLY
+                {
+                    VkImageMemoryBarrier2 fb{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+                    fb.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                    fb.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+                    fb.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                    fb.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+                    fb.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+                    fb.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                    fb.image = m_renderer.vxgi().image().image();
+                    fb.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT,
+                                           m_renderer.vxgi().mipLevels() - 1, 1, 0, 1};
+                    VkDependencyInfo fdi{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+                    fdi.imageMemoryBarrierCount = 1; fdi.pImageMemoryBarriers = &fb;
+                    vkCmdPipelineBarrier2(cmd, &fdi);
+                }
+
+                // 6. Aniso alpha mipchain: UNDEFINED → SHADER_READ_ONLY
+                {
+                    VkImageMemoryBarrier2 ab{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+                    ab.srcStageMask = VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
+                    ab.srcAccessMask = 0;
+                    ab.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                    ab.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+                    ab.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+                    ab.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                    ab.image = m_renderer.vxgi().aniso().image();
+                    ab.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT,
+                                           0, m_renderer.vxgi().mipLevels(), 0, 1};
+                    VkDependencyInfo adi{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+                    adi.imageMemoryBarrierCount = 1; adi.pImageMemoryBarriers = &ab;
+                    vkCmdPipelineBarrier2(cmd, &adi);
+                }
+                m_renderer.vxgiAniso().record(cmd, m_renderer.vxgi());
+            });
+        });
+
+        if (m_renderer.vxgiRelightEnabled()) {
+            m_fg.addPass("VXGI-Relight", [&](FGBuilder& b) {
+                b.setPassType(FGPassType::Compute);
+                b.setManualBarriers();  // 复杂 Pass：multi-bounce ping-pong
+                b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
+                    int bounces = m_renderer.lumenEnabled() ? 3 : 1;
+
+                    auto transImg = [&](VkImage img, VkImageLayout oldL, VkImageLayout newL,
+                                        VkPipelineStageFlags2 srcS, VkAccessFlags2 srcA,
+                                        VkPipelineStageFlags2 dstS, VkAccessFlags2 dstA) {
+                        VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+                        b.srcStageMask = srcS; b.srcAccessMask = srcA;
+                        b.dstStageMask = dstS; b.dstAccessMask = dstA;
+                        b.oldLayout = oldL; b.newLayout = newL;
+                        b.image = img;
+                        b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+                        VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+                        di.imageMemoryBarrierCount = 1; di.pImageMemoryBarriers = &b;
+                        vkCmdPipelineBarrier2(cmd, &di);
+                    };
+
+                    auto blitScratchToVoxel = [&](VkImage srcImg) {
+                        transImg(m_renderer.vxgi().image().image(),
+                            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                            VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                            VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
+                            VK_PIPELINE_STAGE_2_COPY_BIT,
+                            VK_ACCESS_2_TRANSFER_WRITE_BIT);
+                        transImg(srcImg,
+                            VK_IMAGE_LAYOUT_GENERAL,
+                            VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                            VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                            VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+                            VK_PIPELINE_STAGE_2_COPY_BIT,
+                            VK_ACCESS_2_TRANSFER_READ_BIT);
+                        VkImageCopy region{};
+                        region.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+                        region.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+                        region.extent = {m_renderer.kVxgiResolution, m_renderer.kVxgiResolution, m_renderer.kVxgiResolution};
+                        vkCmdCopyImage(cmd,
+                            srcImg, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                            m_renderer.vxgi().image().image(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                            1, &region);
+                        transImg(m_renderer.vxgi().image().image(),
+                            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                            VK_PIPELINE_STAGE_2_COPY_BIT,
+                            VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                            VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                            VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+                    };
+
+                    // Bounce 1: read voxelGrid → write scratch
+                    transImg(m_renderer.vxgi().relightScratch().image(),
+                        VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
+                        VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
+                        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                        VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
+                    m_renderer.vxgiRelight().record(cmd, m_renderer.vxgiRelight().voxelSet(),
+                        m_renderer.kVxgiResolution, m_renderer.vxgi().mipLevels(),
+                        m_renderer.vxgiCellSize(), m_renderer.vxgiGridMin(),
+                        m_renderer.vxgiRelightStrength());
+
+                    if (bounces >= 2) {
+                        transImg(m_renderer.vxgi().relightScratch().image(),
+                            VK_IMAGE_LAYOUT_GENERAL,
+                            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                            VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                            VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+                            VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                            VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+                        transImg(m_renderer.vxgi().relightScratch2().image(),
+                            VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
+                            VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
+                            VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                            VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
+                        // Bounce 2: read scratch → write scratch2
+                        m_renderer.vxgiRelight().record(cmd, m_renderer.vxgiRelight().pingSet0(),
+                            m_renderer.kVxgiResolution, m_renderer.vxgi().mipLevels(),
+                            m_renderer.vxgiCellSize(), m_renderer.vxgiGridMin(),
+                            m_renderer.vxgiRelightStrength());
+
+                        if (bounces >= 3) {
+                            transImg(m_renderer.vxgi().relightScratch2().image(),
+                                VK_IMAGE_LAYOUT_GENERAL,
+                                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+                                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+                            transImg(m_renderer.vxgi().relightScratch().image(),
+                                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                                VK_IMAGE_LAYOUT_GENERAL,
+                                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
+                                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
+                            // Bounce 3: read scratch2 → write scratch
+                            m_renderer.vxgiRelight().record(cmd, m_renderer.vxgiRelight().pingSet1(),
+                                m_renderer.kVxgiResolution, m_renderer.vxgi().mipLevels(),
+                                m_renderer.vxgiCellSize(), m_renderer.vxgiGridMin(),
+                                m_renderer.vxgiRelightStrength());
+                            blitScratchToVoxel(m_renderer.vxgi().relightScratch().image());
+                        } else {
+                            blitScratchToVoxel(m_renderer.vxgi().relightScratch2().image());
+                        }
+                    } else {
+                        blitScratchToVoxel(m_renderer.vxgi().relightScratch().image());
+                    }
+                });
+            });
+        }
+
+        if (m_renderer.lumenEnabled() && m_renderer.vxgiSixAxisInited()) {
+            m_fg.addPass("VXGI-6Axis", [&](FGBuilder& b) {
+                b.setPassType(FGPassType::Compute);
+                b.setManualBarriers();  // 复杂 Pass：多 image layout 过渡
+                b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
+                    VkImageLayout axisOldL = m_renderer.lumenAtlasInited()
+                        ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+                        : VK_IMAGE_LAYOUT_UNDEFINED;
+                    VkPipelineStageFlags2 axisSrcS = m_renderer.lumenAtlasInited()
+                        ? VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT
+                        : VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
+                    VkAccessFlags2 axisSrcA = m_renderer.lumenAtlasInited()
+                        ? VK_ACCESS_2_SHADER_SAMPLED_READ_BIT : 0u;
+
+                    auto transAxisToGeneral = [&](VkImage img) {
+                        VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+                        b.srcStageMask = axisSrcS; b.srcAccessMask = axisSrcA;
+                        b.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                        b.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+                        b.oldLayout = axisOldL;
+                        b.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+                        b.image = img;
+                        b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+                        VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+                        di.imageMemoryBarrierCount = 1; di.pImageMemoryBarriers = &b;
+                        vkCmdPipelineBarrier2(cmd, &di);
+                    };
+                    transAxisToGeneral(m_renderer.vxgi().sixAxisX().image());
+                    transAxisToGeneral(m_renderer.vxgi().sixAxisY().image());
+                    transAxisToGeneral(m_renderer.vxgi().sixAxisZ().image());
+
+                    m_renderer.vxgi6Axis().record(cmd, m_renderer.kVxgiResolution,
+                        m_renderer.vxgi().mipLevels(), m_renderer.vxgiCellSize(),
+                        m_renderer.vxgiGridMin(), m_renderer.vxgiRelightStrength());
+
+                    auto transAxisToSRO = [&](VkImage img) {
+                        VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+                        b.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                        b.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+                        b.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                        b.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+                        b.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+                        b.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                        b.image = img;
+                        b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+                        VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+                        di.imageMemoryBarrierCount = 1; di.pImageMemoryBarriers = &b;
+                        vkCmdPipelineBarrier2(cmd, &di);
+                    };
+                    transAxisToSRO(m_renderer.vxgi().sixAxisX().image());
+                    transAxisToSRO(m_renderer.vxgi().sixAxisY().image());
+                    transAxisToSRO(m_renderer.vxgi().sixAxisZ().image());
+                });
+            });
+        }
+    }
+
+}
+void App::addFgLumenPasses(bool fwd) {
+    using namespace somegi::fg;
+    // --- Lumen ---
+    bool lumenActive = !fwd && m_renderer.lumenEnabled();
+    if (lumenActive) {
+        m_fg.addPass("Lumen-Probe", [&](FGBuilder& b) {
+            b.setPassType(FGPassType::RayTracing);
+            b.setManualBarriers();  // 复杂 Pass：bootstrap + 多 image 过渡 + dispatch
+            b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
+                if (!m_renderer.lumenProbeInited()) {
+                    m_renderer.lumenProbe().init(*m_device);
+                    m_renderer.lumenProbe().bindResources(*m_device, m_renderer.lumen(), m_renderer.rtAS(), m_sceneGpu,
+                                                    m_renderer.vxgi(), m_renderer.rt(), m_renderer.gbuffer().frameUboHandle(),
+                                                    m_renderer.vxgiSixAxisInited());
+                    m_renderer.lumenProbeInited() = true;
+                }
+                // Transition probe + filtered atlas to GENERAL
+                {
+                    VkImageLayout oldL = m_renderer.lumenAtlasInited()
+                        ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+                        : VK_IMAGE_LAYOUT_UNDEFINED;
+                    VkPipelineStageFlags2 srcS = m_renderer.lumenAtlasInited()
+                        ? VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT
+                        : VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
+                    VkAccessFlags2 srcA = m_renderer.lumenAtlasInited()
+                        ? VK_ACCESS_2_SHADER_SAMPLED_READ_BIT : 0u;
+                    auto transToGeneral = [&](VkImage img) {
+                        VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+                        b.srcStageMask = srcS; b.srcAccessMask = srcA;
+                        b.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                        b.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+                        b.oldLayout = oldL;
+                        b.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+                        b.image = img;
+                        b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+                        VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+                        di.imageMemoryBarrierCount = 1; di.pImageMemoryBarriers = &b;
+                        vkCmdPipelineBarrier2(cmd, &di);
+                    };
+                    transToGeneral(m_renderer.lumen().probeAtlas().image());
+                    transToGeneral(m_renderer.lumen().filteredAtlas().image());
+                    m_renderer.lumenAtlasInited() = true;
+                }
+                m_renderer.lumenProbe().record(cmd, m_renderer.lumen(), m_renderer.frameIndex(),
+                    m_renderer.vxgiSixAxisInited() ? 1u : 0u);
+
+                // ProbeAtlas GENERAL → SR_O for filter
+                {
+                    VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+                    b.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                    b.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+                    b.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                    b.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+                    b.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+                    b.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                    b.image = m_renderer.lumen().probeAtlas().image();
+                    b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+                    VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+                    di.imageMemoryBarrierCount = 1; di.pImageMemoryBarriers = &b;
+                    vkCmdPipelineBarrier2(cmd, &di);
+                }
+            });
+        });
+        m_fg.addPass("Lumen-Filter", [&](FGBuilder& b) {
+            b.setPassType(FGPassType::Compute);
+            b.setManualBarriers();  // 复杂 Pass：init + dispatch + copy + 多 barrier
+            b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
+                if (!m_renderer.lumenFilterInited()) {
+                    VkImageMemoryBarrier2 pb{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+                    pb.srcStageMask = VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
+                    pb.srcAccessMask = 0;
+                    pb.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                    pb.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+                    pb.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+                    pb.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                    pb.image = m_renderer.lumen().prevAtlas().image();
+                    pb.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+                    VkDependencyInfo pdi{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+                    pdi.imageMemoryBarrierCount = 1; pdi.pImageMemoryBarriers = &pb;
+                    vkCmdPipelineBarrier2(cmd, &pdi);
+
+                    m_renderer.lumenFilter().init(*m_device);
+                    m_renderer.lumenFilter().bindResources(*m_device, m_renderer.lumen(), m_renderer.rt(),
+                                                     m_renderer.gbuffer().frameUboHandle());
+                    m_renderer.lumenFilterInited() = true;
+                }
+                m_renderer.lumenFilter().record(cmd, m_renderer.lumen(), m_renderer.rt());
+
+                // Copy filteredAtlas → prevAtlas for next frame
+                auto imgBarrier = [&](VkImage img, VkImageLayout oldL, VkImageLayout newL,
+                                      VkPipelineStageFlags2 srcS, VkAccessFlags2 srcA,
+                                      VkPipelineStageFlags2 dstS, VkAccessFlags2 dstA) {
+                    VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+                    b.srcStageMask = srcS; b.srcAccessMask = srcA;
+                    b.dstStageMask = dstS; b.dstAccessMask = dstA;
+                    b.oldLayout = oldL; b.newLayout = newL;
+                    b.image = img;
+                    b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+                    VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+                    di.imageMemoryBarrierCount = 1; di.pImageMemoryBarriers = &b;
+                    vkCmdPipelineBarrier2(cmd, &di);
+                };
+
+                imgBarrier(m_renderer.lumen().filteredAtlas().image(),
+                    VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+                    VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
+                imgBarrier(m_renderer.lumen().prevAtlas().image(),
+                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
+                    VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
+
+                VkImageCopy region{};
+                region.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+                region.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+                region.extent = {m_renderer.lumen().atlasWidth(), m_renderer.lumen().atlasHeight(), 1};
+                vkCmdCopyImage(cmd,
+                    m_renderer.lumen().filteredAtlas().image(), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                    m_renderer.lumen().prevAtlas().image(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                    1, &region);
+
+                imgBarrier(m_renderer.lumen().filteredAtlas().image(),
+                    VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                    VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_READ_BIT,
+                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+                imgBarrier(m_renderer.lumen().prevAtlas().image(),
+                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                    VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+            });
+        });
+        m_fg.addPass("Lumen-Gather", [&](FGBuilder& b) {
+            b.setPassType(FGPassType::Compute);
+            b.setManualBarriers();  // 复杂 Pass：bootstrap + 多 layout 过渡 + dispatch
+            b.write(m_fgh.lumenGI);
+            b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
+                if (!m_renderer.lumenGatherInited()) {
+                    m_renderer.lumenGather().init(*m_device);
+                    m_renderer.lumenGather().bindResources(*m_device, m_renderer.lumen(), m_renderer.rt(),
+                                                     m_renderer.gbuffer().frameUboHandle(), true);
+                    m_renderer.lumenGatherInited() = true;
+                }
+                {
+                    VkImageLayout oldL = m_renderer.lumenOutInited()
+                        ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+                        : VK_IMAGE_LAYOUT_UNDEFINED;
+                    VkAccessFlags2 srcA = m_renderer.lumenOutInited()
+                        ? VK_ACCESS_2_SHADER_SAMPLED_READ_BIT : 0;
+                    VkPipelineStageFlags2 srcS = m_renderer.lumenOutInited()
+                        ? VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT
+                        : VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
+                    VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+                    b.srcStageMask = srcS; b.srcAccessMask = srcA;
+                    b.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                    b.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+                    b.oldLayout = oldL;
+                    b.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+                    b.image = m_renderer.rt().lumenGI.image();
+                    b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+                    VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+                    di.imageMemoryBarrierCount = 1; di.pImageMemoryBarriers = &b;
+                    vkCmdPipelineBarrier2(cmd, &di);
+                }
+                m_renderer.lumenGather().record(cmd, m_renderer.lumen(), m_renderer.rt(),
+                    (uint32_t)m_renderer.lumenDebugMode());
+
+                {
+                    VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+                    b.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                    b.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+                    b.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                    b.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+                    b.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+                    b.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                    b.image = m_renderer.rt().lumenGI.image();
+                    b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+                    VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+                    di.imageMemoryBarrierCount = 1; di.pImageMemoryBarriers = &b;
+                    vkCmdPipelineBarrier2(cmd, &di);
+                }
+                m_renderer.lumenOutInited() = true;
+            });
+        });
+    } else if (!fwd) {
+        m_fg.addPass("Lumen-Clear", [&](FGBuilder& b) {
+            b.setPassType(FGPassType::Compute);
+            b.write(m_fgh.lumenGI, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+            b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
+                VkClearColorValue zero{};
+                VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+                vkCmdClearColorImage(cmd, m_renderer.rt().lumenGI.image(),
+                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &zero, 1, &range);
+            });
+        });
+    }
+
+}
 }
