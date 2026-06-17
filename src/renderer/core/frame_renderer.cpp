@@ -82,7 +82,7 @@ void FrameRenderer::init(Device& d, VkCommandPool pool, VkExtent2D extent,
 
     std::printf("[init] ndgi resources + pass...\n");
     m_ndgi.create(d);
-    m_ndgiPass.init(d, rtSupported);
+    m_ndgiPass.init(*m_rhiDevice, rtSupported);
     m_ndgiInited = false;
 
     std::printf("[init] shadow pass...\n");

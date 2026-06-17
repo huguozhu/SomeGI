@@ -457,7 +457,7 @@ void App::applySceneSelection() {
             m_renderer.restirPass().bindResourcesRt(*m_device, m_renderer.restir(), m_renderer.rt(),
                 m_renderer.gbuffer().frameUboHandle(), m_renderer.rtAS().tlas());
         }
-        m_renderer.ndgiPass().bindResources(*m_device, m_renderer.ndgi(), m_renderer.rtAS(), m_sceneGpu, m_renderer.rt(),
+        m_renderer.ndgiPass().bindResources(m_renderer.ndgi(), m_renderer.rtAS(), m_sceneGpu, m_renderer.rt(),
             m_renderer.gbuffer().frameUboHandle());
         // 如果 MLP 已经初始化过（从之前的场景），重新 init
         if (!m_renderer.ndgiInited()) {

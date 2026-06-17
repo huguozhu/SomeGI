@@ -1,283 +1,84 @@
+// NdgiPass — RHI 管理 layouts/sets/pipelines，record 保留 VkCompat。
 #include "renderer/gi/ndgi/ndgi_pass.h"
 #include "renderer/gi/ndgi/ndgi_resources.h"
 #include "core/device.h"
 #include "renderer/gi/rt/scene_rt_as.h"
 #include "renderer/core/render_targets.h"
 #include "scene/scene.h"
+#include "rhi/base/device.h"
+#include "rhi/base/descriptor.h"
+#include "rhi/base/pipeline_state.h"
+#include "rhi/vulkan/vk_device.h"
+#include "rhi/vulkan/vk_shader.h"
+#include "rhi/vulkan/vk_texture.h"
+#include "rhi/vulkan/vk_buffer.h"
+#include "rhi/vulkan/vk_pso.h"
+#include "core/shader.h"
 #include <array>
-
 namespace somegi {
-
-void NdgiPass::init(Device& d, bool rtSupported) {
-    m_device = &d;
-    m_rtSupported = rtSupported;
-    if (!rtSupported) return;
-    auto sd = shaderDir() / "gi" / "ndgi";
-
-    // ===== Probe Trace Pipeline =====
-    {
-        std::array<VkDescriptorSetLayoutBinding, 10> tb{};
-        tb[0] = {0, VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 1, VK_SHADER_STAGE_COMPUTE_BIT};
-        tb[1] = {1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT};   // instances
-        tb[2] = {2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT};   // vertices
-        tb[3] = {3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT};   // indices
-        tb[4] = {4, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT};   // materials
-        tb[5] = {5, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 128, VK_SHADER_STAGE_COMPUTE_BIT};  // textures
-        tb[6] = {6, VK_DESCRIPTOR_TYPE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT};
-        tb[7] = {7, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT};   // frame UBO
-        tb[8] = {8, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT};   // sample buf
-        tb[9] = {9, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT};   // sample count
-
-        VkDescriptorSetLayoutCreateInfo dsci{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-        dsci.bindingCount = (uint32_t)tb.size(); dsci.pBindings = tb.data();
-        VK_CHECK(vkCreateDescriptorSetLayout(d.device(), &dsci, nullptr, &m_traceDsl));
-
-        VkPushConstantRange pc{VK_SHADER_STAGE_COMPUTE_BIT, 0, 64}; // ProbeTracePC
-        VkPipelineLayoutCreateInfo plci{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
-        plci.setLayoutCount = 1; plci.pSetLayouts = &m_traceDsl;
-        plci.pushConstantRangeCount = 1; plci.pPushConstantRanges = &pc;
-        VK_CHECK(vkCreatePipelineLayout(d.device(), &plci, nullptr, &m_tracePipelineLayout));
-
-        ShaderModule shader(d, sd / "ndgi_probe_trace.spv");
-        VkComputePipelineCreateInfo cpci{VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
-        cpci.stage = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
-        cpci.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
-        cpci.stage.module = shader.handle(); cpci.stage.pName = "cs_main";
-        cpci.layout = m_tracePipelineLayout;
-        VK_CHECK(vkCreateComputePipelines(d.device(), VK_NULL_HANDLE, 1, &cpci, nullptr, &m_tracePipeline));
-
-        // Descriptor pool + set for trace
-        std::array<VkDescriptorPoolSize, 5> tps{{
-            {VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 1},
-            {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 6},
-            {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 128},
-            {VK_DESCRIPTOR_TYPE_SAMPLER, 1},
-            {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1},
-        }};
-        VkDescriptorPoolCreateInfo tpci{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
-        tpci.maxSets = 1; tpci.poolSizeCount = (uint32_t)tps.size(); tpci.pPoolSizes = tps.data();
-        VK_CHECK(vkCreateDescriptorPool(d.device(), &tpci, nullptr, &m_tracePool));
-        VkDescriptorSetAllocateInfo dai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
-        dai.descriptorPool = m_tracePool; dai.descriptorSetCount = 1; dai.pSetLayouts = &m_traceDsl;
-        VK_CHECK(vkAllocateDescriptorSets(d.device(), &dai, &m_traceSet));
-    }
-
-    // ===== Weight Init & Training Pipeline =====
-    {
-        // 8 bindings: 0-5 weights, 6 samples, 7 sample count
-        std::array<VkDescriptorSetLayoutBinding, 8> ib{};
-        for (uint32_t i = 0; i < 8; ++i)
-            ib[i] = {i, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT};
-
-        VkDescriptorSetLayoutCreateInfo dsci{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-        dsci.bindingCount = (uint32_t)ib.size(); dsci.pBindings = ib.data();
-        VK_CHECK(vkCreateDescriptorSetLayout(d.device(), &dsci, nullptr, &m_initDsl));
-
-        // Init pipeline
-        {
-            VkPushConstantRange pc{VK_SHADER_STAGE_COMPUTE_BIT, 0, 16};
-            VkPipelineLayoutCreateInfo plci{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
-            plci.setLayoutCount = 1; plci.pSetLayouts = &m_initDsl;
-            plci.pushConstantRangeCount = 1; plci.pPushConstantRanges = &pc;
-            VK_CHECK(vkCreatePipelineLayout(d.device(), &plci, nullptr, &m_initPipelineLayout));
-            ShaderModule shader(d, sd / "ndgi_init.spv");
-            VkComputePipelineCreateInfo cpci{VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
-            cpci.stage={VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
-            cpci.stage.stage=VK_SHADER_STAGE_COMPUTE_BIT;
-            cpci.stage.module=shader.handle(); cpci.stage.pName="cs_main";
-            cpci.layout=m_initPipelineLayout;
-            VK_CHECK(vkCreateComputePipelines(d.device(), VK_NULL_HANDLE, 1, &cpci, nullptr, &m_initPipeline));
-        }
-        // Training pipeline
-        {
-            VkPushConstantRange pc{VK_SHADER_STAGE_COMPUTE_BIT, 0, 64};
-            VkPipelineLayoutCreateInfo plci{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
-            plci.setLayoutCount = 1; plci.pSetLayouts = &m_initDsl;
-            plci.pushConstantRangeCount = 1; plci.pPushConstantRanges = &pc;
-            VK_CHECK(vkCreatePipelineLayout(d.device(), &plci, nullptr, &m_trainPipelineLayout));
-            ShaderModule shader(d, sd / "ndgi_train.spv");
-            VkComputePipelineCreateInfo cpci{VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
-            cpci.stage={VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
-            cpci.stage.stage=VK_SHADER_STAGE_COMPUTE_BIT;
-            cpci.stage.module=shader.handle(); cpci.stage.pName="cs_main";
-            cpci.layout=m_trainPipelineLayout;
-            VK_CHECK(vkCreateComputePipelines(d.device(), VK_NULL_HANDLE, 1, &cpci, nullptr, &m_trainPipeline));
-        }
-
-        VkDescriptorPoolSize ips{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 8};
-        VkDescriptorPoolCreateInfo ipci{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
-        ipci.maxSets = 1; ipci.poolSizeCount = 1; ipci.pPoolSizes = &ips;
-        VK_CHECK(vkCreateDescriptorPool(d.device(), &ipci, nullptr, &m_initPool));
-        VkDescriptorSetAllocateInfo dai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
-        dai.descriptorPool = m_initPool; dai.descriptorSetCount = 1; dai.pSetLayouts = &m_initDsl;
-        VK_CHECK(vkAllocateDescriptorSets(d.device(), &dai, &m_initSet));
-    }
+NdgiPass::~NdgiPass()=default;
+void NdgiPass::init(rhi::RHIDevice& d,bool rtSupported){ m_rhiDevice=&d; m_rtSupported=rtSupported; if(!rtSupported)return;
+    auto& vkD=static_cast<rhi::VkRHIDevice&>(d); auto sd=shaderDir()/"gi"/"ndgi";
+    // Trace: 10 bindings (TLAS+6SSBO+sampler+UBO+128textures)
+    rhi::DescSetLayoutDesc tld; tld.debugName="NDGI_Trace"; tld.bindings={{0,rhi::DescriptorType::AccelerationStructure,1,rhi::ShaderStage::Compute},{1,rhi::DescriptorType::StorageBuffer,1,rhi::ShaderStage::Compute},{2,rhi::DescriptorType::StorageBuffer,1,rhi::ShaderStage::Compute},{3,rhi::DescriptorType::StorageBuffer,1,rhi::ShaderStage::Compute},{4,rhi::DescriptorType::StorageBuffer,1,rhi::ShaderStage::Compute},{5,rhi::DescriptorType::SampledImage,128,rhi::ShaderStage::Compute},{6,rhi::DescriptorType::Sampler,1,rhi::ShaderStage::Compute},{7,rhi::DescriptorType::UniformBuffer,1,rhi::ShaderStage::Compute},{8,rhi::DescriptorType::StorageBuffer,1,rhi::ShaderStage::Compute},{9,rhi::DescriptorType::StorageBuffer,1,rhi::ShaderStage::Compute}};
+    m_traceDsl=d.createDescriptorSetLayout(tld); m_traceSet=d.createDescriptorSet(*m_traceDsl);
+    rhi::ShaderDesc tsd; tsd.stage=rhi::ShaderStage::Compute; tsd.entryPoint="cs_main";
+    auto tsh=rhi::VkRHIShader::createFromFile(vkD,tsd,sd/"ndgi_probe_trace.spv");
+    rhi::ComputePSODesc tpd; tpd.debugName="NDGI_Trace"; tpd.computeShader=tsh.get(); tpd.descriptorSetLayouts={m_traceDsl.get()}; tpd.pushConstants={{rhi::ShaderStage::Compute,0,64}};
+    m_tracePipeline=d.createComputePSO(tpd);
+    // Init/Train: shared 8 SSBO bindings
+    rhi::DescSetLayoutDesc ild; ild.debugName="NDGI_Init"; for(uint32_t i=0;i<8;++i)ild.bindings.push_back({i,rhi::DescriptorType::StorageBuffer,1,rhi::ShaderStage::Compute});
+    m_initDsl=d.createDescriptorSetLayout(ild); m_initSet=d.createDescriptorSet(*m_initDsl);
+    rhi::ShaderDesc isd; isd.stage=rhi::ShaderStage::Compute; isd.entryPoint="cs_main";
+    auto ish=rhi::VkRHIShader::createFromFile(vkD,isd,sd/"ndgi_init.spv");
+    rhi::ComputePSODesc ipd; ipd.debugName="NDGI_Init"; ipd.computeShader=ish.get(); ipd.descriptorSetLayouts={m_initDsl.get()}; ipd.pushConstants={{rhi::ShaderStage::Compute,0,16}};
+    m_initPipeline=d.createComputePSO(ipd);
+    auto tsh2=rhi::VkRHIShader::createFromFile(vkD,isd,sd/"ndgi_train.spv");
+    rhi::ComputePSODesc trpd; trpd.debugName="NDGI_Train"; trpd.computeShader=tsh2.get(); trpd.descriptorSetLayouts={m_initDsl.get()}; trpd.pushConstants={{rhi::ShaderStage::Compute,0,64}};
+    m_trainPipeline=d.createComputePSO(trpd);
 }
-
-void NdgiPass::destroy() {
-    if (!m_device) return;
-    auto dev = m_device->device();
-    if (m_tracePool) vkDestroyDescriptorPool(dev, m_tracePool, nullptr);
-    if (m_traceDsl) vkDestroyDescriptorSetLayout(dev, m_traceDsl, nullptr);
-    if (m_tracePipeline) vkDestroyPipeline(dev, m_tracePipeline, nullptr);
-    if (m_tracePipelineLayout) vkDestroyPipelineLayout(dev, m_tracePipelineLayout, nullptr);
-    if (m_initPool) vkDestroyDescriptorPool(dev, m_initPool, nullptr);
-    if (m_initDsl) vkDestroyDescriptorSetLayout(dev, m_initDsl, nullptr);
-    if (m_initPipeline) vkDestroyPipeline(dev, m_initPipeline, nullptr);
-    if (m_initPipelineLayout) vkDestroyPipelineLayout(dev, m_initPipelineLayout, nullptr);
-    if (m_trainPipeline) vkDestroyPipeline(dev, m_trainPipeline, nullptr);
-    if (m_trainPipelineLayout) vkDestroyPipelineLayout(dev, m_trainPipelineLayout, nullptr);
-    m_device = nullptr;
+void NdgiPass::destroy(){ m_initSet.reset(); m_traceSet.reset(); m_initPipeline.reset(); m_trainPipeline.reset(); m_tracePipeline.reset(); m_initDsl.reset(); m_traceDsl.reset(); m_rhiDevice=nullptr; }
+void NdgiPass::bindResources(const NdgiResources& res,SceneRtAS& rtAS,const SceneGpu& scene,const RenderTargets&,VkBuffer frameUbo){ auto& vkD=static_cast<rhi::VkRHIDevice&>(*m_rhiDevice); if(!m_rtSupported||!m_traceSet)return;
+    auto tasInfo=rtAS.tlasWriteInfo();
+    auto inst=rhi::VkRHIBuffer::createNonOwning(vkD,rtAS.instanceDataBuffer(),VK_WHOLE_SIZE);
+    auto vert=rhi::VkRHIBuffer::createNonOwning(vkD,scene.vertexBuffer.handle(),VK_WHOLE_SIZE);
+    auto ind=rhi::VkRHIBuffer::createNonOwning(vkD,scene.indexBuffer.handle(),VK_WHOLE_SIZE);
+    auto mat=rhi::VkRHIBuffer::createNonOwning(vkD,scene.materialBuffer.handle(),VK_WHOLE_SIZE);
+    auto ubo=rhi::VkRHIBuffer::createNonOwning(vkD,frameUbo,VK_WHOLE_SIZE);
+    auto sampB=rhi::VkRHIBuffer::createNonOwning(vkD,res.sampleBuf().handle(),VK_WHOLE_SIZE);
+    auto cntB=rhi::VkRHIBuffer::createNonOwning(vkD,res.sampleCount().handle(),VK_WHOLE_SIZE);
+    std::vector<std::unique_ptr<rhi::RHITextureView>> tvs; std::vector<const rhi::RHITextureView*> tvp;
+    for(uint32_t i=0;i<128;++i){ VkImageView v=(i<(uint32_t)scene.images.size())?scene.images[i].view():scene.whiteTex.view(); tvs.push_back(rhi::VkRHITextureView::createNonOwning(vkD,v)); tvp.push_back(tvs.back().get()); }
+    m_traceSet->write({{0,rhi::DescriptorType::AccelerationStructure,nullptr,nullptr,0,0,nullptr,tasInfo.pAccelerationStructures},{1,rhi::DescriptorType::StorageBuffer,nullptr,inst.get()},{2,rhi::DescriptorType::StorageBuffer,nullptr,vert.get()},{3,rhi::DescriptorType::StorageBuffer,nullptr,ind.get()},{4,rhi::DescriptorType::StorageBuffer,nullptr,mat.get()},{5,rhi::DescriptorType::SampledImage,nullptr,nullptr,0,0,nullptr,nullptr,128,tvp.data()},{6,rhi::DescriptorType::Sampler,nullptr,nullptr,0,0,(const void*)(uintptr_t)scene.linearSampler},{7,rhi::DescriptorType::UniformBuffer,nullptr,ubo.get()},{8,rhi::DescriptorType::StorageBuffer,nullptr,sampB.get()},{9,rhi::DescriptorType::StorageBuffer,nullptr,cntB.get()}});
+    writeInitDescriptors(res);
 }
-
-void NdgiPass::bindResources(Device& d, NdgiResources& res, SceneRtAS& rtAS,
-                              const SceneGpu& scene, const RenderTargets& /*rt*/,
-                              VkBuffer frameUbo) {
-    if (!m_rtSupported || m_traceSet == VK_NULL_HANDLE) return;
-
-    // Write trace descriptor set
-    std::array<VkWriteDescriptorSet, 10> w{};
-
-    // TLAS via write info (matches RtGiPass pattern)
-    VkWriteDescriptorSetAccelerationStructureKHR tlasAI = rtAS.tlasWriteInfo();
-    w[0] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-    w[0].dstSet = m_traceSet; w[0].dstBinding = 0; w[0].descriptorCount = 1;
-    w[0].descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
-    w[0].pNext = &tlasAI;
-
-    VkDescriptorBufferInfo instI{rtAS.instanceDataBuffer(), 0, VK_WHOLE_SIZE};
-    VkDescriptorBufferInfo vertI{scene.vertexBuffer.handle(), 0, VK_WHOLE_SIZE};
-    VkDescriptorBufferInfo indI{scene.indexBuffer.handle(), 0, VK_WHOLE_SIZE};
-    VkDescriptorBufferInfo matI{scene.materialBuffer.handle(), 0, VK_WHOLE_SIZE};
-    VkDescriptorBufferInfo frameI{frameUbo, 0, VK_WHOLE_SIZE};
-    VkDescriptorBufferInfo sampI{res.sampleBuf().handle(), 0, VK_WHOLE_SIZE};
-    VkDescriptorBufferInfo cntI{res.sampleCount().handle(), 0, VK_WHOLE_SIZE};
-
-    auto setBuf = [&](uint32_t i, uint32_t bi, const VkDescriptorBufferInfo* p) {
-        w[i] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-        w[i].dstSet = m_traceSet; w[i].dstBinding = bi; w[i].descriptorCount = 1;
-        w[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; w[i].pBufferInfo = p;
-    };
-    setBuf(1, 1, &instI);
-    setBuf(2, 2, &vertI);
-    setBuf(3, 3, &indI);
-    setBuf(4, 4, &matI);
-    // Binding 7 = UniformBuffer (frame UBO), 需要用 VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER
-    w[7] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-    w[7].dstSet = m_traceSet; w[7].dstBinding = 7; w[7].descriptorCount = 1;
-    w[7].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER; w[7].pBufferInfo = &frameI;
-    setBuf(8, 8, &sampI);
-    setBuf(9, 9, &cntI);
-
-    // sampler + textures
-    VkDescriptorImageInfo smpI{}; smpI.sampler = scene.linearSampler;
-    w[6] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-    w[6].dstSet = m_traceSet; w[6].dstBinding = 6; w[6].descriptorCount = 1;
-    w[6].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER; w[6].pImageInfo = &smpI;
-
-    std::vector<VkDescriptorImageInfo> texInfos;
-    texInfos.reserve(128);
-    for (uint32_t i = 0; i < 128; ++i) {
-        VkDescriptorImageInfo ii{};
-        ii.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        ii.imageView = (i < (uint32_t)scene.images.size()) ? scene.images[i].view() : scene.whiteTex.view();
-        texInfos.push_back(ii);
-    }
-    w[5] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-    w[5].dstSet = m_traceSet; w[5].dstBinding = 5; w[5].descriptorCount = 128;
-    w[5].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE; w[5].pImageInfo = texInfos.data();
-
-    vkUpdateDescriptorSets(d.device(), (uint32_t)w.size(), w.data(), 0, nullptr);
-
-    writeInitDescriptors(d, res);
+void NdgiPass::writeInitDescriptors(const NdgiResources& res){ if(!m_initSet)return; auto& vkD=static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
+    auto w1=rhi::VkRHIBuffer::createNonOwning(vkD,res.weights1().handle(),VK_WHOLE_SIZE); auto b1=rhi::VkRHIBuffer::createNonOwning(vkD,res.bias1().handle(),VK_WHOLE_SIZE);
+    auto w2=rhi::VkRHIBuffer::createNonOwning(vkD,res.weights2().handle(),VK_WHOLE_SIZE); auto b2=rhi::VkRHIBuffer::createNonOwning(vkD,res.bias2().handle(),VK_WHOLE_SIZE);
+    auto w3=rhi::VkRHIBuffer::createNonOwning(vkD,res.weights3().handle(),VK_WHOLE_SIZE); auto b3=rhi::VkRHIBuffer::createNonOwning(vkD,res.bias3().handle(),VK_WHOLE_SIZE);
+    auto sb=rhi::VkRHIBuffer::createNonOwning(vkD,res.sampleBuf().handle(),VK_WHOLE_SIZE); auto sc=rhi::VkRHIBuffer::createNonOwning(vkD,res.sampleCount().handle(),VK_WHOLE_SIZE);
+    m_initSet->write({{0,rhi::DescriptorType::StorageBuffer,nullptr,w1.get()},{1,rhi::DescriptorType::StorageBuffer,nullptr,b1.get()},{2,rhi::DescriptorType::StorageBuffer,nullptr,w2.get()},{3,rhi::DescriptorType::StorageBuffer,nullptr,b2.get()},{4,rhi::DescriptorType::StorageBuffer,nullptr,w3.get()},{5,rhi::DescriptorType::StorageBuffer,nullptr,b3.get()},{6,rhi::DescriptorType::StorageBuffer,nullptr,sb.get()},{7,rhi::DescriptorType::StorageBuffer,nullptr,sc.get()}});
 }
-
-void NdgiPass::writeInitDescriptors(Device& d, NdgiResources& res) {
-    if (m_initSet == VK_NULL_HANDLE) return;
-    std::array<VkDescriptorBufferInfo, 8> initInfos{{
-        {res.weights1().handle(), 0, VK_WHOLE_SIZE},
-        {res.bias1().handle(), 0, VK_WHOLE_SIZE},
-        {res.weights2().handle(), 0, VK_WHOLE_SIZE},
-        {res.bias2().handle(), 0, VK_WHOLE_SIZE},
-        {res.weights3().handle(), 0, VK_WHOLE_SIZE},
-        {res.bias3().handle(), 0, VK_WHOLE_SIZE},
-        {res.sampleBuf().handle(), 0, VK_WHOLE_SIZE},
-        {res.sampleCount().handle(), 0, VK_WHOLE_SIZE},
-    }};
-    std::array<VkWriteDescriptorSet, 8> iw{};
-    for (uint32_t i = 0; i < 8; ++i) {
-        iw[i] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-        iw[i].dstSet = m_initSet; iw[i].dstBinding = i; iw[i].descriptorCount = 1;
-        iw[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; iw[i].pBufferInfo = &initInfos[i];
-    }
-    vkUpdateDescriptorSets(d.device(), (uint32_t)iw.size(), iw.data(), 0, nullptr);
+// VkCompat record — 使用 RHI PSO 的 nativeHandle + layout
+void NdgiPass::initWeights(VkCommandBuffer vkCmd){ if(!m_rtSupported||!m_initPipeline)return;
+    auto& p=static_cast<rhi::VkRHIPipelineState&>(*m_initPipeline); VkDescriptorSet ds=(VkDescriptorSet)(uintptr_t)m_initSet->nativeHandle();
+    vkCmdBindPipeline(vkCmd,VK_PIPELINE_BIND_POINT_COMPUTE,(VkPipeline)(uintptr_t)p.nativeHandle()); vkCmdBindDescriptorSets(vkCmd,VK_PIPELINE_BIND_POINT_COMPUTE,p.layout(),0,1,&ds,0,nullptr);
+    struct{uint32_t seed;float scale;uint32_t p0,p1;}pc{42,1.f,0,0}; vkCmdPushConstants(vkCmd,p.layout(),VK_SHADER_STAGE_COMPUTE_BIT,0,16,&pc); vkCmdDispatch(vkCmd,1,1,1);
 }
-
-void NdgiPass::initWeights(VkCommandBuffer cmd) {
-    if (!m_rtSupported || m_initSet == VK_NULL_HANDLE || m_initPipeline == VK_NULL_HANDLE) return;
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_initPipeline);
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
-        m_initPipelineLayout, 0, 1, &m_initSet, 0, nullptr);
-    struct { uint32_t seed; float scale; uint32_t p0, p1; } pc{42, 1.0f, 0, 0};
-    vkCmdPushConstants(cmd, m_initPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, 16, &pc);
-    vkCmdDispatch(cmd, 1, 1, 1);  // 64 threads handle all weights
+void NdgiPass::record(VkCommandBuffer vkCmd,NdgiResources& res,uint32_t fi,glm::vec3 o,glm::vec3 s){ if(!m_rtSupported||!m_tracePipeline)return;
+    auto& p=static_cast<rhi::VkRHIPipelineState&>(*m_tracePipeline); VkDescriptorSet ds=(VkDescriptorSet)(uintptr_t)m_traceSet->nativeHandle();
+    vkCmdFillBuffer(vkCmd,res.sampleCount().handle(),0,4,0);
+    vkCmdBindPipeline(vkCmd,VK_PIPELINE_BIND_POINT_COMPUTE,(VkPipeline)(uintptr_t)p.nativeHandle()); vkCmdBindDescriptorSets(vkCmd,VK_PIPELINE_BIND_POINT_COMPUTE,p.layout(),0,1,&ds,0,nullptr);
+    struct{float origin[3],pad0,spacing[3],pad1; uint32_t px,py,pz,rpp; float rotation,_pad2; uint32_t _pad3;}pc;
+    pc.origin[0]=o.x;pc.origin[1]=o.y;pc.origin[2]=o.z;pc.spacing[0]=s.x;pc.spacing[1]=s.y;pc.spacing[2]=s.z;
+    pc.px=NdgiResources::kProbesX;pc.py=NdgiResources::kProbesY;pc.pz=NdgiResources::kProbesZ;pc.rpp=NdgiResources::kRaysPerProbe;pc.rotation=float((fi%360)*0.0174532925);
+    vkCmdPushConstants(vkCmd,p.layout(),VK_SHADER_STAGE_COMPUTE_BIT,0,sizeof(pc),&pc); vkCmdDispatch(vkCmd,(pc.px*pc.py*pc.pz*pc.rpp+63)/64,1,1);
 }
-
-void NdgiPass::record(VkCommandBuffer cmd, NdgiResources& res, uint32_t frameIndex,
-                       glm::vec3 origin, glm::vec3 spacing) {
-    if (!m_rtSupported || m_traceSet == VK_NULL_HANDLE) return;
-
-    // Reset sample count
-    vkCmdFillBuffer(cmd, res.sampleCount().handle(), 0, 4, 0);
-
-    // Probe trace
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_tracePipeline);
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
-        m_tracePipelineLayout, 0, 1, &m_traceSet, 0, nullptr);
-
-    struct {
-        float origin[3], pad0;
-        float spacing[3], pad1;
-        uint32_t px, py, pz, rpp;
-        float rotation, _pad2;
-        uint32_t _pad3;
-    } pc;
-    pc.origin[0] = origin.x; pc.origin[1] = origin.y; pc.origin[2] = origin.z;
-    pc.spacing[0] = spacing.x; pc.spacing[1] = spacing.y; pc.spacing[2] = spacing.z;
-    pc.px = NdgiResources::kProbesX;
-    pc.py = NdgiResources::kProbesY;
-    pc.pz = NdgiResources::kProbesZ;
-    pc.rpp = NdgiResources::kRaysPerProbe;
-    pc.rotation = float((frameIndex % 360) * 0.0174532925);
-
-    vkCmdPushConstants(cmd, m_tracePipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0,
-        sizeof(pc), &pc);
-
-    uint32_t totalRays = pc.px * pc.py * pc.pz * pc.rpp;
-    vkCmdDispatch(cmd, (totalRays + 63) / 64, 1, 1);
+void NdgiPass::recordTraining(VkCommandBuffer vkCmd,NdgiResources& res,uint32_t){ if(!m_rtSupported||!m_trainPipeline||!m_initSet)return;
+    auto* cnt=static_cast<uint32_t*>(res.sampleCount().mapped()); uint32_t total=cnt?*cnt:0; if(!total)return;
+    auto& p=static_cast<rhi::VkRHIPipelineState&>(*m_trainPipeline); VkDescriptorSet ds=(VkDescriptorSet)(uintptr_t)m_initSet->nativeHandle();
+    vkCmdBindPipeline(vkCmd,VK_PIPELINE_BIND_POINT_COMPUTE,(VkPipeline)(uintptr_t)p.nativeHandle()); vkCmdBindDescriptorSets(vkCmd,VK_PIPELINE_BIND_POINT_COMPUTE,p.layout(),0,1,&ds,0,nullptr);
+    struct{float lr,ema;uint32_t batch,iters,samples,p0,p1,p2;}pc{0.01f,0.95f,256,4,total};
+    vkCmdPushConstants(vkCmd,p.layout(),VK_SHADER_STAGE_COMPUTE_BIT,0,32,&pc); vkCmdDispatch(vkCmd,1,1,1);
 }
-
-void NdgiPass::recordTraining(VkCommandBuffer cmd, NdgiResources& res, uint32_t /*frameIndex*/) {
-    if (!m_rtSupported || !m_trainPipeline || m_initSet == VK_NULL_HANDLE) return;
-
-    uint32_t totalSamples = 0;
-    // Read sample count from host buffer (mapped)
-    auto* cnt = static_cast<uint32_t*>(res.sampleCount().mapped());
-    if (cnt) totalSamples = *cnt;
-    if (totalSamples == 0) return;
-
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_trainPipeline);
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
-        m_trainPipelineLayout, 0, 1, &m_initSet, 0, nullptr);
-
-    struct { float lr, ema; uint32_t batch, iters, samples, p0, p1, p2; } pc;
-    pc.lr = 0.01f;
-    pc.ema = 0.95f;
-    pc.batch = 256;
-    pc.iters = 4;
-    pc.samples = totalSamples;
-    vkCmdPushConstants(cmd, m_trainPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, 32, &pc);
-    vkCmdDispatch(cmd, 1, 1, 1);
-}
-
 } // namespace somegi
