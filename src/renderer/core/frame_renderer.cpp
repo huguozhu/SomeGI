@@ -126,7 +126,7 @@ void FrameRenderer::init(Device& d, VkCommandPool pool, VkExtent2D extent,
 
     std::printf("[init] restir resources/pass...\n");
     m_restir.create(d, extent, kRestirMaxLights);
-    m_restirPass.init(d, rtSupported);
+    m_restirPass.init(*m_rhiDevice, rtSupported);
 
     if (rtSupported) {
         std::printf("[init] rt gi pass...\n");
@@ -137,7 +137,7 @@ void FrameRenderer::init(Device& d, VkCommandPool pool, VkExtent2D extent,
         std::printf("[init] lumen resources...\n");
         m_lumen.create(d, extent);
     }
-    m_restirPass.bindResources(d, m_restir, m_vxgi, m_rt, m_gbuffer.frameUboHandle());
+    m_restirPass.bindResources(m_restir, m_vxgi, m_rt, m_gbuffer.frameUboHandle());
 
     m_rsmSample.bindFrame(m_rt, m_gbuffer.frameUboHandle(),
         m_rsmGeom.frameUboHandle(),
@@ -266,7 +266,7 @@ void FrameRenderer::onResize(Device& d, VkExtent2D newExtent,
     m_gtgi.bindFrame(m_rt, m_gbuffer.frameUboHandle());
     m_sdfgiPass.bindResources(m_sdfgi, m_vxgi, m_rt, m_gbuffer.frameUboHandle());
     m_restir.resize(d, newExtent);
-    m_restirPass.bindResources(d, m_restir, m_vxgi, m_rt, m_gbuffer.frameUboHandle());
+    m_restirPass.bindResources(m_restir, m_vxgi, m_rt, m_gbuffer.frameUboHandle());
     m_restirOutInited = false;
     m_restirBootstrapped = false;
     m_rsmSample.bindFrame(m_rt, m_gbuffer.frameUboHandle(),

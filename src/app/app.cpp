@@ -454,7 +454,7 @@ void App::applySceneSelection() {
         m_renderer.shadow().bindTLAS(*m_device, m_renderer.rtAS().tlas());
         // M10：TLAS 就绪，绑定到 ReSTIR RT shade pipeline
         if (m_renderer.rtAS().instanceCount() > 0) {
-            m_renderer.restirPass().bindResourcesRt(*m_device, m_renderer.restir(), m_renderer.rt(),
+            m_renderer.restirPass().bindResourcesRt(m_renderer.restir(), m_renderer.rt(),
                 m_renderer.gbuffer().frameUboHandle(), m_renderer.rtAS().tlas());
         }
         m_renderer.ndgiPass().bindResources(m_renderer.ndgi(), m_renderer.rtAS(), m_sceneGpu, m_renderer.rt(),
@@ -781,7 +781,7 @@ void App::onSwapchainResized() {
     m_renderer.sdfgiPass().bindResources(m_renderer.sdfgi(), m_renderer.vxgi(), m_renderer.rt(), m_renderer.gbuffer().frameUboHandle());
     // ReSTIR：reservoir image 跟 swapchain，需重建；lightBuffer 跨帧持久。
     m_renderer.restir().resize(*m_device, m_swap->extent());
-    m_renderer.restirPass().bindResources(*m_device, m_renderer.restir(), m_renderer.vxgi(), m_renderer.rt(), m_renderer.gbuffer().frameUboHandle());
+    m_renderer.restirPass().bindResources(m_renderer.restir(), m_renderer.vxgi(), m_renderer.rt(), m_renderer.gbuffer().frameUboHandle());
     m_renderer.restirOutInited() = false;
     m_renderer.restirBootstrapped() = false;
     m_renderer.rsmSample().bindFrame(m_renderer.rt(),
@@ -792,7 +792,7 @@ void App::onSwapchainResized() {
     if (m_renderer.rtSupported() && m_renderer.rtGiBound()) {
         m_renderer.rtGi().bindFrame(m_renderer.rt(), m_renderer.gbuffer().frameUboHandle(), m_renderer.rtAS(), m_sceneGpu);
         // M10：resize 后重绑 ReSTIR RT shade 的 TLAS
-        m_renderer.restirPass().bindResourcesRt(*m_device, m_renderer.restir(), m_renderer.rt(),
+        m_renderer.restirPass().bindResourcesRt(m_renderer.restir(), m_renderer.rt(),
             m_renderer.gbuffer().frameUboHandle(), m_renderer.rtAS().tlas());
     }
     // L.2：swapchain resize 后 probe atlas 重建。
