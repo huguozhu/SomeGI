@@ -1,147 +1,95 @@
-// GtgiPass —— set / 描述符布局复刻 SsgiPass，shader 行为不同。
-// 共用 rt.ssgi 输出 + rt.ssgiPrev 时序 history。
+// GtgiPass RHI 实现 — 描述符布局与 SsgiPass 一致 (7 bindings)。
 
 #include "renderer/screenspace/gtgi_pass.h"
+#include "rhi/base/device.h"
+#include "rhi/base/descriptor.h"
+#include "rhi/base/pipeline_state.h"
+#include "rhi/base/command_buffer.h"
+#include "rhi/vulkan/vk_device.h"
+#include "rhi/vulkan/vk_shader.h"
+#include "rhi/vulkan/vk_texture.h"
+#include "rhi/vulkan/vk_buffer.h"
+#include "rhi/vulkan/vk_command.h"
 #include "core/device.h"
 #include "core/shader.h"
-#include <array>
+#include <cstring>
 
 namespace somegi {
 
-namespace {
-struct GtgiPC {
-    uint32_t outSizeX, outSizeY;
-    float    invOutSizeX, invOutSizeY;
-    float    radiusPixels;
-    float    falloff;
-    uint32_t sliceCount;
-    uint32_t samplesPerSlice;
-};
-static_assert(sizeof(GtgiPC) == 32, "GtgiPC must match shader push constant layout");
-}
+namespace { struct GtgiPC {
+    uint32_t outSizeX, outSizeY; float invOutSizeX, invOutSizeY;
+    float radiusPixels, falloff; uint32_t sliceCount, samplesPerSlice;
+}; static_assert(sizeof(GtgiPC) == 32); }
 
-void GtgiPass::init(Device& d) {
-    m_device = &d;
+GtgiPass::~GtgiPass() = default;
+
+void GtgiPass::init(rhi::RHIDevice& d) {
+    m_rhiDevice = &d;
+    auto& vkDevice = static_cast<rhi::VkRHIDevice&>(d);
 
     VkSamplerCreateInfo si{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
-    si.magFilter = VK_FILTER_LINEAR; si.minFilter = VK_FILTER_LINEAR;
-    si.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
-    si.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-    si.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-    si.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    si.magFilter = si.minFilter = VK_FILTER_LINEAR; si.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+    si.addressModeU = si.addressModeV = si.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
     si.maxLod = 0.0f;
-    VK_CHECK(vkCreateSampler(d.device(), &si, nullptr, &m_linearClamp));
+    vkCreateSampler(vkDevice.vkDevice(), &si, nullptr, &m_linearClamp);
 
-    // 与 SsgiPass 同 7 个 binding：FrameUBO, normal, depth, prevHdr, sampler, out, prevGtgi
-    std::array<VkDescriptorSetLayoutBinding, 7> b{};
-    b[0] = {0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
-    b[1] = {1, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,  1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
-    b[2] = {2, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,  1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
-    b[3] = {3, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,  1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
-    b[4] = {4, VK_DESCRIPTOR_TYPE_SAMPLER,        1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
-    b[5] = {5, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,  1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
-    b[6] = {6, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,  1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
+    rhi::DescSetLayoutDesc layoutDesc; layoutDesc.debugName = "GTGI";
+    layoutDesc.bindings = {
+        {0, rhi::DescriptorType::UniformBuffer, 1, rhi::ShaderStage::Compute},
+        {1, rhi::DescriptorType::SampledImage,  1, rhi::ShaderStage::Compute},
+        {2, rhi::DescriptorType::SampledImage,  1, rhi::ShaderStage::Compute},
+        {3, rhi::DescriptorType::SampledImage,  1, rhi::ShaderStage::Compute},
+        {4, rhi::DescriptorType::Sampler,        1, rhi::ShaderStage::Compute},
+        {5, rhi::DescriptorType::StorageImage,   1, rhi::ShaderStage::Compute},
+        {6, rhi::DescriptorType::SampledImage,   1, rhi::ShaderStage::Compute},
+    };
+    m_setLayout = d.createDescriptorSetLayout(layoutDesc);
+    m_set = d.createDescriptorSet(*m_setLayout);
 
-    VkDescriptorSetLayoutCreateInfo li{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-    li.bindingCount = (uint32_t)b.size(); li.pBindings = b.data();
-    VK_CHECK(vkCreateDescriptorSetLayout(d.device(), &li, nullptr, &m_setLayout));
+    rhi::ShaderDesc sd; sd.stage = rhi::ShaderStage::Compute; sd.entryPoint = "cs_main";
+    auto shader = rhi::VkRHIShader::createFromFile(vkDevice, sd, shaderDir() / "gi" / "gtgi" / "gtgi.spv");
 
-    std::array<VkDescriptorPoolSize, 4> ps{{
-        {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1},
-        {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,  4},
-        {VK_DESCRIPTOR_TYPE_SAMPLER,        1},
-        {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,  1},
-    }};
-    VkDescriptorPoolCreateInfo pci{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
-    pci.maxSets = 1; pci.poolSizeCount = (uint32_t)ps.size(); pci.pPoolSizes = ps.data();
-    VK_CHECK(vkCreateDescriptorPool(d.device(), &pci, nullptr, &m_pool));
-
-    VkDescriptorSetAllocateInfo dai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
-    dai.descriptorPool = m_pool; dai.descriptorSetCount = 1; dai.pSetLayouts = &m_setLayout;
-    VK_CHECK(vkAllocateDescriptorSets(d.device(), &dai, &m_set));
-
-    VkPushConstantRange pc{};
-    pc.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-    pc.size = sizeof(GtgiPC);
-    VkPipelineLayoutCreateInfo plci{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
-    plci.setLayoutCount = 1; plci.pSetLayouts = &m_setLayout;
-    plci.pushConstantRangeCount = 1; plci.pPushConstantRanges = &pc;
-    VK_CHECK(vkCreatePipelineLayout(d.device(), &plci, nullptr, &m_pipelineLayout));
-
-    ShaderModule cs(d, shaderDir() / "gi" / "gtgi" / "gtgi.spv");
-    VkPipelineShaderStageCreateInfo stage{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
-    stage.stage = VK_SHADER_STAGE_COMPUTE_BIT; stage.module = cs.handle(); stage.pName = "cs_main";
-    VkComputePipelineCreateInfo cpci{VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
-    cpci.stage = stage; cpci.layout = m_pipelineLayout;
-    VK_CHECK(vkCreateComputePipelines(d.device(), VK_NULL_HANDLE, 1, &cpci, nullptr, &m_pipeline));
+    rhi::ComputePSODesc psoDesc; psoDesc.debugName = "GTGI";
+    psoDesc.computeShader = shader.get();
+    psoDesc.descriptorSetLayouts = {m_setLayout.get()};
+    psoDesc.pushConstants = {{rhi::ShaderStage::Compute, 0, sizeof(GtgiPC)}};
+    m_pipeline = d.createComputePSO(psoDesc);
 }
 
 void GtgiPass::destroy() {
-    if (!m_device) return;
-    auto dev = m_device->device();
-    if (m_pipeline)       vkDestroyPipeline(dev, m_pipeline, nullptr);
-    if (m_pipelineLayout) vkDestroyPipelineLayout(dev, m_pipelineLayout, nullptr);
-    if (m_pool)           vkDestroyDescriptorPool(dev, m_pool, nullptr);
-    if (m_setLayout)      vkDestroyDescriptorSetLayout(dev, m_setLayout, nullptr);
-    if (m_linearClamp)    vkDestroySampler(dev, m_linearClamp, nullptr);
-    m_pipeline = VK_NULL_HANDLE; m_pipelineLayout = VK_NULL_HANDLE;
-    m_pool = VK_NULL_HANDLE; m_setLayout = VK_NULL_HANDLE;
-    m_linearClamp = VK_NULL_HANDLE;
-    m_device = nullptr;
+    if (m_linearClamp) { vkDestroySampler(static_cast<rhi::VkRHIDevice&>(*m_rhiDevice).vkDevice(), m_linearClamp, nullptr); m_linearClamp = VK_NULL_HANDLE; }
+    m_set.reset(); m_pipeline.reset(); m_setLayout.reset(); m_rhiDevice = nullptr;
 }
 
-void GtgiPass::bindFrame(Device& d, const RenderTargets& rt, VkBuffer frameUbo) {
-    VkDescriptorBufferInfo uboInfo{frameUbo, 0, VK_WHOLE_SIZE};
-    auto sampledRO = [](VkImageView v) {
-        VkDescriptorImageInfo i{};
-        i.imageView = v; i.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        return i;
-    };
-    VkDescriptorImageInfo nr = sampledRO(rt.gNormalRough.view());
-    VkDescriptorImageInfo dp = sampledRO(rt.depth.view());
-    VkDescriptorImageInfo hp = sampledRO(rt.hdrPrev.view());
-    VkDescriptorImageInfo gp = sampledRO(rt.ssgiPrev.view());
-    VkDescriptorImageInfo smp{}; smp.sampler = m_linearClamp;
-    VkDescriptorImageInfo gi{};
-    gi.imageView = rt.ssgi.view();
-    gi.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-
-    std::array<VkWriteDescriptorSet, 7> w{};
-    w[0] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-    w[0].dstSet = m_set; w[0].dstBinding = 0; w[0].descriptorCount = 1;
-    w[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER; w[0].pBufferInfo = &uboInfo;
-    auto setImg = [&](VkWriteDescriptorSet& W, uint32_t bi, VkDescriptorType t, const VkDescriptorImageInfo* p) {
-        W = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-        W.dstSet = m_set; W.dstBinding = bi; W.descriptorCount = 1;
-        W.descriptorType = t; W.pImageInfo = p;
-    };
-    setImg(w[1], 1, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, &nr);
-    setImg(w[2], 2, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, &dp);
-    setImg(w[3], 3, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, &hp);
-    setImg(w[4], 4, VK_DESCRIPTOR_TYPE_SAMPLER,       &smp);
-    setImg(w[5], 5, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, &gi);
-    setImg(w[6], 6, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, &gp);
-    vkUpdateDescriptorSets(d.device(), (uint32_t)w.size(), w.data(), 0, nullptr);
+void GtgiPass::bindFrame(const RenderTargets& rt, VkBuffer frameUbo) {
+    if (!m_set) return;
+    auto& vkD = static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
+    auto ubo = rhi::VkRHIBuffer::createNonOwning(vkD, frameUbo, VK_WHOLE_SIZE);
+    m_set->write({
+        {0, rhi::DescriptorType::UniformBuffer, nullptr, ubo.get()},
+        {1, rhi::DescriptorType::SampledImage,  rhi::VkRHITextureView::createNonOwning(vkD, rt.gNormalRough.view()).get()},
+        {2, rhi::DescriptorType::SampledImage,  rhi::VkRHITextureView::createNonOwning(vkD, rt.depth.view()).get()},
+        {3, rhi::DescriptorType::SampledImage,  rhi::VkRHITextureView::createNonOwning(vkD, rt.hdrPrev.view()).get()},
+        {4, rhi::DescriptorType::Sampler, nullptr, nullptr, 0, 0, (const void*)(uintptr_t)m_linearClamp},
+        {5, rhi::DescriptorType::StorageImage,  rhi::VkRHITextureView::createNonOwning(vkD, rt.ssgi.view()).get()},
+        {6, rhi::DescriptorType::SampledImage,  rhi::VkRHITextureView::createNonOwning(vkD, rt.ssgiPrev.view()).get()},
+    });
 }
 
-void GtgiPass::record(VkCommandBuffer cmd, const RenderTargets& rt) {
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipeline);
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
-        m_pipelineLayout, 0, 1, &m_set, 0, nullptr);
-
-    GtgiPC pc{};
-    pc.outSizeX = rt.extent.width; pc.outSizeY = rt.extent.height;
-    pc.invOutSizeX = 1.0f / (float)rt.extent.width;
-    pc.invOutSizeY = 1.0f / (float)rt.extent.height;
-    pc.radiusPixels = radiusPixels;
-    pc.falloff = falloff;
-    pc.sliceCount = (uint32_t)sliceCount;
-    pc.samplesPerSlice = (uint32_t)samplesPerSlice;
-    vkCmdPushConstants(cmd, m_pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
-
-    uint32_t gx = (rt.extent.width  + 7) / 8;
-    uint32_t gy = (rt.extent.height + 7) / 8;
-    vkCmdDispatch(cmd, gx, gy, 1);
+void GtgiPass::record(rhi::RHICommandBuffer& cmd, const RenderTargets& rt) {
+    if (!m_pipeline || !m_set) return;
+    cmd.bindPipelineState(*m_pipeline); cmd.bindDescriptorSet(0, *m_set);
+    GtgiPC pc{}; pc.outSizeX = rt.extent.width; pc.outSizeY = rt.extent.height;
+    pc.invOutSizeX = 1.0f/(float)rt.extent.width; pc.invOutSizeY = 1.0f/(float)rt.extent.height;
+    pc.radiusPixels = radiusPixels; pc.falloff = falloff;
+    pc.sliceCount = (uint32_t)sliceCount; pc.samplesPerSlice = (uint32_t)samplesPerSlice;
+    cmd.pushConstants(rhi::ShaderStage::Compute, &pc, sizeof(pc));
+    cmd.dispatch((rt.extent.width+7)/8, (rt.extent.height+7)/8, 1);
 }
 
+void GtgiPass::record(VkCommandBuffer vkCmd, const RenderTargets& rt) {
+    rhi::VkRHICommandBuffer rhiCmd(static_cast<rhi::VkRHIDevice&>(*m_rhiDevice), vkCmd);
+    record(rhiCmd, rt);
 }
+
+} // namespace somegi

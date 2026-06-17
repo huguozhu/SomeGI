@@ -1,35 +1,30 @@
+// GtgiPass —— Ground-Truth GI，已迁移到 RHI。与 SsgiPass 共享 rt.ssgi 输出。
 #pragma once
 #include "renderer/core/render_targets.h"
-
-// GtgiPass —— C.1：Ground-Truth GI（Sucker Punch 2024）。GTAO 的 GI 升级。
-// 算法见 shaders/gi/gtgi/gtgi.slang。
-//
-// 与 SsgiPass 共享 rt.ssgi 输出 + ssgiPrev 时序 history，per-frame 二
-// 选一 dispatch；lighting.slang 读 gSsgi 不区分来源。
+#include <memory>
+#include <vulkan/vulkan.h>
 
 namespace somegi {
-class Device;
+namespace rhi { class RHIDevice; class RHIDescriptorSetLayout; class RHIPipelineState; class RHIDescriptorSet; class RHICommandBuffer; }
 
 class GtgiPass {
 public:
-    void init(Device& d);
+    ~GtgiPass();
+    void init(rhi::RHIDevice& d);
     void destroy();
-    void bindFrame(Device& d, const RenderTargets& rt, VkBuffer frameUbo);
+    void bindFrame(const RenderTargets& rt, VkBuffer frameUbo);
+    void record(rhi::RHICommandBuffer& cmd, const RenderTargets& rt);
     void record(VkCommandBuffer cmd, const RenderTargets& rt);
 
-    bool  enabled = false;
-    int   sliceCount = 4;
-    int   samplesPerSlice = 6;
-    float radiusPixels = 32.0f;
-    float falloff = 5.0f;
+    bool enabled = false;
+    int sliceCount = 4, samplesPerSlice = 6;
+    float radiusPixels = 32.0f, falloff = 5.0f;
 
 private:
-    Device* m_device = nullptr;
-    VkDescriptorSetLayout m_setLayout = VK_NULL_HANDLE;
-    VkPipelineLayout m_pipelineLayout = VK_NULL_HANDLE;
-    VkPipeline m_pipeline = VK_NULL_HANDLE;
-    VkDescriptorPool m_pool = VK_NULL_HANDLE;
-    VkDescriptorSet m_set = VK_NULL_HANDLE;
+    rhi::RHIDevice* m_rhiDevice = nullptr;
+    std::unique_ptr<rhi::RHIDescriptorSetLayout> m_setLayout;
+    std::unique_ptr<rhi::RHIPipelineState> m_pipeline;
+    std::unique_ptr<rhi::RHIDescriptorSet> m_set;
     VkSampler m_linearClamp = VK_NULL_HANDLE;
 };
 

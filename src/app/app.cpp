@@ -775,8 +775,8 @@ void App::onSwapchainResized() {
     m_renderer.ssao().bindFrame(m_renderer.rt());
     m_renderer.gtao().bindFrame(m_renderer.rt());
     m_renderer.ssr().bindFrame(m_renderer.rt(), m_renderer.gbuffer().frameUboHandle());
-    m_renderer.ssgi().bindFrame(*m_device, m_renderer.rt(), m_renderer.gbuffer().frameUboHandle());
-    m_renderer.gtgi().bindFrame(*m_device, m_renderer.rt(), m_renderer.gbuffer().frameUboHandle());
+    m_renderer.ssgi().bindFrame(m_renderer.rt(), m_renderer.gbuffer().frameUboHandle());
+    m_renderer.gtgi().bindFrame(m_renderer.rt(), m_renderer.gbuffer().frameUboHandle());
     // SDFGI trace 也读 rt.gNormalRough/depth/ssgi → resize 后重绑。
     m_renderer.sdfgiPass().bindResources(*m_device, m_renderer.sdfgi(), m_renderer.vxgi(), m_renderer.rt(), m_renderer.gbuffer().frameUboHandle());
     // ReSTIR：reservoir image 跟 swapchain，需重建；lightBuffer 跨帧持久。
