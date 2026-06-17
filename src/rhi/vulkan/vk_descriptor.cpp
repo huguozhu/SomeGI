@@ -2,6 +2,7 @@
 #include "vk_descriptor.h"
 #include "vk_buffer.h"
 #include "vk_texture.h"
+#include <map>
 
 namespace somegi {
 namespace rhi {
@@ -22,7 +23,7 @@ static VkDescriptorType toVkDescType(DescriptorType t) {
 // Descriptor Set Layout
 // ════════════════════════════════════════════════════════════════
 std::unique_ptr<RHIDescriptorSetLayout> VkRHIDescSetLayout::create(VkRHIDevice& device, const DescSetLayoutDesc& desc) {
-    auto l = std::unique_ptr<VkRHIDescSetLayout>(new VkRHIDescSetLayout(device));
+    auto l = std::unique_ptr<VkRHIDescSetLayout>(new VkRHIDescSetLayout(device, desc));
     std::vector<VkDescriptorSetLayoutBinding> bindings;
     std::vector<VkDescriptorBindingFlags> bindingFlags;
     for (auto& b : desc.bindings) {
@@ -68,19 +69,21 @@ VkRHIDescSetLayout::~VkRHIDescSetLayout() {
 std::unique_ptr<RHIDescriptorSet> VkRHIDescSet::create(VkRHIDevice& device, const RHIDescriptorSetLayout& layout) {
     auto s = std::unique_ptr<VkRHIDescSet>(new VkRHIDescSet(device));
 
-    // 创建 descriptor pool（涵盖所有可能的描述符类型）
-    VkDescriptorPoolSize poolSizes[] = {
-        {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 16},
-        {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 16},
-        {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 16},
-        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 16},
-        {VK_DESCRIPTOR_TYPE_SAMPLER, 4},
-        {VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 4},
-    };
+    // 根据 layout 的 binding 描述动态计算 descriptor pool 容量
+    auto& layoutDesc = static_cast<const VkRHIDescSetLayout&>(layout).desc();
+    std::map<VkDescriptorType, uint32_t> typeCounts;
+    for (auto& b : layoutDesc.bindings) {
+        VkDescriptorType vt = toVkDescType(b.type);
+        typeCounts[vt] = std::max(typeCounts[vt], b.count);  // 取最大 count
+    }
+    std::vector<VkDescriptorPoolSize> poolSizes;
+    for (auto& [vt, cnt] : typeCounts)
+        poolSizes.push_back({vt, cnt});
+
     VkDescriptorPoolCreateInfo pci{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
     pci.maxSets = 1;
-    pci.poolSizeCount = 6;
-    pci.pPoolSizes = poolSizes;
+    pci.poolSizeCount = (uint32_t)poolSizes.size();
+    pci.pPoolSizes = poolSizes.data();
     vkCreateDescriptorPool(device.vkDevice(), &pci, nullptr, &s->m_pool);
 
     // 分配 descriptor set

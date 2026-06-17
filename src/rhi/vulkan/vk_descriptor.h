@@ -12,10 +12,12 @@ public:
     static std::unique_ptr<RHIDescriptorSetLayout> create(VkRHIDevice& device, const DescSetLayoutDesc& desc);
     ~VkRHIDescSetLayout() override;
     void* nativeHandle() const override { return (void*)m_layout; }
+    const DescSetLayoutDesc& desc() const { return m_desc; }  // 用于创建 descriptor pool
 private:
     VkRHIDevice& m_device;
     VkDescriptorSetLayout m_layout = VK_NULL_HANDLE;
-    VkRHIDescSetLayout(VkRHIDevice& d) : m_device(d) {}
+    DescSetLayoutDesc m_desc;  // 保留 binding 信息
+    VkRHIDescSetLayout(VkRHIDevice& d, const DescSetLayoutDesc& desc) : m_device(d), m_desc(desc) {}
 };
 
 class VkRHIDescSet : public RHIDescriptorSet {
