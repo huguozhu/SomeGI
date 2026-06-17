@@ -290,8 +290,14 @@ void FGExecutor::emitBarriers(VkCommandBuffer cmd,
             if (res->state.access == ref.access && !prevManual) return;
 
             VkBufferMemoryBarrier2 b{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2};
-            b.srcStageMask  = res->state.stage;
-            b.srcAccessMask = res->state.access;
+            // manual→auto 交接：若手动 pass 未声明退出状态，回退到安全默认值
+            if (prevManual && res->state.stage == VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT) {
+                b.srcStageMask  = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+                b.srcAccessMask = 0;
+            } else {
+                b.srcStageMask  = res->state.stage;
+                b.srcAccessMask = res->state.access;
+            }
             b.dstStageMask  = ref.stages;
             b.dstAccessMask = ref.access;
             b.buffer = res->physicalBuffer->handle();

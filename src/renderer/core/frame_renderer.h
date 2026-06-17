@@ -42,7 +42,6 @@
 #include "renderer/gi/lumen/lumen_gather_pass.h"
 #include "renderer/gi/lumen/lumen_filter_pass.h"
 #include "renderer/shadow/shadow_pass.h"
-#include "renderer/core/barrier_manager.h"
 #include "renderer/core/render_pipeline.h"
 #include "renderer/culling/frustum_cull_pass.h"
 #include "renderer/culling/hiz_build_pass.h"
@@ -135,7 +134,6 @@ public:
     LumenProbePass&      lumenProbe()  { return m_lumenProbePass; }
     LumenFilterPass&     lumenFilter() { return m_lumenFilterPass; }
     LumenGatherPass&     lumenGather() { return m_lumenGatherPass; }
-    BarrierManager&      barriers()    { return m_barriers; }
     RenderPipeline&      pipeline()    { return m_pipeline; }
     FrustumCullPass& cullPass() { return m_cullPass; }
     HiZBuildPass& hizPass() { return m_hizPass; }
@@ -241,7 +239,6 @@ private:
     VkCommandPool m_pool = VK_NULL_HANDLE;
 
     RenderTargets m_rt;
-    BarrierManager m_barriers;
     RenderPipeline m_pipeline;
     FrustumCullPass m_cullPass;
     HiZBuildPass m_hizPass;

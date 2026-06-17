@@ -3566,6 +3566,27 @@ void App::run() {
             buildPipelineTable();
             m_fg.execute(cmd);
             m_fg.applyTimestampsToDebug();
+
+            // 将 FG per-pass GPU 耗时映射到 FrameRenderer 的 profiler 槽位
+            {
+                float* dst = m_renderer.passTimes(m_frameCtx.frameInFlight);
+                float total = 0.0f;
+                for (auto& p : m_fg.debug().passes) {
+                    float t = p.gpuMs;
+                    if (p.name == "GBuffer")       dst[m_renderer.kTsGBuffer]  = t;
+                    else if (p.name == "SSAO" || p.name == "GTAO")
+                                                    dst[m_renderer.kTsAO]       = t;
+                    else if (p.name == "VXGI-Chain") dst[m_renderer.kTsVoxelGI] = t;
+                    else if (p.name == "Lighting")  dst[m_renderer.kTsLighting] = t;
+                    else if (p.name == "Skybox")    dst[m_renderer.kTsSkybox]   = t;
+                    else if (p.name == "Tonemap")   dst[m_renderer.kTsTonemap]  = t;
+                    else if (p.name == "TAA" || p.name == "SMAA")
+                                                    dst[m_renderer.kTsAA]       = t;
+                    total += t;
+                }
+                dst[m_renderer.kTsEnd] = total;
+                if (total > 0.0f) m_renderer.gpuMs() = m_renderer.gpuMs() * 0.9f + total * 0.1f;
+            }
         } else {
             // 现有 RenderPipeline 路径
             buildPipelineTable();

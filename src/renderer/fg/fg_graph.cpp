@@ -317,9 +317,27 @@ static void deriveFromLayout(VkImageLayout layout, VkAccessFlags2& access, VkPip
             access  = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT;
             stages  = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT;
             break;
+        case VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL:
+            access  = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT;
+            stages  = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT;
+            break;
         case VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL:
             access  = VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT;
             stages  = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+            break;
+        case VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL:
+            access  = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+            stages  = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT |
+                      VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+            break;
+        case VK_IMAGE_LAYOUT_GENERAL:
+            // GENERAL 可用于读写，保留自动推导以区分 read/write 上下文
+            access = 0;
+            stages = 0;
+            break;
+        case VK_IMAGE_LAYOUT_PRESENT_SRC_KHR:
+            access  = 0;
+            stages  = VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT;
             break;
         default:
             // 非标准 layout — 保留自动推导
