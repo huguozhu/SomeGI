@@ -27,6 +27,7 @@ struct DescriptorBinding {
     DescriptorType type;
     uint32_t count = 1;
     ShaderStage visibility = ShaderStage::Compute;
+    bool partiallyBound = false;  // VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT
 };
 
 struct DescSetLayoutDesc {

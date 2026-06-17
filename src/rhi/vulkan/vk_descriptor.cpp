@@ -32,20 +32,24 @@ std::unique_ptr<RHIDescriptorSetLayout> VkRHIDescSetLayout::create(VkRHIDevice& 
         lb.descriptorCount = b.count;
         lb.stageFlags = VK_SHADER_STAGE_ALL;
         bindings.push_back(lb);
-        bindingFlags.push_back(0);
+        VkDescriptorBindingFlags f = 0;
+        if (b.partiallyBound) f |= VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT;
+        bindingFlags.push_back(f);
     }
 
     // UPDATE_AFTER_BIND 标志
     VkDescriptorSetLayoutBindingFlagsCreateInfo bfci{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO};
-    if (!desc.updateAfterBindBindings.empty()) {
-        for (auto bi : desc.updateAfterBindBindings)
-            if (bi < bindingFlags.size()) bindingFlags[bi] = VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT;
+    for (auto bi : desc.updateAfterBindBindings)
+        if (bi < bindingFlags.size()) bindingFlags[bi] |= VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT;
+    bool hasFlags = false;
+    for (auto f : bindingFlags) if (f) { hasFlags = true; break; }
+    if (hasFlags) {
         bfci.bindingCount = (uint32_t)bindingFlags.size();
         bfci.pBindingFlags = bindingFlags.data();
     }
 
     VkDescriptorSetLayoutCreateInfo ci{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-    ci.pNext = !desc.updateAfterBindBindings.empty() ? &bfci : nullptr;
+    ci.pNext = hasFlags ? &bfci : nullptr;
     ci.bindingCount = (uint32_t)bindings.size();
     ci.pBindings = bindings.data();
     if (desc.updateAfterBind)

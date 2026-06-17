@@ -148,19 +148,19 @@ void FrameRenderer::init(Device& d, VkCommandPool pool, VkExtent2D extent,
 
     std::printf("[init] vxgi voxelize/inject/mipmap pass...\n");
     m_vxgiVoxelize.init(d, 128);
-    m_vxgiInject.init(d, RsmGeometryPass::kRsmSize);
-    m_vxgiInject.bindResources(d, m_rsmGeom.position(), m_rsmGeom.flux(), m_vxgi);
+    m_vxgiInject.init(*m_rhiDevice, RsmGeometryPass::kRsmSize);
+    m_vxgiInject.bindResources(m_rsmGeom.position(), m_rsmGeom.flux(), m_vxgi);
     m_vxgiMipmap.init(*m_rhiDevice, m_vxgi.mipLevels());
     m_vxgiMipmap.bindResources(m_vxgi);
-    m_vxgiAniso.init(d, m_vxgi.mipLevels());
-    m_vxgiAniso.bindResources(d, m_vxgi);
+    m_vxgiAniso.init(*m_rhiDevice, m_vxgi.mipLevels());
+    m_vxgiAniso.bindResources(m_vxgi);
     m_vxgiRelight.init(d);
     m_vxgiRelight.bindResources(d, m_vxgi, m_vxgi.relightScratch().view());
     m_vxgiRelight.bindResourcesPingPong(d, m_vxgi, false);
     m_vxgiRelight.bindResourcesPingPong(d, m_vxgi, true);
     if (m_vxgiSixAxisInited) {
-        m_vxgiResolve6Axis.init(d);
-        m_vxgiResolve6Axis.bindResources(d, m_vxgi);
+        m_vxgiResolve6Axis.init(*m_rhiDevice);
+        m_vxgiResolve6Axis.bindResources(m_vxgi);
     }
 
     std::printf("[init] prt bake pass...\n");
