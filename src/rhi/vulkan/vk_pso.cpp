@@ -81,7 +81,16 @@ std::unique_ptr<RHIPipelineState> VkRHIPipelineState::createGraphics(VkRHIDevice
     VkPipelineDepthStencilStateCreateInfo ds{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
     ds.depthTestEnable = desc.depthStencil.depthTest;
     ds.depthWriteEnable = desc.depthStencil.depthWrite;
-    ds.depthCompareOp = desc.depthStencil.depthCompare == CompareFunc::Less ? VK_COMPARE_OP_LESS : VK_COMPARE_OP_LESS_OR_EQUAL;
+    switch (desc.depthStencil.depthCompare) {
+        case CompareFunc::Never:        ds.depthCompareOp = VK_COMPARE_OP_NEVER; break;
+        case CompareFunc::Less:         ds.depthCompareOp = VK_COMPARE_OP_LESS; break;
+        case CompareFunc::Equal:        ds.depthCompareOp = VK_COMPARE_OP_EQUAL; break;
+        case CompareFunc::LessEqual:    ds.depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL; break;
+        case CompareFunc::Greater:      ds.depthCompareOp = VK_COMPARE_OP_GREATER; break;
+        case CompareFunc::NotEqual:     ds.depthCompareOp = VK_COMPARE_OP_NOT_EQUAL; break;
+        case CompareFunc::GreaterEqual: ds.depthCompareOp = VK_COMPARE_OP_GREATER_OR_EQUAL; break;
+        case CompareFunc::Always:       ds.depthCompareOp = VK_COMPARE_OP_ALWAYS; break;
+    }
 
     // Blend
     VkPipelineColorBlendStateCreateInfo cb{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
@@ -95,7 +104,12 @@ std::unique_ptr<RHIPipelineState> VkRHIPipelineState::createGraphics(VkRHIDevice
         ba.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
         blendAtts.push_back(ba);
     }
-    if (blendAtts.empty()) blendAtts.resize(desc.renderTargets.colorFormats.empty() ? 1 : desc.renderTargets.colorFormats.size());
+    if (blendAtts.empty()) {
+        blendAtts.resize(desc.renderTargets.colorFormats.empty() ? 1 : desc.renderTargets.colorFormats.size());
+        // 默认：关闭混合、写入所有通道（与 Vulkan 默认行为一致）
+        for (auto& ba : blendAtts)
+            ba.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+    }
     cb.attachmentCount = (uint32_t)blendAtts.size();
     cb.pAttachments = blendAtts.data();
 

@@ -86,9 +86,11 @@ public:
     virtual void globalBarrier() = 0;
 
     // ── 渲染通道（Metal 显式 render pass 模型） ──
+    // loadOnly=true: LOAD_OP_LOAD（保留已有内容）；false: LOAD_OP_CLEAR（清除）
     virtual void beginRendering(const RHITextureView* colorViews, uint32_t colorCount,
                                 const RHITextureView* depthView,
-                                uint32_t width, uint32_t height) = 0;
+                                uint32_t width, uint32_t height,
+                                bool loadOnly = false) = 0;
     virtual void endRendering() = 0;
 
     // ── 时间戳 ──

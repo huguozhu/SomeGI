@@ -214,13 +214,15 @@ void VkRHICommandBuffer::bufferBarrier(const RHIBuffer& buf,
 }
 
 void VkRHICommandBuffer::beginRendering(const RHITextureView* colorViews, uint32_t colorCount,
-                                         const RHITextureView* depthView, uint32_t width, uint32_t height) {
+                                         const RHITextureView* depthView, uint32_t width, uint32_t height,
+                                         bool loadOnly) {
+    VkAttachmentLoadOp loadOp = loadOnly ? VK_ATTACHMENT_LOAD_OP_LOAD : VK_ATTACHMENT_LOAD_OP_CLEAR;
     std::vector<VkRenderingAttachmentInfo> colors(colorCount);
     for (uint32_t i = 0; i < colorCount; ++i) {
         colors[i] = {VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
         colors[i].imageView = (VkImageView)(uintptr_t)colorViews[i].nativeHandle();
         colors[i].imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-        colors[i].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        colors[i].loadOp = loadOp;
         colors[i].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
     }
     VkRenderingAttachmentInfo depth{};
@@ -228,7 +230,7 @@ void VkRHICommandBuffer::beginRendering(const RHITextureView* colorViews, uint32
         depth = {VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
         depth.imageView = (VkImageView)(uintptr_t)depthView->nativeHandle();
         depth.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
-        depth.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        depth.loadOp = loadOp;
         depth.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
     }
     VkRenderingInfo ri{VK_STRUCTURE_TYPE_RENDERING_INFO};
