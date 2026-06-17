@@ -4,6 +4,14 @@
 namespace somegi {
 
 Device::Device(Window& window, bool enableValidation) {
+    // GPU-Assisted Validation: 检测 shader 越界/未初始化描述符。
+    // 注意：GPU-AV 在 UNDEFINED oldLayout 过渡后读取图像时可能触发 device lost
+    // （正确行为——它检测到了驱动丢弃的内容）。调试时可按需启用。
+    if (enableValidation) {
+        _putenv_s("VK_LAYER_KHRONOS_VALIDATION_GPU_ASSISTED_EXT", "1");
+        _putenv_s("VK_LAYER_KHRONOS_VALIDATION_SYNCHRONIZATION_VALIDATION_EXT", "1");
+    }
+
     vkb::InstanceBuilder ib;
     ib.set_app_name("SomeGI")
       .require_api_version(1, 3, 0)
@@ -69,6 +77,10 @@ Device::Device(Window& window, bool enableValidation) {
         m_features.accelStruct = true;
         m_features.rayQuery = true;
     }
+
+    // VK_EXT_device_fault: 获取 device lost 后的详细诊断信息
+    bool hasDeviceFault = m_physicalDevice.enable_extension_if_present(
+        VK_EXT_DEVICE_FAULT_EXTENSION_NAME);
 
     // Enable Mesh Shader extension + query actual feature support
     bool meshShaderAvail = false, taskShaderAvail = false;

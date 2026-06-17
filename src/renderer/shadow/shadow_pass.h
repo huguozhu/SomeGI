@@ -78,6 +78,11 @@ public:
     // Sampler used for shadow map sampling (exposed for LightingPass)
     VkSampler shadowSampler() const { return m_shadowSampler; }
 
+    // FrameGraph auto-barrier 模式：跳过内部 shadowMask 的 UNDEFINED→GENERAL 和
+    // GENERAL→SR_O 过渡，由 FrameGraph 统一管理
+    void setFgAutoBarrier(bool v) { m_fgAutoBarrier = v; }
+    bool fgAutoBarrier() const { return m_fgAutoBarrier; }
+
     // RT shadow 可调参数
     float& rtSunRadius()  { return m_rtSunRadius; }
     int&   rtRayCount()   { return m_rtRayCount; }
@@ -193,6 +198,9 @@ private:
     // Scene bounds for sun-view projection
     glm::vec3 m_sceneAabbMin{0};
     glm::vec3 m_sceneAabbMax{0};
+
+    // FrameGraph auto-barrier：跳过内部 shadowMask UNDEFINED→GENERAL 过渡
+    bool m_fgAutoBarrier = false;
 };
 
 } // namespace somegi

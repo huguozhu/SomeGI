@@ -30,7 +30,7 @@ public:
     // 全局放大系数（UI 可调），1.0 = 标准能量守恒，>1 看起来更亮。
     // gvOcclusionStrength：B.8 GV 遮挡强度，0=禁用，1=标准。
     void record(VkCommandBuffer cmd, int srcIdx, uint32_t gridResolution,
-                float occlusionAmplifier, float gvOcclusionStrength);
+                float occlusionAmp, float gvOcclusionStr);
 
     int   iterations = 8;             // ImGui 可调
     float occlusionAmplifier = 1.0f;  // 全局放大；>1 看着更亮，<1 衰减

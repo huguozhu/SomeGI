@@ -140,12 +140,103 @@ void saveAllSceneStates(const std::map<std::string, SceneState>& states,
         f << "\n";
     }
 }
+
+// ============================================================
+// AppSettings — 全局渲染设置持久化（GI/AA/MSAA/阴影 等）
+// ============================================================
+constexpr const char* kAppSettingsPath = "assets/app_settings.ini";
+
+struct AppSettings {
+    int giIndex        = 1;   // GI 方法 (0=None, 1=IBL, ...)
+    int shadowIndex    = 1;   // 阴影方法
+    int aoMethod       = 1;   // AO 方法 (0=None, 1=SSAO, 2=GTAO)
+    int aaMethod       = 1;   // AA 方法 (0=None, 1=MSAA, 2=TAA, 3=SMAA)
+    int renderingMode  = 0;   // 0=Deferred, 1=Forward
+    int msaaSamples    = 4;   // MSAA 采样数 (1/2/4/8/16)
+    bool useFrameGraph = true;
+    bool useGpuCulling = false;
+    bool useHiZOcclusion = false;
+    bool useMipmaps    = true;
+    bool useMeshShader = false;
+    float taaBlendAlpha = 0.92f;
+    int shadowRtRays   = 8;      // RT Soft shadow 采样数
+    float shadowRtRadius = 0.05f;// RT Soft shadow 太阳半径
+};
+
+AppSettings loadAppSettings() {
+    AppSettings cfg;
+    std::ifstream f(kAppSettingsPath);
+    if (!f) return cfg;
+    std::string line;
+    while (std::getline(f, line)) {
+        size_t b = line.find_first_not_of(" \t\r");
+        if (b == std::string::npos || line[b] == '#') continue;
+        size_t e = line.find_last_not_of(" \t\r");
+        std::string s = line.substr(b, e - b + 1);
+        std::istringstream is(s);
+        std::string key;
+        if (!(is >> key)) continue;
+        if (key == "gi.index")           is >> cfg.giIndex;
+        else if (key == "shadow.index")  is >> cfg.shadowIndex;
+        else if (key == "ao.method")     is >> cfg.aoMethod;
+        else if (key == "aa.method")     is >> cfg.aaMethod;
+        else if (key == "rendering")     is >> cfg.renderingMode;
+        else if (key == "msaa.samples")  is >> cfg.msaaSamples;
+        else if (key == "fg.enabled")    is >> cfg.useFrameGraph;
+        else if (key == "cull.gpu")      is >> cfg.useGpuCulling;
+        else if (key == "cull.hiz")      is >> cfg.useHiZOcclusion;
+        else if (key == "mipmaps")       is >> cfg.useMipmaps;
+        else if (key == "mesh.shader")   is >> cfg.useMeshShader;
+        else if (key == "taa.blend")     is >> cfg.taaBlendAlpha;
+        else if (key == "shadow.rt.rays")   is >> cfg.shadowRtRays;
+        else if (key == "shadow.rt.radius") is >> cfg.shadowRtRadius;
+    }
+    return cfg;
+}
+
+void saveAppSettings(const AppSettings& cfg) {
+    std::ofstream f(kAppSettingsPath);
+    if (!f) return;
+    f << "# AppSettings — 全局渲染设置（自动保存）\n";
+    f << "gi.index "       << cfg.giIndex       << "\n";
+    f << "shadow.index "   << cfg.shadowIndex    << "\n";
+    f << "ao.method "      << cfg.aoMethod       << "\n";
+    f << "aa.method "      << cfg.aaMethod       << "\n";
+    f << "rendering "      << cfg.renderingMode  << "\n";
+    f << "msaa.samples "   << cfg.msaaSamples    << "\n";
+    f << "fg.enabled "     << (cfg.useFrameGraph ? 1 : 0) << "\n";
+    f << "cull.gpu "       << (cfg.useGpuCulling ? 1 : 0) << "\n";
+    f << "cull.hiz "       << (cfg.useHiZOcclusion ? 1 : 0) << "\n";
+    f << "mipmaps "        << (cfg.useMipmaps ? 1 : 0) << "\n";
+    f << "mesh.shader "    << (cfg.useMeshShader ? 1 : 0) << "\n";
+    f << "taa.blend "      << cfg.taaBlendAlpha << "\n";
+    f << "shadow.rt.rays " << cfg.shadowRtRays << "\n";
+    f << "shadow.rt.radius " << cfg.shadowRtRadius << "\n";
+}
 }
 
 App::App() {
     WindowDesc wd; wd.title = "SomeGI"; wd.width = 800; wd.height = 450;
     m_window = std::make_unique<Window>(wd);
     m_device = std::make_unique<Device>(*m_window, /*validation=*/true);
+
+    // 从文件恢复全局渲染设置（基础字段在 renderer.init() 前应用，
+    // shadow/mesh-shader 等依赖 renderer 的字段在 init() 之后应用）
+    AppSettings loadedCfg = loadAppSettings();
+    {
+        m_currentGiIndex     = loadedCfg.giIndex;
+        m_currentShadowIndex = loadedCfg.shadowIndex;
+        m_aoMethod           = (AOMethod)loadedCfg.aoMethod;
+        m_aaMethod           = (AAMethod)loadedCfg.aaMethod;
+        m_renderingMode      = (RenderingMode)loadedCfg.renderingMode;
+        m_msaaSamples        = (VkSampleCountFlagBits)loadedCfg.msaaSamples;
+        m_useFrameGraph      = loadedCfg.useFrameGraph;
+        m_useGpuCulling      = loadedCfg.useGpuCulling;
+        m_useHiZOcclusion    = loadedCfg.useHiZOcclusion;
+        m_useMipmaps         = loadedCfg.useMipmaps;
+        m_taaBlendAlpha      = loadedCfg.taaBlendAlpha;
+        std::printf("[init] loaded app settings from %s\n", kAppSettingsPath);
+    }
 
     try {
     // Clamp default MSAA to device-supported sample counts
@@ -205,6 +296,18 @@ App::App() {
     // Delegate all rendering setup to FrameRenderer
     m_renderer.init(*m_device, m_pool, m_swap->extent(), m_msaaSamples,
                     rtSupported, m_swap->format(), m_window->handle());
+
+    // 应用依赖 renderer 的持久化设置
+    if (loadedCfg.useMeshShader && m_renderer.meshShaderSupported())
+        m_renderer.setUseMeshShader(true);
+    if (loadedCfg.shadowRtRays >= 4 && loadedCfg.shadowRtRays <= 32)
+        m_renderer.shadow().rtRayCount() = loadedCfg.shadowRtRays;
+    if (loadedCfg.shadowRtRadius >= 0.01f && loadedCfg.shadowRtRadius <= 0.10f)
+        m_renderer.shadow().rtSunRadius() = loadedCfg.shadowRtRadius;
+
+    // 初始化 FrameGraph（实验性）
+    m_fg.init(*m_device);
+    m_fg.initTimestamps(*m_device, 32);  // GPU timestamp profiling: 最多 32 个 active pass
 
     // Init ImGui on the separate debug window
     m_renderer.imgui().init(*m_device, m_imguiWin->handle(), m_imguiSwap->format(), kFramesInFlight);
@@ -544,6 +647,8 @@ void App::cleanup() {
 
     // FrameRenderer 统一清理所有 pass（含 envIbl / rt / timestamp）
     m_renderer.destroy();
+    // FrameGraph 资源池清理
+    m_fg.destroy();
 
     if (m_device) destroySceneSamplers(*m_device, m_sceneGpu);
     // 显式释放 SceneGpu 中的 GPU 资源（必须在 Device 销毁前完成）
@@ -1173,6 +1278,205 @@ void App::buildUI() {
             }
         }
 
+        ImGui::Separator();
+        ImGui::Text("Experimental");
+        bool useFg = m_useFrameGraph;
+        if (ImGui::Checkbox("Use Frame Graph", &useFg)) {
+            m_useFrameGraph = useFg;
+            m_pipelineDirty = true;
+        }
+        if (m_useFrameGraph) {
+            ImGui::SameLine();
+            ImGui::TextColored(ImVec4(1,1,0,1), "(experimental)");
+
+            auto& fgDebug = m_fg.debug();
+            if (ImGui::TreeNode("FrameGraph Debug")) {
+                auto& compiled = m_fg.compiledGraph();
+                ImGui::Text("Passes: %u active / %zu total | Resources: %zu | Alias Groups: %zu",
+                    (uint32_t)compiled.passOrder.size(), fgDebug.passes.size(),
+                    fgDebug.resources.size(), fgDebug.aliasGroups.size());
+
+                // ---- Pass 执行列表 ----
+                if (ImGui::CollapsingHeader("Pass List", ImGuiTreeNodeFlags_DefaultOpen)) {
+                    if (ImGui::BeginTable("##fgpasstable", 7,
+                            ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
+                            ImGuiTableFlags_ScrollY | ImGuiTableFlags_SizingFixedFit)) {
+                        ImGui::TableSetupColumn("#");
+                        ImGui::TableSetupColumn("Name");
+                        ImGui::TableSetupColumn("T");
+                        ImGui::TableSetupColumn("Reads");
+                        ImGui::TableSetupColumn("Writes");
+                        ImGui::TableSetupColumn("Deps");
+                        ImGui::TableSetupColumn("GPU ms");
+                        ImGui::TableHeadersRow();
+
+                        for (auto& p : fgDebug.passes) {
+                            ImGui::TableNextRow();
+                            if (p.culled) ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0, 0x22AA2222);
+
+                            ImGui::TableNextColumn();
+                            if (!p.culled) ImGui::Text("%u", p.execOrder);
+                            else ImGui::TextColored(ImVec4(1,0.3f,0.3f,1), "[X]");
+
+                            ImGui::TableNextColumn();
+                            ImGui::Text("%s", p.name.c_str());
+
+                            ImGui::TableNextColumn();
+                            const char* t = "?";
+                            switch (p.passType) {
+                                case somegi::fg::FGPassType::Compute: t = "C"; break;
+                                case somegi::fg::FGPassType::Graphics: t = "G"; break;
+                                case somegi::fg::FGPassType::MeshShading: t = "M"; break;
+                                case somegi::fg::FGPassType::RayTracing: t = "R"; break;
+                            }
+                            ImGui::Text("%s", t);
+
+                            ImGui::TableNextColumn();
+                            ImGui::Text("%zu", p.reads.size());
+                            if (ImGui::IsItemHovered()) {
+                                ImGui::BeginTooltip();
+                                for (auto& r : p.reads) ImGui::BulletText("%s", r.c_str());
+                                ImGui::EndTooltip();
+                            }
+
+                            ImGui::TableNextColumn();
+                            ImGui::Text("%zu", p.writes.size());
+                            if (ImGui::IsItemHovered()) {
+                                ImGui::BeginTooltip();
+                                for (auto& w : p.writes) ImGui::BulletText("%s", w.c_str());
+                                ImGui::EndTooltip();
+                            }
+
+                            ImGui::TableNextColumn();
+                            ImGui::Text("%zu", p.deps.size());
+                            if (ImGui::IsItemHovered() && !p.deps.empty()) {
+                                ImGui::BeginTooltip();
+                                for (auto& d : p.deps) ImGui::BulletText("%s", d.c_str());
+                                ImGui::EndTooltip();
+                            }
+
+                            ImGui::TableNextColumn();
+                            if (p.gpuMs > 0.001f) ImGui::Text("%.3f", p.gpuMs);
+                            else ImGui::TextDisabled("-");
+                        }
+                        ImGui::EndTable();
+                    }
+                }
+
+                // ---- 资源寿命图 ----
+                if (ImGui::CollapsingHeader("Resources")) {
+                    if (ImGui::BeginTable("##fgrestable", 6,
+                            ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY)) {
+                        ImGui::TableSetupColumn("Name");
+                        ImGui::TableSetupColumn("Type");
+                        ImGui::TableSetupColumn("Size");
+                        ImGui::TableSetupColumn("First");
+                        ImGui::TableSetupColumn("Last");
+                        ImGui::TableSetupColumn("Imported");
+                        ImGui::TableHeadersRow();
+
+                        uint32_t maxPass = 0;
+                        for (auto& p : fgDebug.passes)
+                            if (!p.culled && p.execOrder > maxPass) maxPass = p.execOrder;
+
+                        for (auto& r : fgDebug.resources) {
+                            ImGui::TableNextRow();
+                            ImGui::TableNextColumn(); ImGui::Text("%s", r.name.c_str());
+                            ImGui::TableNextColumn();
+                            ImGui::Text("%s", r.type == somegi::fg::FGResourceType::Texture ? "Tex" : "Buf");
+                            ImGui::TableNextColumn();
+                            if (r.sizeBytes >= 1024*1024) ImGui::Text("%.1f MB", r.sizeBytes / (1024.0f*1024.0f));
+                            else ImGui::Text("%u KB", r.sizeBytes / 1024);
+                            ImGui::TableNextColumn();
+                            ImGui::Text("%u", r.firstWritePass);
+                            ImGui::TableNextColumn();
+                            ImGui::Text("%u", r.lastReadPass);
+                            ImGui::TableNextColumn();
+                            ImGui::Text("%s", r.isImported ? "Y" : "");
+                        }
+                        ImGui::EndTable();
+                    }
+                }
+
+                // ---- 别名组 ----
+                if (!fgDebug.aliasGroups.empty() && ImGui::CollapsingHeader("Alias Groups")) {
+                    for (auto& ag : fgDebug.aliasGroups) {
+                        ImGui::Text("Group %u: %u KB (%u KB wasted)",
+                            ag.id, ag.totalBytes / 1024, ag.wastedBytes / 1024);
+                        for (auto& m : ag.members)
+                            ImGui::BulletText("%s", m.c_str());
+                    }
+                } else if (ImGui::CollapsingHeader("Alias Groups")) {
+                    ImGui::TextDisabled("No alias groups (all lifetimes overlap, or no managed resources)");
+                }
+
+                // ---- 资源布局时间线 ----
+                if (!fgDebug.timelines.empty() && ImGui::CollapsingHeader("Layout Timeline")) {
+                    auto& tls = fgDebug.timelines;
+                    auto& names = fgDebug.timelinePassNames;
+
+                    // 布局→颜色和缩写
+                    auto layoutInfo = [](VkImageLayout l) -> std::pair<ImU32, const char*> {
+                        switch (l) {
+                            case VK_IMAGE_LAYOUT_UNDEFINED:              return {0xFF333333, "---"};
+                            case VK_IMAGE_LAYOUT_GENERAL:                return {0xFF4488CC, "GEN"};
+                            case VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL: return {0xFFCC6644, "COL"};
+                            case VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL:
+                            case VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL: return {0xFF44AA66, "DEP"};
+                            case VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL: return {0xFFAA44CC, "SRO"};
+                            case VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL:   return {0xFFCCAA44, "TSR"};
+                            case VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL:   return {0xFF44AACC, "TDT"};
+                            case VK_IMAGE_LAYOUT_PRESENT_SRC_KHR:        return {0xFFCCCC44, "PRE"};
+                            default: return {0xFF555555, "???"};
+                        }
+                    };
+
+                    if (ImGui::BeginTable("##fgtimeline", (int)names.size() + 1,
+                            ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
+                            ImGuiTableFlags_ScrollX | ImGuiTableFlags_ScrollY |
+                            ImGuiTableFlags_SizingFixedFit)) {
+                        ImGui::TableSetupColumn("Resource");
+                        for (auto& n : names)
+                            ImGui::TableSetupColumn(n.c_str());
+                        ImGui::TableHeadersRow();
+
+                        for (auto& tl : tls) {
+                            ImGui::TableNextRow();
+                            ImGui::TableNextColumn();
+                            ImGui::Text("%s", tl.resourceName.c_str());
+
+                            for (size_t pi = 0; pi < names.size(); ++pi) {
+                                ImGui::TableNextColumn();
+                                if (pi < tl.snapshots.size()) {
+                                    auto& s = tl.snapshots[pi];
+                                    auto [color, label] = layoutInfo(s.layout);
+                                    if (s.layout == VK_IMAGE_LAYOUT_UNDEFINED) {
+                                        ImGui::TextDisabled("---");
+                                    } else {
+                                        ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(color), "%s%s",
+                                            label, s.barrierEmitted ? " B" : "");
+                                    }
+                                    if (ImGui::IsItemHovered()) {
+                                        ImGui::BeginTooltip();
+                                        ImGui::Text("Pass: %s", pi < names.size() ? names[pi].c_str() : "?");
+                                        ImGui::Text("Layout: 0x%X", (uint32_t)s.layout);
+                                        ImGui::Text("Access: 0x%X", (uint32_t)s.access);
+                                        ImGui::Text("Barrier: %s", s.barrierEmitted ? "Y" : "N");
+                                        ImGui::EndTooltip();
+                                    }
+                                } else {
+                                    ImGui::TextDisabled("-");
+                                }
+                            }
+                        }
+                        ImGui::EndTable();
+                    }
+                }
+
+                ImGui::TreePop();
+            }
+        }
+
         ImGui::EndTabItem();
         }
 
@@ -1447,6 +1751,26 @@ void App::buildUI() {
     }
     ImGui::End();
     (void)io;
+
+    // 全局渲染设置有变更即保存
+    {
+        AppSettings cfg;
+        cfg.giIndex        = m_currentGiIndex;
+        cfg.shadowIndex    = m_currentShadowIndex;
+        cfg.aoMethod       = (int)m_aoMethod;
+        cfg.aaMethod       = (int)m_aaMethod;
+        cfg.renderingMode  = (int)m_renderingMode;
+        cfg.msaaSamples    = (int)m_msaaSamples;
+        cfg.useFrameGraph  = m_useFrameGraph;
+        cfg.useGpuCulling  = m_useGpuCulling;
+        cfg.useHiZOcclusion = m_useHiZOcclusion;
+        cfg.useMipmaps     = m_useMipmaps;
+        cfg.useMeshShader  = m_renderer.useMeshShader();
+        cfg.taaBlendAlpha  = m_taaBlendAlpha;
+        cfg.shadowRtRays   = m_renderer.shadow().rtRayCount();
+        cfg.shadowRtRadius = m_renderer.shadow().rtSunRadius();
+        saveAppSettings(cfg);
+    }
 }
 
 // ============================================================
@@ -3060,72 +3384,81 @@ void App::recordIndirectDraws(VkCommandBuffer cmd, uint32_t frameInFlight, const
 }
 
 void App::recordPostProcessing(VkCommandBuffer cmd) {
-    // hdrColor: hdrPrev copy 结束后在 TRANSFER_SRC → SHADER_READ_ONLY for tonemap
-    transitionImage(cmd, m_renderer.rt().hdrColor.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-        VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-        VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_READ_BIT,
-        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT);
-
     bool hdrActive = m_swap->hdrEnabled();
     bool aaActive = (m_aaMethod == AAMethod::TAA || m_aaMethod == AAMethod::SMAA);
+    // FrameGraph 路径：HDR+AA 时 FG 统一处理 Tonemap + TAA/SMAA + Copy-aaHistory
+    bool fgHandlesPostAA = m_useFrameGraph && hdrActive && aaActive;
+
+    // hdrColor → SHADER_READ_ONLY：FrameGraph AA 模式下由 Tonemap pass auto-barrier 处理
+    if (!fgHandlesPostAA) {
+        transitionImage(cmd, m_renderer.rt().hdrColor.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+            VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+            VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_READ_BIT,
+            VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT);
+    }
 
     if (hdrActive) {
         // === HDR path ===
         if (aaActive) {
-            m_renderer.rt().ensureAaResources(*m_device);
-            transitionImage(cmd, m_renderer.rt().aaHdr.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-                VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
-                VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
-                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
-            m_renderer.tonemap().bindOutput(*m_device, m_renderer.rt().aaHdr.view(), m_frameCtx.frameInFlight);
-            m_renderer.tonemap().record(cmd, m_renderer.rt(), m_frameCtx.frameInFlight, true, 1.0f);
-            writeTimestamp(cmd, m_renderer.kTsTonemap);
-
-            transitionImage(cmd, m_renderer.rt().aaHdr.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-                VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
-                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT);
-
-            transitionImage(cmd, m_frameCtx.swapImage, VK_IMAGE_ASPECT_COLOR_BIT,
-                VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
-                VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
-                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
-
-            if (m_aaMethod == AAMethod::TAA) {
-                m_renderer.taa().bindResources(*m_device, m_renderer.rt(), m_frameCtx.frameInFlight);
-                m_renderer.taa().bindOutput(*m_device, m_frameCtx.swapView, m_frameCtx.frameInFlight);
-                m_renderer.taa().record(cmd, m_renderer.rt(), m_jitter, m_prevJitter,
-                            m_frameCtx.invViewProj, m_prevViewProj, m_frameCtx.frameInFlight, m_taaBlendAlpha);
-                // Copy aaHdr → aaHistory for next frame
+            // FrameGraph 路径：Tonemap+TAA/SMAA+Copy-aaHistory 已由 FG 处理，
+            // swapImage 已被 TAA/SMAA pass 写入为 GENERAL
+            if (!fgHandlesPostAA) {
+                m_renderer.rt().ensureAaResources(*m_device);
                 transitionImage(cmd, m_renderer.rt().aaHdr.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
-                    VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
-                transitionImage(cmd, m_renderer.rt().aaHistory.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-                    VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                    VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
                     VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
-                    VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
-                VkImageCopy histCopy{};
-                histCopy.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-                histCopy.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-                histCopy.extent = {m_renderer.rt().extent.width, m_renderer.rt().extent.height, 1};
-                vkCmdCopyImage(cmd, m_renderer.rt().aaHdr.image(), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                               m_renderer.rt().aaHistory.image(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &histCopy);
+                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
+                m_renderer.tonemap().bindOutput(*m_device, m_renderer.rt().aaHdr.view(), m_frameCtx.frameInFlight);
+                m_renderer.tonemap().record(cmd, m_renderer.rt(), m_frameCtx.frameInFlight, true, 1.0f);
+                writeTimestamp(cmd, m_renderer.kTsTonemap);
+
+                // aaHdr: Tonemap 写入后布局为 GENERAL → SR_O 供 TAA/SMAA 读取
                 transitionImage(cmd, m_renderer.rt().aaHdr.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-                    VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                    VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_READ_BIT,
-                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
-                transitionImage(cmd, m_renderer.rt().aaHistory.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                    VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
-                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
-            } else {
-                m_renderer.smaa().bindResources(*m_device, m_renderer.rt());
-                m_renderer.smaa().bindOutput(*m_device, m_frameCtx.swapView);
-                m_renderer.smaa().record(cmd, m_renderer.rt());
+                    VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
+                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT);
+
+                transitionImage(cmd, m_frameCtx.swapImage, VK_IMAGE_ASPECT_COLOR_BIT,
+                    VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
+                    VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
+                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
+
+                if (m_aaMethod == AAMethod::TAA) {
+                    m_renderer.taa().bindResources(*m_device, m_renderer.rt(), m_frameCtx.frameInFlight);
+                    m_renderer.taa().bindOutput(*m_device, m_frameCtx.swapView, m_frameCtx.frameInFlight);
+                    m_renderer.taa().record(cmd, m_renderer.rt(), m_jitter, m_prevJitter,
+                                m_frameCtx.invViewProj, m_prevViewProj, m_frameCtx.frameInFlight, m_taaBlendAlpha);
+                    // Copy aaHdr → aaHistory for next frame
+                    transitionImage(cmd, m_renderer.rt().aaHdr.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
+                        VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
+                    transitionImage(cmd, m_renderer.rt().aaHistory.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                        VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                        VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
+                        VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
+                    VkImageCopy histCopy{};
+                    histCopy.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+                    histCopy.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+                    histCopy.extent = {m_renderer.rt().extent.width, m_renderer.rt().extent.height, 1};
+                    vkCmdCopyImage(cmd, m_renderer.rt().aaHdr.image(), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                                   m_renderer.rt().aaHistory.image(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &histCopy);
+                    transitionImage(cmd, m_renderer.rt().aaHdr.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                        VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                        VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_READ_BIT,
+                        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+                    transitionImage(cmd, m_renderer.rt().aaHistory.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                        VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+                } else {
+                    m_renderer.smaa().bindResources(*m_device, m_renderer.rt());
+                    m_renderer.smaa().bindOutput(*m_device, m_frameCtx.swapView);
+                    m_renderer.smaa().record(cmd, m_renderer.rt());
+                }
+                writeTimestamp(cmd, m_renderer.kTsAA);
             }
-            writeTimestamp(cmd, m_renderer.kTsAA);
         } else {
             // No AA: tonemap writes directly to swapchain
             transitionImage(cmd, m_frameCtx.swapImage, VK_IMAGE_ASPECT_COLOR_BIT,
@@ -3263,6 +3596,12 @@ void App::recordPostProcessing(VkCommandBuffer cmd) {
             VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
     }
 
+    // 恢复 hdrColor 到 TRANSFER_SRC，匹配 Copy-hdrPrev 的 descriptor layout
+    transitionImage(cmd, m_renderer.rt().hdrColor.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
+        VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT, 0);
+
     // Final timestamp + transition to present
     writeTimestamp(cmd, m_renderer.kTsEnd);
     transitionImage(cmd, m_frameCtx.swapImage, VK_IMAGE_ASPECT_COLOR_BIT,
@@ -3345,6 +3684,7 @@ void App::run() {
             m_flyer.update(m_camera, dt, m_window->handle());
         }
         buildUI();
+        m_renderer.imgui().saveSettings();  // 窗口/控件变更有修改就保存
         applySceneSelection();
 
         if (!wantKbd && ImGui::IsKeyPressed(ImGuiKey_F2)) {
@@ -3397,25 +3737,31 @@ void App::run() {
 
         // ---- Begin command buffer ----
         VkCommandBuffer cmd = m_cmds[frame.frameInFlight];
-        vkResetCommandBuffer(cmd, 0);
+        vkResetCommandBuffer(cmd, VK_COMMAND_BUFFER_RESET_RELEASE_RESOURCES_BIT);
         VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
         bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
         VK_CHECK(vkBeginCommandBuffer(cmd, &bi));
 
         // ---- Timestamp readback from previous frame ----
+        // 使用 WITH_AVAILABILITY 而非 WAIT：FrameGraph 路径不会写入旧管线的
+        // AO/VoxelGI/Skybox 等 slot，WAIT 会导致在这些未写入 slot 上永久阻塞。
         uint32_t qBase = frame.frameInFlight * m_renderer.kTimestampSlots;
         if (m_renderer.timestampValid(frame.frameInFlight)) {
-            uint64_t ts[m_renderer.kTimestampSlots] = {};
+            uint64_t tsArr[m_renderer.kTimestampSlots * 2] = {};
             VkResult r = vkGetQueryPoolResults(m_device->device(), m_renderer.timestampPool(),
-                qBase, m_renderer.kTimestampSlots, sizeof(ts), ts, sizeof(uint64_t),
-                VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT);
-            if (r == VK_SUCCESS) {
+                qBase, m_renderer.kTimestampSlots, sizeof(tsArr), tsArr, 2 * sizeof(uint64_t),
+                VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WITH_AVAILABILITY_BIT);
+            if (r == VK_SUCCESS || r == VK_NOT_READY) {
                 float period = m_device->timestampPeriod() * 1e-6f;
                 float total = 0;
                 float* dst = m_renderer.passTimes(frame.frameInFlight);
                 for (uint32_t i = 1; i < m_renderer.kTimestampSlots; ++i) {
-                    if (ts[i] > ts[i-1]) {
-                        float ms = float(ts[i] - ts[i-1]) * period;
+                    uint64_t curVal   = tsArr[i * 2];
+                    uint64_t curAvail = tsArr[i * 2 + 1];
+                    uint64_t prevVal   = tsArr[(i - 1) * 2];
+                    uint64_t prevAvail = tsArr[(i - 1) * 2 + 1];
+                    if (curAvail && prevAvail && curVal > prevVal) {
+                        float ms = float(curVal - prevVal) * period;
                         dst[i] = dst[i] * 0.9f + ms * 0.1f;
                         total += ms;
                     }
@@ -3447,8 +3793,40 @@ void App::run() {
             m_renderer.rt().gNormalRough.view());
 
         // ---- Execute render pipeline ----
-        buildPipelineTable();
-        m_renderer.pipeline().execute(cmd);
+        if (m_useFrameGraph) {
+            m_fg.reset();
+            m_fg.setAutoBarriers(true);
+            setupFrameGraph();
+            m_fg.compile();
+            buildPipelineTable();
+            m_fg.execute(cmd);
+            m_fg.applyTimestampsToDebug();
+
+            // 将 FG per-pass GPU 耗时映射到 FrameRenderer 的 profiler 槽位
+            {
+                float* dst = m_renderer.passTimes(m_frameCtx.frameInFlight);
+                float total = 0.0f;
+                for (auto& p : m_fg.debug().passes) {
+                    float t = p.gpuMs;
+                    if (p.name == "GBuffer")       dst[m_renderer.kTsGBuffer]  = t;
+                    else if (p.name == "SSAO" || p.name == "GTAO")
+                                                    dst[m_renderer.kTsAO]       = t;
+                    else if (p.name == "VXGI-Chain") dst[m_renderer.kTsVoxelGI] = t;
+                    else if (p.name == "Lighting")  dst[m_renderer.kTsLighting] = t;
+                    else if (p.name == "Skybox")    dst[m_renderer.kTsSkybox]   = t;
+                    else if (p.name == "Tonemap")   dst[m_renderer.kTsTonemap]  = t;
+                    else if (p.name == "TAA" || p.name == "SMAA")
+                                                    dst[m_renderer.kTsAA]       = t;
+                    total += t;
+                }
+                dst[m_renderer.kTsEnd] = total;
+                if (total > 0.0f) m_renderer.gpuMs() = m_renderer.gpuMs() * 0.9f + total * 0.1f;
+            }
+        } else {
+            // 现有 RenderPipeline 路径
+            buildPipelineTable();
+            m_renderer.pipeline().execute(cmd);
+        }
         ++m_renderer.frameIndex();
 
         // ---- Post-processing (tonemap + AA + blit) ----
@@ -3513,6 +3891,1292 @@ void App::run() {
         // ---- Save viewProj for next frame's reprojection ----
         m_prevViewProj = ubo.viewProj;
     }
+}
+
+void App::setupFrameGraph() {
+    using namespace somegi::fg;
+    auto ext2d = m_swap->extent();
+    VkExtent3D ext{ext2d.width, ext2d.height, 1};
+
+    bool aaEnabled = (m_aaMethod == AAMethod::TAA || m_aaMethod == AAMethod::SMAA);
+    setupFgImports(ext, aaEnabled);
+
+    // ================================================================
+    // 注册所有 Pass（按执行顺序）
+    // 注意：FrameGraph 会自动插入 barrier，不需要手动 transitionImage
+    // ================================================================
+
+    bool fwd = (m_renderingMode == RenderingMode::Forward);
+    bool aoEnabled = (!fwd && m_aoMethod != AOMethod::None);
+    bool needVoxelGrid = !fwd && (m_renderer.vxgiEnabled() || m_renderer.ddgiEnabled()
+        || m_renderer.sdfgiPass().enabled || m_renderer.lumenEnabled()
+        || m_renderer.restirPass().enabled);
+
+    // ════════════════════════════════════════════════════════════════
+    // 注意：必须先声明 GBuffer/Forward（写 depth），再声明 Shadow（读 depth），
+    // 否则 FrameGraph 的 buildEdges 无法建立 RAW 依赖边。
+    // ════════════════════════════════════════════════════════════════
+
+    // --- Forward (替代 GBuffer，前向渲染模式) ---
+    if (fwd) {
+        // FrameGraph auto-barrier: hdrColor → COLOR_ATTACHMENT（entry），depth → DEPTH_ATTACHMENT（entry）
+        //                           hdrColor → COPY_SRC（exit，由 Copy-hdrPrev 触发），depth → SR_O（exit，由 Shadow 触发）
+        m_fg.addPass("Forward", [&](FGBuilder& b) {
+            b.setPassType(FGPassType::Graphics);
+            b.write(m_fgh.hdrColor);
+            b.write(m_fgh.depth);
+            b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
+                m_renderer.forward().record(cmd, m_renderer.rt(), m_indirectBuf.handle(), m_drawCount, m_sceneGpu);
+            });
+        });
+    }
+
+    // --- GBuffer ---
+    // FrameGraph auto-barrier:
+    //   MSAA targets → COLOR_ATTACHMENT / DEPTH_ATTACHMENT（entry）
+    //   Resolve targets → COLOR_ATTACHMENT / DEPTH_ATTACHMENT（entry）
+    //   Resolved GBuffer → SR_O（exit，由 SSAO/SSR/Lighting 的 read 触发）
+    if (!fwd) {
+        m_fg.addPass("GBuffer", [&](FGBuilder& b) {
+            b.setPassType(FGPassType::Graphics);
+            b.write(m_fgh.gAlbedoMetalMs);
+            b.write(m_fgh.gNormalRoughMs);
+            b.write(m_fgh.gEmissiveAOMs);
+            b.write(m_fgh.depthMs);
+            b.write(m_fgh.gAlbedoMetal);   // resolve targets
+            b.write(m_fgh.gNormalRough);
+            b.write(m_fgh.gEmissiveAO);
+            b.write(m_fgh.depth);
+            b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
+                m_renderer.gbuffer().record(cmd, m_renderer.rt(), m_indirectBuf.handle(), m_drawCount, m_sceneGpu);
+            });
+        });
+    }
+
+    // --- RSM Geometry ---
+    m_fg.addPass("RSM-Geometry", [&](FGBuilder& b) {
+        b.setPassType(FGPassType::Graphics);
+        b.setManualBarriers();  // 复杂 Pass：内部自行管理 layout
+        b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
+            m_renderer.rsmGeom().record(cmd, m_indirectBufSun.handle(), m_drawCount, m_sceneGpu);
+        });
+    });
+
+    // --- Shadow Pass ---
+    // Auto-barrier：depth read → SHADER_READ_ONLY（compute shader 采样）
+    //               shadowMask write → GENERAL（storage image write）
+    // ShadowPass 内部跳过 UNDEFINED→GENERAL 和 GENERAL→SR_O 过渡
+    m_renderer.shadow().setFgAutoBarrier(true);
+    m_fg.addPass("Shadow", [&](FGBuilder& b) {
+        b.setPassType(FGPassType::Compute);
+        b.read(m_fgh.depth);
+        b.write(m_fgh.shadowMask);
+        b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
+            m_renderer.shadow().record(cmd, m_renderer.rt(),
+                m_renderer.gbuffer().frameUboHandle(),
+                m_sceneGpu, m_indirectBufSun.handle(), m_drawCount,
+                m_renderer.frameIndex());
+        });
+    });
+
+    // --- AO ---
+    if (aoEnabled) {
+        const char* aoName = (m_aoMethod == AOMethod::SSAO) ? "SSAO" : "GTAO";
+        // FrameGraph auto-barrier: depth/normal → SR_O（entry），ssao → GENERAL（entry）
+        //                           ssao → SR_O（exit，由 Lighting 的 read 触发）
+        m_fg.addPass(aoName, [&](FGBuilder& b) {
+            b.setPassType(FGPassType::Compute);
+            b.read(m_fgh.depth);
+            b.read(m_fgh.gNormalRough);
+            b.write(m_fgh.ssao);
+            b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
+                if (m_aoMethod == AOMethod::SSAO) {
+                    m_renderer.ssao().record(cmd, m_renderer.rt(),
+                        m_frameCtx.proj, glm::inverse(m_frameCtx.proj), m_frameCtx.view);
+                } else {
+                    m_renderer.gtao().record(cmd, m_renderer.rt(),
+                        m_frameCtx.proj, m_frameCtx.view);
+                }
+            });
+        });
+    } else if (!fwd) {
+        // AO-Clear: 清除 ssao 为 1.0（无遮挡）
+        // FrameGraph auto-barrier 负责 UNDEFINED→TRANSFER_DST（entry）和 TRANSFER_DST→SR_O（exit）
+        m_fg.addPass("AO-Clear", [&](FGBuilder& b) {
+            b.setPassType(FGPassType::Compute);
+            b.write(m_fgh.ssao, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+            b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
+                VkClearColorValue white{};
+                white.float32[0] = 1.0f; white.float32[1] = 1.0f;
+                white.float32[2] = 1.0f; white.float32[3] = 1.0f;
+                VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+                vkCmdClearColorImage(cmd, m_renderer.rt().ssao.image(),
+                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &white, 1, &range);
+            });
+        });
+    } else {
+        // Forward mode: AO not applicable
+    }
+
+    // --- SSR ---
+    if (!fwd && m_renderer.ssr().enabled) {
+        // FrameGraph auto-barrier: GBuffer → SR_O（entry），ssr → GENERAL（entry）
+        //                           ssr → SR_O（exit，由 Lighting 的 read 触发）
+        m_fg.addPass("SSR", [&](FGBuilder& b) {
+            b.setPassType(FGPassType::Compute);
+            b.read(m_fgh.gAlbedoMetal);
+            b.read(m_fgh.gNormalRough);
+            b.read(m_fgh.gEmissiveAO);
+            b.read(m_fgh.depth);
+            b.read(m_fgh.hdrPrev);
+            b.write(m_fgh.ssr);
+            b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
+                m_renderer.ssr().record(cmd, m_renderer.rt());
+            });
+        });
+    } else if (!fwd && !m_renderer.ssr().enabled) {
+        m_fg.addPass("SSR-Clear", [&](FGBuilder& b) {
+            b.setPassType(FGPassType::Compute);
+            b.write(m_fgh.ssr, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+            b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
+                VkClearColorValue zero{};
+                VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+                vkCmdClearColorImage(cmd, m_renderer.rt().ssr.image(),
+                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &zero, 1, &range);
+            });
+        });
+    }
+
+    // --- ScreenGI (SSGI/GTGI) ---
+    bool screenGiOn = !fwd && (m_renderer.ssgi().enabled || m_renderer.gtgi().enabled);
+    if (screenGiOn) {
+        m_fg.addPass("ScreenGI", [&](FGBuilder& b) {
+            b.setPassType(FGPassType::Compute);
+            b.setManualBarriers();  // 复杂 Pass：内部 copy+transition+dispatch
+            b.read(m_fgh.gAlbedoMetal);
+            b.read(m_fgh.gNormalRough);
+            b.read(m_fgh.gEmissiveAO);
+            b.read(m_fgh.depth);
+            b.read(m_fgh.ssgiPrev);
+            b.write(m_fgh.ssgi);
+            b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
+                // Copy ssgi → ssgiPrev for temporal history
+                transitionImage(cmd, m_renderer.rt().ssgi.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                    VK_IMAGE_LAYOUT_UNDEFINED,
+                    VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                    VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
+                    VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
+                transitionImage(cmd, m_renderer.rt().ssgiPrev.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                    VK_IMAGE_LAYOUT_UNDEFINED,
+                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                    VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
+                    VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
+
+                VkImageCopy region{};
+                region.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+                region.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+                region.extent = {m_renderer.rt().extent.width, m_renderer.rt().extent.height, 1};
+                vkCmdCopyImage(cmd,
+                    m_renderer.rt().ssgi.image(), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                    m_renderer.rt().ssgiPrev.image(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                    1, &region);
+
+                // ssgiPrev → SHADER_READ_ONLY for sampling
+                transitionImage(cmd, m_renderer.rt().ssgiPrev.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                    VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                    VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+                // ssgi → GENERAL for writing new value
+                transitionImage(cmd, m_renderer.rt().ssgi.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                    VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL,
+                    VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_READ_BIT,
+                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                    VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
+
+                if (m_renderer.ssgi().enabled) m_renderer.ssgi().record(cmd, m_renderer.rt());
+                else m_renderer.gtgi().record(cmd, m_renderer.rt());
+
+                transitionImage(cmd, m_renderer.rt().ssgi.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                    VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                    VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                    VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+            });
+        });
+    } else if (!fwd) {
+        m_fg.addPass("ScreenGI-Clear", [&](FGBuilder& b) {
+            b.setPassType(FGPassType::Compute);
+            b.write(m_fgh.ssgi, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+            b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
+                VkClearColorValue zero{};
+                VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+                vkCmdClearColorImage(cmd, m_renderer.rt().ssgi.image(),
+                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &zero, 1, &range);
+            });
+        });
+    }
+
+    // --- VXGI Chain ---
+    if (needVoxelGrid) {
+        m_fg.addPass("VXGI-Chain", [&](FGBuilder& b) {
+            b.setPassType(FGPassType::Compute);
+            b.setManualBarriers();  // 复杂 Pass：clear+voxelize+inject+mipmap+aniso 多步操作
+            b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
+                // 1. Clear entire mip chain to 0
+                auto barrierAllMips = [&](VkImageLayout oldL, VkImageLayout newL,
+                                           VkPipelineStageFlags2 srcStg, VkAccessFlags2 srcAcc,
+                                           VkPipelineStageFlags2 dstStg, VkAccessFlags2 dstAcc) {
+                    VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+                    b.srcStageMask = srcStg; b.srcAccessMask = srcAcc;
+                    b.dstStageMask = dstStg; b.dstAccessMask = dstAcc;
+                    b.oldLayout = oldL; b.newLayout = newL;
+                    b.image = m_renderer.vxgi().image().image();
+                    b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT,
+                                          0, m_renderer.vxgi().mipLevels(), 0, 1};
+                    VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+                    di.imageMemoryBarrierCount = 1; di.pImageMemoryBarriers = &b;
+                    vkCmdPipelineBarrier2(cmd, &di);
+                };
+                barrierAllMips(VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                    VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
+                    VK_PIPELINE_STAGE_2_CLEAR_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
+                VkClearColorValue zeroV{};
+                VkImageSubresourceRange rg{VK_IMAGE_ASPECT_COLOR_BIT,
+                                           0, m_renderer.vxgi().mipLevels(), 0, 1};
+                vkCmdClearColorImage(cmd, m_renderer.vxgi().image().image(),
+                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &zeroV, 1, &rg);
+                barrierAllMips(VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL,
+                    VK_PIPELINE_STAGE_2_CLEAR_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                    VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
+
+                // 2. Voxelize: scatter all primitives to mip 0
+                m_renderer.vxgiVoxelize().record(cmd, m_scene, m_sceneGpu,
+                    m_renderer.vxgiGridMin(), m_renderer.vxgiCellSize(), m_renderer.kVxgiResolution);
+
+                // 3. Inject: RSM flux → voxel mip 0 RGB
+                {
+                    VkImageMemoryBarrier2 vbar{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+                    vbar.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                    vbar.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+                    vbar.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                    vbar.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+                    vbar.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+                    vbar.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+                    vbar.image = m_renderer.vxgi().image().image();
+                    vbar.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+                    VkDependencyInfo vdi{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+                    vdi.imageMemoryBarrierCount = 1; vdi.pImageMemoryBarriers = &vbar;
+                    vkCmdPipelineBarrier2(cmd, &vdi);
+                }
+                m_renderer.vxgiInject().record(cmd, m_renderer.kVxgiResolution,
+                    m_renderer.vxgiGridMin(), m_renderer.vxgiCellSize());
+
+                // 4. Mipmap: iterate src mip i → dst mip i+1
+                m_renderer.vxgiMipmap().record(cmd, m_renderer.vxgi());
+
+                // 5. Final mip → SHADER_READ_ONLY
+                {
+                    VkImageMemoryBarrier2 fb{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+                    fb.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                    fb.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+                    fb.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                    fb.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+                    fb.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+                    fb.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                    fb.image = m_renderer.vxgi().image().image();
+                    fb.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT,
+                                           m_renderer.vxgi().mipLevels() - 1, 1, 0, 1};
+                    VkDependencyInfo fdi{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+                    fdi.imageMemoryBarrierCount = 1; fdi.pImageMemoryBarriers = &fb;
+                    vkCmdPipelineBarrier2(cmd, &fdi);
+                }
+
+                // 6. Aniso alpha mipchain: UNDEFINED → SHADER_READ_ONLY
+                {
+                    VkImageMemoryBarrier2 ab{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+                    ab.srcStageMask = VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
+                    ab.srcAccessMask = 0;
+                    ab.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                    ab.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+                    ab.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+                    ab.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                    ab.image = m_renderer.vxgi().aniso().image();
+                    ab.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT,
+                                           0, m_renderer.vxgi().mipLevels(), 0, 1};
+                    VkDependencyInfo adi{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+                    adi.imageMemoryBarrierCount = 1; adi.pImageMemoryBarriers = &ab;
+                    vkCmdPipelineBarrier2(cmd, &adi);
+                }
+                m_renderer.vxgiAniso().record(cmd, m_renderer.vxgi());
+            });
+        });
+
+        if (m_renderer.vxgiRelightEnabled()) {
+            m_fg.addPass("VXGI-Relight", [&](FGBuilder& b) {
+                b.setPassType(FGPassType::Compute);
+                b.setManualBarriers();  // 复杂 Pass：multi-bounce ping-pong
+                b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
+                    int bounces = m_renderer.lumenEnabled() ? 3 : 1;
+
+                    auto transImg = [&](VkImage img, VkImageLayout oldL, VkImageLayout newL,
+                                        VkPipelineStageFlags2 srcS, VkAccessFlags2 srcA,
+                                        VkPipelineStageFlags2 dstS, VkAccessFlags2 dstA) {
+                        VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+                        b.srcStageMask = srcS; b.srcAccessMask = srcA;
+                        b.dstStageMask = dstS; b.dstAccessMask = dstA;
+                        b.oldLayout = oldL; b.newLayout = newL;
+                        b.image = img;
+                        b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+                        VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+                        di.imageMemoryBarrierCount = 1; di.pImageMemoryBarriers = &b;
+                        vkCmdPipelineBarrier2(cmd, &di);
+                    };
+
+                    auto blitScratchToVoxel = [&](VkImage srcImg) {
+                        transImg(m_renderer.vxgi().image().image(),
+                            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                            VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                            VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
+                            VK_PIPELINE_STAGE_2_COPY_BIT,
+                            VK_ACCESS_2_TRANSFER_WRITE_BIT);
+                        transImg(srcImg,
+                            VK_IMAGE_LAYOUT_GENERAL,
+                            VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                            VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                            VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+                            VK_PIPELINE_STAGE_2_COPY_BIT,
+                            VK_ACCESS_2_TRANSFER_READ_BIT);
+                        VkImageCopy region{};
+                        region.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+                        region.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+                        region.extent = {m_renderer.kVxgiResolution, m_renderer.kVxgiResolution, m_renderer.kVxgiResolution};
+                        vkCmdCopyImage(cmd,
+                            srcImg, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                            m_renderer.vxgi().image().image(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                            1, &region);
+                        transImg(m_renderer.vxgi().image().image(),
+                            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                            VK_PIPELINE_STAGE_2_COPY_BIT,
+                            VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                            VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                            VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+                    };
+
+                    // Bounce 1: read voxelGrid → write scratch
+                    transImg(m_renderer.vxgi().relightScratch().image(),
+                        VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
+                        VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
+                        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                        VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
+                    m_renderer.vxgiRelight().record(cmd, m_renderer.vxgiRelight().voxelSet(),
+                        m_renderer.kVxgiResolution, m_renderer.vxgi().mipLevels(),
+                        m_renderer.vxgiCellSize(), m_renderer.vxgiGridMin(),
+                        m_renderer.vxgiRelightStrength());
+
+                    if (bounces >= 2) {
+                        transImg(m_renderer.vxgi().relightScratch().image(),
+                            VK_IMAGE_LAYOUT_GENERAL,
+                            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                            VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                            VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+                            VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                            VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+                        transImg(m_renderer.vxgi().relightScratch2().image(),
+                            VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
+                            VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
+                            VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                            VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
+                        // Bounce 2: read scratch → write scratch2
+                        m_renderer.vxgiRelight().record(cmd, m_renderer.vxgiRelight().pingSet0(),
+                            m_renderer.kVxgiResolution, m_renderer.vxgi().mipLevels(),
+                            m_renderer.vxgiCellSize(), m_renderer.vxgiGridMin(),
+                            m_renderer.vxgiRelightStrength());
+
+                        if (bounces >= 3) {
+                            transImg(m_renderer.vxgi().relightScratch2().image(),
+                                VK_IMAGE_LAYOUT_GENERAL,
+                                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+                                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+                            transImg(m_renderer.vxgi().relightScratch().image(),
+                                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                                VK_IMAGE_LAYOUT_GENERAL,
+                                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
+                                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
+                            // Bounce 3: read scratch2 → write scratch
+                            m_renderer.vxgiRelight().record(cmd, m_renderer.vxgiRelight().pingSet1(),
+                                m_renderer.kVxgiResolution, m_renderer.vxgi().mipLevels(),
+                                m_renderer.vxgiCellSize(), m_renderer.vxgiGridMin(),
+                                m_renderer.vxgiRelightStrength());
+                            blitScratchToVoxel(m_renderer.vxgi().relightScratch().image());
+                        } else {
+                            blitScratchToVoxel(m_renderer.vxgi().relightScratch2().image());
+                        }
+                    } else {
+                        blitScratchToVoxel(m_renderer.vxgi().relightScratch().image());
+                    }
+                });
+            });
+        }
+
+        if (m_renderer.lumenEnabled() && m_renderer.vxgiSixAxisInited()) {
+            m_fg.addPass("VXGI-6Axis", [&](FGBuilder& b) {
+                b.setPassType(FGPassType::Compute);
+                b.setManualBarriers();  // 复杂 Pass：多 image layout 过渡
+                b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
+                    VkImageLayout axisOldL = m_renderer.lumenAtlasInited()
+                        ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+                        : VK_IMAGE_LAYOUT_UNDEFINED;
+                    VkPipelineStageFlags2 axisSrcS = m_renderer.lumenAtlasInited()
+                        ? VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT
+                        : VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
+                    VkAccessFlags2 axisSrcA = m_renderer.lumenAtlasInited()
+                        ? VK_ACCESS_2_SHADER_SAMPLED_READ_BIT : 0u;
+
+                    auto transAxisToGeneral = [&](VkImage img) {
+                        VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+                        b.srcStageMask = axisSrcS; b.srcAccessMask = axisSrcA;
+                        b.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                        b.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+                        b.oldLayout = axisOldL;
+                        b.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+                        b.image = img;
+                        b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+                        VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+                        di.imageMemoryBarrierCount = 1; di.pImageMemoryBarriers = &b;
+                        vkCmdPipelineBarrier2(cmd, &di);
+                    };
+                    transAxisToGeneral(m_renderer.vxgi().sixAxisX().image());
+                    transAxisToGeneral(m_renderer.vxgi().sixAxisY().image());
+                    transAxisToGeneral(m_renderer.vxgi().sixAxisZ().image());
+
+                    m_renderer.vxgi6Axis().record(cmd, m_renderer.kVxgiResolution,
+                        m_renderer.vxgi().mipLevels(), m_renderer.vxgiCellSize(),
+                        m_renderer.vxgiGridMin(), m_renderer.vxgiRelightStrength());
+
+                    auto transAxisToSRO = [&](VkImage img) {
+                        VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+                        b.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                        b.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+                        b.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                        b.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+                        b.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+                        b.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                        b.image = img;
+                        b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+                        VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+                        di.imageMemoryBarrierCount = 1; di.pImageMemoryBarriers = &b;
+                        vkCmdPipelineBarrier2(cmd, &di);
+                    };
+                    transAxisToSRO(m_renderer.vxgi().sixAxisX().image());
+                    transAxisToSRO(m_renderer.vxgi().sixAxisY().image());
+                    transAxisToSRO(m_renderer.vxgi().sixAxisZ().image());
+                });
+            });
+        }
+    }
+
+    // --- SDFGI ---
+    if (!fwd && m_renderer.sdfgiPass().enabled) {
+        m_fg.addPass("SDFGI", [&](FGBuilder& b) {
+            b.setPassType(FGPassType::Compute);
+            b.setManualBarriers();  // 复杂 Pass：bootstrap + compute
+            b.read(m_fgh.gNormalRough);
+            b.read(m_fgh.depth);
+            b.read(m_fgh.ssgi);
+            b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
+                if (!m_renderer.sdfgiBootstrapped()) {
+                    auto bootstrapToGeneral = [&](VkImage img) {
+                        VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+                        b.srcStageMask = VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
+                        b.srcAccessMask = 0;
+                        b.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                        b.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+                        b.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+                        b.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+                        b.image = img;
+                        b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+                        VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+                        di.imageMemoryBarrierCount = 1; di.pImageMemoryBarriers = &b;
+                        vkCmdPipelineBarrier2(cmd, &di);
+                    };
+                    bootstrapToGeneral(m_renderer.sdfgi().seedA().image());
+                    bootstrapToGeneral(m_renderer.sdfgi().seedB().image());
+                    bootstrapToGeneral(m_renderer.sdfgi().udf().image());
+                    m_renderer.sdfgiBootstrapped() = true;
+                }
+                transitionImage(cmd, m_renderer.rt().ssgi.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                    VK_IMAGE_LAYOUT_UNDEFINED,
+                    VK_IMAGE_LAYOUT_GENERAL,
+                    VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
+                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                    VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
+
+                m_renderer.sdfgiPass().record(cmd, m_renderer.sdfgi(), m_renderer.rt(), m_renderer.frameIndex(),
+                    m_renderer.sdfgiPass().seedThreshold, m_renderer.sdfgiPass().maxDistCells,
+                    (uint32_t)m_renderer.sdfgiPass().numRays,
+                    (uint32_t)m_renderer.sdfgiPass().maxSteps,
+                    m_renderer.sdfgiPass().rayMaxCells, m_renderer.sdfgiPass().hitEpsCells);
+
+                transitionImage(cmd, m_renderer.rt().ssgi.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                    VK_IMAGE_LAYOUT_GENERAL,
+                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                    VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                    VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+            });
+        });
+    }
+
+    // --- RT GI ---
+    bool rtGiActive = m_renderer.rtGiBound() && m_giIndexApplied == 10;
+    if (!fwd && rtGiActive) {
+        // FrameGraph auto-barrier: rtGI → GENERAL（entry），rtGI → SR_O（exit 由 Lighting read 触发）
+        m_fg.addPass("RTGI", [&](FGBuilder& b) {
+            b.setPassType(FGPassType::RayTracing);
+            b.write(m_fgh.rtGI);
+            b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
+                m_renderer.rtGi().record(cmd, m_renderer.rt());
+            });
+        });
+    } else if (!fwd && m_renderer.rtGiInited() && !rtGiActive) {
+        m_fg.addPass("RTGI-Clear", [&](FGBuilder& b) {
+            b.setPassType(FGPassType::Compute);
+            b.write(m_fgh.rtGI, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+            b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
+                VkClearColorValue zero{};
+                VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+                vkCmdClearColorImage(cmd, m_renderer.rt().rtGI.image(),
+                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &zero, 1, &range);
+            });
+        });
+    }
+
+    // --- ReSTIR ---
+    if (!fwd && m_renderer.restirPass().enabled) {
+        m_fg.addPass("ReSTIR", [&](FGBuilder& b) {
+            b.setPassType(FGPassType::Compute);
+            b.setManualBarriers();  // 复杂 Pass：bootstrap + 条件 oldLayout 过渡
+            b.write(m_fgh.restir);
+            b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
+                m_renderer.restir().updateLights(m_renderer.demoLights());
+                if (!m_renderer.restirBootstrapped()) {
+                    auto bootstrapToGeneral = [&](VkImage img) {
+                        VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+                        b.srcStageMask = VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
+                        b.srcAccessMask = 0;
+                        b.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                        b.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+                        b.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+                        b.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+                        b.image = img;
+                        b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+                        VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+                        di.imageMemoryBarrierCount = 1; di.pImageMemoryBarriers = &b;
+                        vkCmdPipelineBarrier2(cmd, &di);
+                    };
+                    bootstrapToGeneral(m_renderer.restir().reservoirA().image());
+                    bootstrapToGeneral(m_renderer.restir().reservoirB().image());
+                    m_renderer.restirBootstrapped() = true;
+                }
+                VkImageLayout restirOld = m_renderer.restirOutInited()
+                    ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+                    : VK_IMAGE_LAYOUT_UNDEFINED;
+                transitionImage(cmd, m_renderer.rt().restir.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                    restirOld, VK_IMAGE_LAYOUT_GENERAL,
+                    m_renderer.restirOutInited() ? VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT
+                                       : VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT,
+                    m_renderer.restirOutInited() ? VK_ACCESS_2_SHADER_SAMPLED_READ_BIT : 0,
+                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                    VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
+                m_renderer.restirOutInited() = true;
+
+                uint32_t numLights = (uint32_t)m_renderer.demoLights().size();
+                bool useRtVis = m_renderer.rtSupported() && m_renderer.rtGiBound();
+                m_renderer.restirPass().record(cmd, m_renderer.restir(), m_renderer.rt(),
+                    numLights,
+                    (uint32_t)m_renderer.restirPass().numCandidates,
+                    (uint32_t)m_renderer.restirPass().numNeighbors,
+                    m_renderer.restirPass().spatialRadius,
+                    (uint32_t)m_renderer.restirPass().shadowSteps,
+                    m_renderer.restirPass().intensityScale,
+                    m_renderer.frameIndex(),
+                    useRtVis);
+
+                transitionImage(cmd, m_renderer.rt().restir.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                    VK_IMAGE_LAYOUT_GENERAL,
+                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                    VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                    VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+            });
+        });
+    } else if (!fwd && !m_renderer.restirPass().enabled) {
+        m_fg.addPass("ReSTIR-Clear", [&](FGBuilder& b) {
+            b.setPassType(FGPassType::Compute);
+            b.write(m_fgh.restir, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+            b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
+                VkClearColorValue zero{};
+                VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+                vkCmdClearColorImage(cmd, m_renderer.rt().restir.image(),
+                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &zero, 1, &range);
+            });
+        });
+    }
+
+    // --- DDGI ---
+    if (!fwd && m_renderer.ddgiEnabled()) {
+        m_fg.addPass("DDGI", [&](FGBuilder& b) {
+            b.setPassType(FGPassType::Compute);
+            b.setManualBarriers();  // 复杂 Pass：多 atlas barrier 管理
+            b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
+                auto barrierAtlas = [&](VkImage img,
+                                        VkImageLayout oldL, VkImageLayout newL,
+                                        VkPipelineStageFlags2 srcStg, VkAccessFlags2 srcAcc,
+                                        VkPipelineStageFlags2 dstStg, VkAccessFlags2 dstAcc) {
+                    VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+                    b.srcStageMask = srcStg; b.srcAccessMask = srcAcc;
+                    b.dstStageMask = dstStg; b.dstAccessMask = dstAcc;
+                    b.oldLayout = oldL; b.newLayout = newL;
+                    b.image = img;
+                    b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+                    VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+                    di.imageMemoryBarrierCount = 1; di.pImageMemoryBarriers = &b;
+                    vkCmdPipelineBarrier2(cmd, &di);
+                };
+
+                VkImageLayout oldAtlasL = m_renderer.ddgiAtlasInited()
+                    ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+                    : VK_IMAGE_LAYOUT_UNDEFINED;
+                VkAccessFlags2 srcAcc = m_renderer.ddgiAtlasInited()
+                    ? VK_ACCESS_2_SHADER_SAMPLED_READ_BIT : 0;
+                VkPipelineStageFlags2 srcStg = m_renderer.ddgiAtlasInited()
+                    ? VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT
+                    : VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
+
+                barrierAtlas(m_renderer.ddgi().irradiance().image(),
+                    oldAtlasL, VK_IMAGE_LAYOUT_GENERAL,
+                    srcStg, srcAcc,
+                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                    VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
+                barrierAtlas(m_renderer.ddgi().distance().image(),
+                    oldAtlasL, VK_IMAGE_LAYOUT_GENERAL,
+                    srcStg, srcAcc,
+                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                    VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
+
+                float jitterRot = float((m_renderer.frameIndex() % 360) * 0.0174532925);
+                m_renderer.ddgiPass().record(cmd, m_renderer.ddgi(), m_renderer.ddgiOrigin(), m_renderer.ddgiSpacing(),
+                    m_renderer.vxgiGridMin(), m_renderer.vxgiCellSize(), m_renderer.kVxgiResolution,
+                    jitterRot, m_renderer.frameIndex());
+
+                barrierAtlas(m_renderer.ddgi().irradiance().image(),
+                    VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                    VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                    VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+                barrierAtlas(m_renderer.ddgi().distance().image(),
+                    VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                    VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                    VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+                m_renderer.ddgiAtlasInited() = true;
+            });
+        });
+    }
+
+    // --- Lumen ---
+    bool lumenActive = !fwd && m_renderer.lumenEnabled();
+    if (lumenActive) {
+        m_fg.addPass("Lumen-Probe", [&](FGBuilder& b) {
+            b.setPassType(FGPassType::RayTracing);
+            b.setManualBarriers();  // 复杂 Pass：bootstrap + 多 image 过渡 + dispatch
+            b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
+                if (!m_renderer.lumenProbeInited()) {
+                    m_renderer.lumenProbe().init(*m_device);
+                    m_renderer.lumenProbe().bindResources(*m_device, m_renderer.lumen(), m_renderer.rtAS(), m_sceneGpu,
+                                                    m_renderer.vxgi(), m_renderer.rt(), m_renderer.gbuffer().frameUboHandle(),
+                                                    m_renderer.vxgiSixAxisInited());
+                    m_renderer.lumenProbeInited() = true;
+                }
+                // Transition probe + filtered atlas to GENERAL
+                {
+                    VkImageLayout oldL = m_renderer.lumenAtlasInited()
+                        ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+                        : VK_IMAGE_LAYOUT_UNDEFINED;
+                    VkPipelineStageFlags2 srcS = m_renderer.lumenAtlasInited()
+                        ? VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT
+                        : VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
+                    VkAccessFlags2 srcA = m_renderer.lumenAtlasInited()
+                        ? VK_ACCESS_2_SHADER_SAMPLED_READ_BIT : 0u;
+                    auto transToGeneral = [&](VkImage img) {
+                        VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+                        b.srcStageMask = srcS; b.srcAccessMask = srcA;
+                        b.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                        b.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+                        b.oldLayout = oldL;
+                        b.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+                        b.image = img;
+                        b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+                        VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+                        di.imageMemoryBarrierCount = 1; di.pImageMemoryBarriers = &b;
+                        vkCmdPipelineBarrier2(cmd, &di);
+                    };
+                    transToGeneral(m_renderer.lumen().probeAtlas().image());
+                    transToGeneral(m_renderer.lumen().filteredAtlas().image());
+                    m_renderer.lumenAtlasInited() = true;
+                }
+                m_renderer.lumenProbe().record(cmd, m_renderer.lumen(), m_renderer.frameIndex(),
+                    m_renderer.vxgiSixAxisInited() ? 1u : 0u);
+
+                // ProbeAtlas GENERAL → SR_O for filter
+                {
+                    VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+                    b.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                    b.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+                    b.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                    b.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+                    b.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+                    b.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                    b.image = m_renderer.lumen().probeAtlas().image();
+                    b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+                    VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+                    di.imageMemoryBarrierCount = 1; di.pImageMemoryBarriers = &b;
+                    vkCmdPipelineBarrier2(cmd, &di);
+                }
+            });
+        });
+        m_fg.addPass("Lumen-Filter", [&](FGBuilder& b) {
+            b.setPassType(FGPassType::Compute);
+            b.setManualBarriers();  // 复杂 Pass：init + dispatch + copy + 多 barrier
+            b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
+                if (!m_renderer.lumenFilterInited()) {
+                    VkImageMemoryBarrier2 pb{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+                    pb.srcStageMask = VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
+                    pb.srcAccessMask = 0;
+                    pb.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                    pb.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+                    pb.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+                    pb.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                    pb.image = m_renderer.lumen().prevAtlas().image();
+                    pb.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+                    VkDependencyInfo pdi{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+                    pdi.imageMemoryBarrierCount = 1; pdi.pImageMemoryBarriers = &pb;
+                    vkCmdPipelineBarrier2(cmd, &pdi);
+
+                    m_renderer.lumenFilter().init(*m_device);
+                    m_renderer.lumenFilter().bindResources(*m_device, m_renderer.lumen(), m_renderer.rt(),
+                                                     m_renderer.gbuffer().frameUboHandle());
+                    m_renderer.lumenFilterInited() = true;
+                }
+                m_renderer.lumenFilter().record(cmd, m_renderer.lumen(), m_renderer.rt());
+
+                // Copy filteredAtlas → prevAtlas for next frame
+                auto imgBarrier = [&](VkImage img, VkImageLayout oldL, VkImageLayout newL,
+                                      VkPipelineStageFlags2 srcS, VkAccessFlags2 srcA,
+                                      VkPipelineStageFlags2 dstS, VkAccessFlags2 dstA) {
+                    VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+                    b.srcStageMask = srcS; b.srcAccessMask = srcA;
+                    b.dstStageMask = dstS; b.dstAccessMask = dstA;
+                    b.oldLayout = oldL; b.newLayout = newL;
+                    b.image = img;
+                    b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+                    VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+                    di.imageMemoryBarrierCount = 1; di.pImageMemoryBarriers = &b;
+                    vkCmdPipelineBarrier2(cmd, &di);
+                };
+
+                imgBarrier(m_renderer.lumen().filteredAtlas().image(),
+                    VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+                    VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
+                imgBarrier(m_renderer.lumen().prevAtlas().image(),
+                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
+                    VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
+
+                VkImageCopy region{};
+                region.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+                region.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+                region.extent = {m_renderer.lumen().atlasWidth(), m_renderer.lumen().atlasHeight(), 1};
+                vkCmdCopyImage(cmd,
+                    m_renderer.lumen().filteredAtlas().image(), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                    m_renderer.lumen().prevAtlas().image(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                    1, &region);
+
+                imgBarrier(m_renderer.lumen().filteredAtlas().image(),
+                    VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                    VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_READ_BIT,
+                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+                imgBarrier(m_renderer.lumen().prevAtlas().image(),
+                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                    VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+            });
+        });
+        m_fg.addPass("Lumen-Gather", [&](FGBuilder& b) {
+            b.setPassType(FGPassType::Compute);
+            b.setManualBarriers();  // 复杂 Pass：bootstrap + 多 layout 过渡 + dispatch
+            b.write(m_fgh.lumenGI);
+            b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
+                if (!m_renderer.lumenGatherInited()) {
+                    m_renderer.lumenGather().init(*m_device);
+                    m_renderer.lumenGather().bindResources(*m_device, m_renderer.lumen(), m_renderer.rt(),
+                                                     m_renderer.gbuffer().frameUboHandle(), true);
+                    m_renderer.lumenGatherInited() = true;
+                }
+                {
+                    VkImageLayout oldL = m_renderer.lumenOutInited()
+                        ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+                        : VK_IMAGE_LAYOUT_UNDEFINED;
+                    VkAccessFlags2 srcA = m_renderer.lumenOutInited()
+                        ? VK_ACCESS_2_SHADER_SAMPLED_READ_BIT : 0;
+                    VkPipelineStageFlags2 srcS = m_renderer.lumenOutInited()
+                        ? VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT
+                        : VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
+                    VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+                    b.srcStageMask = srcS; b.srcAccessMask = srcA;
+                    b.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                    b.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+                    b.oldLayout = oldL;
+                    b.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+                    b.image = m_renderer.rt().lumenGI.image();
+                    b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+                    VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+                    di.imageMemoryBarrierCount = 1; di.pImageMemoryBarriers = &b;
+                    vkCmdPipelineBarrier2(cmd, &di);
+                }
+                m_renderer.lumenGather().record(cmd, m_renderer.lumen(), m_renderer.rt(),
+                    (uint32_t)m_renderer.lumenDebugMode());
+
+                {
+                    VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+                    b.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                    b.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+                    b.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                    b.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+                    b.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+                    b.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                    b.image = m_renderer.rt().lumenGI.image();
+                    b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+                    VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+                    di.imageMemoryBarrierCount = 1; di.pImageMemoryBarriers = &b;
+                    vkCmdPipelineBarrier2(cmd, &di);
+                }
+                m_renderer.lumenOutInited() = true;
+            });
+        });
+    } else if (!fwd) {
+        m_fg.addPass("Lumen-Clear", [&](FGBuilder& b) {
+            b.setPassType(FGPassType::Compute);
+            b.write(m_fgh.lumenGI, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+            b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
+                VkClearColorValue zero{};
+                VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+                vkCmdClearColorImage(cmd, m_renderer.rt().lumenGI.image(),
+                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &zero, 1, &range);
+            });
+        });
+    }
+
+    // --- LPV ---
+    if (!fwd && m_renderer.lpvEnabled()) {
+        m_fg.addPass("LPV-Inject", [&](FGBuilder& b) {
+            b.setPassType(FGPassType::Compute);
+            b.setManualBarriers();  // 复杂 Pass：compute + exit transition
+            b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
+                m_renderer.lpvInject().record(cmd, m_renderer.kLpvResolution,
+                    m_renderer.lpvGridMin(), m_renderer.lpvCellSize());
+
+                transitionImage(cmd, m_renderer.lpv().gv().image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                    VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                    VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                    VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+            });
+        });
+        m_fg.addPass("LPV-Propagate", [&](FGBuilder& b) {
+            b.setPassType(FGPassType::Compute);
+            b.setManualBarriers();  // 复杂 Pass：multi-iteration ping-pong barrier
+            b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
+                auto barrierLpv = [&](const LpvGrid& g,
+                                      VkImageLayout oldL, VkImageLayout newL,
+                                      VkPipelineStageFlags2 srcStg, VkAccessFlags2 srcAcc,
+                                      VkPipelineStageFlags2 dstStg, VkAccessFlags2 dstAcc) {
+                    VkImage imgs[3] = {g.lpvR.image(), g.lpvG.image(), g.lpvB.image()};
+                    for (auto img : imgs) {
+                        transitionImage(cmd, img, VK_IMAGE_ASPECT_COLOR_BIT,
+                            oldL, newL, srcStg, srcAcc, dstStg, dstAcc);
+                    }
+                };
+
+                int propIter = m_renderer.lpvProp().iterations & ~1;
+                for (int it = 0; it < propIter; ++it) {
+                    LpvGrid& src = m_renderer.lpv().current();
+                    LpvGrid& dst = m_renderer.lpv().next();
+
+                    // 首次迭代 src 布局未知，使用 UNDEFINED；后续迭代 src 来自上轮 dst 写入的 GENERAL
+                    VkImageLayout srcOldL = (it == 0) ? VK_IMAGE_LAYOUT_UNDEFINED
+                                                      : VK_IMAGE_LAYOUT_GENERAL;
+                    VkPipelineStageFlags2 srcOldS = (it == 0) ? VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT
+                                                              : VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                    VkAccessFlags2 srcOldA = (it == 0) ? 0
+                                                       : VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+                    barrierLpv(src,
+                        srcOldL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                        srcOldS, srcOldA,
+                        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                        VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+                    barrierLpv(dst,
+                        VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
+                        VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
+                        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                        VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
+
+                    m_renderer.lpvProp().record(cmd, m_renderer.lpv().curIdx(),
+                        m_renderer.kLpvResolution, m_renderer.lpvProp().occlusionAmplifier,
+                        m_renderer.lpvProp().gvOcclusionStrength);
+                    m_renderer.lpv().swap();
+                }
+
+                barrierLpv(m_renderer.lpv().current(),
+                    VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                    VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                    VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+            });
+        });
+    }
+
+    // --- RSM Sample ---
+    if (!fwd && m_renderer.rsmSample().enabled) {
+        // FrameGraph auto-barrier: rsmGI → GENERAL（entry），rsmGI → SR_O（exit 由 Lighting read 触发）
+        m_fg.addPass("RSM-Sample", [&](FGBuilder& b) {
+            b.setPassType(FGPassType::Compute);
+            b.write(m_fgh.rsmGI);
+            b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
+                m_renderer.rsmSample().record(cmd, m_renderer.rt());
+            });
+        });
+    } else if (!fwd && !m_renderer.rsmSample().enabled) {
+        m_fg.addPass("RSM-Clear", [&](FGBuilder& b) {
+            b.setPassType(FGPassType::Compute);
+            b.write(m_fgh.rsmGI, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+            b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
+                VkClearColorValue zero{};
+                VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+                vkCmdClearColorImage(cmd, m_renderer.rt().rsmGI.image(),
+                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &zero, 1, &range);
+            });
+        });
+    }
+
+    // --- NDGI ---
+    if (m_renderer.ndgiEnabled() && m_renderer.rtSupported()) {
+        m_fg.addPass("NDGI", [&](FGBuilder& b) {
+            b.setPassType(FGPassType::RayTracing);
+            b.setManualBarriers();  // RT dispatch，无 read/write 声明，内部管理 barrier
+            b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
+                m_renderer.ndgiPass().record(cmd, m_renderer.ndgi(), m_renderer.frameIndex(),
+                    m_renderer.ddgiOrigin(), m_renderer.ddgiSpacing());
+                m_renderer.ndgiPass().recordTraining(cmd, m_renderer.ndgi(), m_renderer.frameIndex());
+            });
+        });
+    }
+
+    // --- Lighting ---
+    if (!fwd) {
+        // FrameGraph auto-barrier: 所有 GBuffer+GI → SR_O（entry），hdrColor → GENERAL（entry+exit）
+        m_fg.addPass("Lighting", [&](FGBuilder& b) {
+            b.setPassType(FGPassType::Compute);
+            b.read(m_fgh.gAlbedoMetal);
+            b.read(m_fgh.gNormalRough);
+            b.read(m_fgh.gEmissiveAO);
+            b.read(m_fgh.depth);
+            b.read(m_fgh.ssao);
+            b.read(m_fgh.ssr);
+            b.read(m_fgh.ssgi);
+            b.read(m_fgh.shadowMask);
+            // Optional GI reads (if GI is active, but framegraph can handle extra deps)
+            b.read(m_fgh.rsmGI);
+            b.read(m_fgh.rtGI);
+            b.read(m_fgh.restir);
+            b.read(m_fgh.lumenGI);
+            b.write(m_fgh.hdrColor);
+            b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
+                m_renderer.lighting().record(cmd, m_renderer.rt());
+            });
+        });
+    }
+
+    // --- Skybox ---
+    // Manual barrier：depth 在 render pass 内作为 DEPTH_ATTACHMENT，与 Lighting
+    // 等 compute pass 的 SHADER_READ_ONLY descriptor 冲突，submit-time 无法同时满足
+    if (!fwd) {
+        m_fg.addPass("Skybox", [&](FGBuilder& b) {
+            b.setPassType(FGPassType::Graphics);
+            b.setManualBarriers();
+            b.read(m_fgh.depth);
+            b.write(m_fgh.hdrColor);
+            b.setExitLayout(m_fgh.hdrColor, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+            b.setExitLayout(m_fgh.depth, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+            b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
+                VkImageLayout depthOld = (m_renderer.frameIndex() == 0)
+                    ? VK_IMAGE_LAYOUT_UNDEFINED
+                    : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                transitionImage(cmd, m_renderer.rt().depth.image(), VK_IMAGE_ASPECT_DEPTH_BIT,
+                    depthOld, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
+                    VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+                    VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
+                    VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT,
+                    VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT);
+                VkImageLayout hdrOld = (m_renderer.frameIndex() == 0)
+                    ? VK_IMAGE_LAYOUT_UNDEFINED
+                    : VK_IMAGE_LAYOUT_GENERAL;
+                transitionImage(cmd, m_renderer.rt().hdrColor.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                    hdrOld, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                    VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+                    VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                    VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT |
+                        VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT);
+                m_renderer.skybox().record(cmd, m_renderer.rt());
+                transitionImage(cmd, m_renderer.rt().depth.image(), VK_IMAGE_ASPECT_DEPTH_BIT,
+                    VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
+                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                    VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT,
+                    VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT,
+                    VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+                    VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+            });
+        });
+    }
+
+    // --- Copy hdrPrev ---
+    // FrameGraph auto-barrier: hdrColor → TRANSFER_SRC, hdrPrev → TRANSFER_DST（entry）
+    //                          hdrPrev → SHADER_READ_ONLY（exit, 由下一帧读触发）
+    m_fg.addPass("Copy-hdrPrev", [&](FGBuilder& b) {
+        b.setPassType(FGPassType::Compute);
+        b.read(m_fgh.hdrColor, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+        b.write(m_fgh.hdrPrev, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+        b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
+            VkImageCopy region{};
+            region.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+            region.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+            region.extent = {m_renderer.rt().extent.width, m_renderer.rt().extent.height, 1};
+            vkCmdCopyImage(cmd,
+                m_renderer.rt().hdrColor.image(), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                m_renderer.rt().hdrPrev.image(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                1, &region);
+        });
+    });
+
+    // --- Tonemap（AA 模式下纳入 FrameGraph，非 AA 模式仍由 recordPostProcessing 处理）---
+    if (aaEnabled && m_swap->hdrEnabled()) {
+        m_fg.addPass("Tonemap", [&](FGBuilder& b) {
+            b.setPassType(FGPassType::Compute);
+            b.read(m_fgh.hdrColor, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+            b.write(m_fgh.aaHdr);
+            b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
+                m_renderer.rt().ensureAaResources(*m_device);
+                m_renderer.tonemap().bindOutput(*m_device, m_renderer.rt().aaHdr.view(), m_frameCtx.frameInFlight);
+                m_renderer.tonemap().record(cmd, m_renderer.rt(), m_frameCtx.frameInFlight, true, 1.0f);
+            });
+        });
+
+        // --- TAA / SMAA ---
+        // 读取 aaHdr + depth(+aaHistory in TAA)，写入 swapImage
+        if (m_aaMethod == AAMethod::TAA) {
+            m_fg.addPass("TAA", [&](FGBuilder& b) {
+                b.setPassType(FGPassType::Compute);
+                b.read(m_fgh.aaHdr, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+                b.read(m_fgh.aaHistory, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+                b.read(m_fgh.depth, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+                b.write(m_fgh.swapImage, VK_IMAGE_LAYOUT_GENERAL);
+                b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
+                    m_renderer.taa().bindResources(*m_device, m_renderer.rt(), m_frameCtx.frameInFlight);
+                    m_renderer.taa().bindOutput(*m_device, m_frameCtx.swapView, m_frameCtx.frameInFlight);
+                    m_renderer.taa().record(cmd, m_renderer.rt(), m_jitter, m_prevJitter,
+                        m_frameCtx.invViewProj, m_prevViewProj, m_frameCtx.frameInFlight, m_taaBlendAlpha);
+                });
+            });
+
+            // --- Copy aaHdr → aaHistory（下一帧 TAA 的历史输入）---
+            m_fg.addPass("Copy-aaHistory", [&](FGBuilder& b) {
+                b.setPassType(FGPassType::Compute);
+                b.read(m_fgh.aaHdr, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+                b.write(m_fgh.aaHistory, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+                b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
+                    VkImageCopy region{};
+                    region.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+                    region.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+                    region.extent = {m_renderer.rt().extent.width, m_renderer.rt().extent.height, 1};
+                    vkCmdCopyImage(cmd,
+                        m_renderer.rt().aaHdr.image(), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                        m_renderer.rt().aaHistory.image(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                        1, &region);
+                });
+            });
+        } else {
+            // SMAA：只需 aaHdr 输入，内部 m_edgeTex 自行管理 barrier
+            m_fg.addPass("SMAA", [&](FGBuilder& b) {
+                b.setPassType(FGPassType::Compute);
+                b.read(m_fgh.aaHdr, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+                b.write(m_fgh.swapImage, VK_IMAGE_LAYOUT_GENERAL);
+                b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
+                    m_renderer.smaa().bindResources(*m_device, m_renderer.rt());
+                    m_renderer.smaa().bindOutput(*m_device, m_frameCtx.swapView);
+                    m_renderer.smaa().record(cmd, m_renderer.rt());
+                });
+            });
+        }
+    }
+
+    // 注：TAA/SMAA/Copy-aaHistory 的 barrier 由 FrameGraph 自动管理。
+    //      ImGui 和最终 swapImage→PRESENT 过渡仍由 recordPostProcessing 处理。
+}
+
+// ================================================================
+// setupFgImports — 导入所有持久纹理资源到 FrameGraph
+// ================================================================
+void App::setupFgImports(VkExtent3D ext, bool aaEnabled) {
+    using namespace somegi::fg;
+    auto& rt = m_renderer.rt();
+
+    // GBuffer (resolved, single-sample)
+    m_fgh.gAlbedoMetal = m_fg.importTexture("gAlbedoMetal", rt.gAlbedoMetal.image(),
+        {ext, rt.gAlbedoMetal.format(), 1, 1, VK_SAMPLE_COUNT_1_BIT,
+         VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT},
+        VK_IMAGE_LAYOUT_UNDEFINED);
+    m_fgh.gNormalRough = m_fg.importTexture("gNormalRough", rt.gNormalRough.image(),
+        {ext, rt.gNormalRough.format(), 1, 1, VK_SAMPLE_COUNT_1_BIT,
+         VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT},
+        VK_IMAGE_LAYOUT_UNDEFINED);
+    m_fgh.gEmissiveAO = m_fg.importTexture("gEmissiveAO", rt.gEmissiveAO.image(),
+        {ext, rt.gEmissiveAO.format(), 1, 1, VK_SAMPLE_COUNT_1_BIT,
+         VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT},
+        VK_IMAGE_LAYOUT_UNDEFINED);
+    m_fgh.depth = m_fg.importTexture("depth", rt.depth.image(),
+        {ext, VK_FORMAT_D32_SFLOAT, 1, 1, VK_SAMPLE_COUNT_1_BIT,
+         VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT},
+        VK_IMAGE_LAYOUT_UNDEFINED);
+
+    // GBuffer MSAA
+    m_fgh.gAlbedoMetalMs = m_fg.importTexture("gAlbedoMetalMs", rt.gAlbedoMetalMs.image(),
+        {ext, rt.gAlbedoMetalMs.format(), 1, 1, m_msaaSamples,
+         VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT}, VK_IMAGE_LAYOUT_UNDEFINED);
+    m_fgh.gNormalRoughMs = m_fg.importTexture("gNormalRoughMs", rt.gNormalRoughMs.image(),
+        {ext, rt.gNormalRoughMs.format(), 1, 1, m_msaaSamples,
+         VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT}, VK_IMAGE_LAYOUT_UNDEFINED);
+    m_fgh.gEmissiveAOMs = m_fg.importTexture("gEmissiveAOMs", rt.gEmissiveAOMs.image(),
+        {ext, rt.gEmissiveAOMs.format(), 1, 1, m_msaaSamples,
+         VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT}, VK_IMAGE_LAYOUT_UNDEFINED);
+    m_fgh.depthMs = m_fg.importTexture("depthMs", rt.depthMs.image(),
+        {ext, VK_FORMAT_D32_SFLOAT, 1, 1, m_msaaSamples,
+         VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT}, VK_IMAGE_LAYOUT_UNDEFINED);
+
+    // AO
+    m_fgh.ssao = m_fg.importTexture("ssao", rt.ssao.image(),
+        {ext, VK_FORMAT_R8_UNORM, 1, 1, VK_SAMPLE_COUNT_1_BIT,
+         VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT},
+        VK_IMAGE_LAYOUT_UNDEFINED);
+
+    // SSR
+    m_fgh.ssr = m_fg.importTexture("ssr", rt.ssr.image(),
+        {ext, VK_FORMAT_R16G16B16A16_SFLOAT, 1, 1, VK_SAMPLE_COUNT_1_BIT,
+         VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT},
+        VK_IMAGE_LAYOUT_UNDEFINED);
+
+    // SSGI
+    m_fgh.ssgi = m_fg.importTexture("ssgi", rt.ssgi.image(),
+        {ext, VK_FORMAT_R16G16B16A16_SFLOAT, 1, 1, VK_SAMPLE_COUNT_1_BIT,
+         VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT},
+        VK_IMAGE_LAYOUT_UNDEFINED);
+    m_fgh.ssgiPrev = m_fg.importTexture("ssgiPrev", rt.ssgiPrev.image(),
+        {ext, VK_FORMAT_R16G16B16A16_SFLOAT, 1, 1, VK_SAMPLE_COUNT_1_BIT,
+         VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT},
+        VK_IMAGE_LAYOUT_UNDEFINED);
+
+    // HDR
+    m_fgh.hdrColor = m_fg.importTexture("hdrColor", rt.hdrColor.image(),
+        {ext, VK_FORMAT_R16G16B16A16_SFLOAT, 1, 1, VK_SAMPLE_COUNT_1_BIT,
+         VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT},
+        VK_IMAGE_LAYOUT_UNDEFINED);
+    m_fgh.hdrPrev = m_fg.importTexture("hdrPrev", rt.hdrPrev.image(),
+        {ext, VK_FORMAT_R16G16B16A16_SFLOAT, 1, 1, VK_SAMPLE_COUNT_1_BIT,
+         VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT},
+        VK_IMAGE_LAYOUT_UNDEFINED);
+
+    // LDR
+    m_fgh.ldrTonemap = m_fg.importTexture("ldrTonemap", rt.ldrTonemap.image(),
+        {ext, VK_FORMAT_B8G8R8A8_UNORM, 1, 1, VK_SAMPLE_COUNT_1_BIT,
+         VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT},
+        VK_IMAGE_LAYOUT_UNDEFINED);
+
+    // RT GI
+    m_fgh.rtGI = m_fg.importTexture("rtGI", rt.rtGI.image(),
+        {ext, VK_FORMAT_R16G16B16A16_SFLOAT, 1, 1, VK_SAMPLE_COUNT_1_BIT,
+         VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT},
+        VK_IMAGE_LAYOUT_UNDEFINED);
+
+    // ReSTIR
+    m_fgh.restir = m_fg.importTexture("restir", rt.restir.image(),
+        {ext, VK_FORMAT_R16G16B16A16_SFLOAT, 1, 1, VK_SAMPLE_COUNT_1_BIT,
+         VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT},
+        VK_IMAGE_LAYOUT_UNDEFINED);
+
+    // RSM GI
+    m_fgh.rsmGI = m_fg.importTexture("rsmGI", rt.rsmGI.image(),
+        {ext, VK_FORMAT_R16G16B16A16_SFLOAT, 1, 1, VK_SAMPLE_COUNT_1_BIT,
+         VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT},
+        VK_IMAGE_LAYOUT_UNDEFINED);
+
+    // Lumen GI
+    m_fgh.lumenGI = m_fg.importTexture("lumenGI", rt.lumenGI.image(),
+        {ext, VK_FORMAT_R16G16B16A16_SFLOAT, 1, 1, VK_SAMPLE_COUNT_1_BIT,
+         VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT},
+        VK_IMAGE_LAYOUT_UNDEFINED);
+
+    // Shadow mask
+    m_fgh.shadowMask = m_fg.importTexture("shadowMask",
+        m_renderer.shadow().shadowMask().image(),
+        {ext, VK_FORMAT_R8_UNORM, 1, 1, VK_SAMPLE_COUNT_1_BIT,
+         VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT},
+        VK_IMAGE_LAYOUT_UNDEFINED);
+
+    // AA intermediates
+    if (aaEnabled) {
+        m_fgh.aaHdr = m_fg.importTexture("aaHdr", rt.aaHdr.image(),
+            {ext, VK_FORMAT_R16G16B16A16_SFLOAT, 1, 1, VK_SAMPLE_COUNT_1_BIT,
+             VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT},
+            VK_IMAGE_LAYOUT_UNDEFINED);
+        m_fgh.aaHistory = m_fg.importTexture("aaHistory", rt.aaHistory.image(),
+            {ext, VK_FORMAT_R16G16B16A16_SFLOAT, 1, 1, VK_SAMPLE_COUNT_1_BIT,
+             VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT},
+            VK_IMAGE_LAYOUT_UNDEFINED);
+    }
+
+    // Swapchain（每帧导入，不使用 debugName 避免 persistentState 跨帧错乱）
+    m_fgh.swapImage = m_fg.importTexture(nullptr, m_frameCtx.swapImage,
+        {ext, m_swap->format(), 1, 1, VK_SAMPLE_COUNT_1_BIT,
+         VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT},
+        VK_IMAGE_LAYOUT_UNDEFINED);
 }
 
 }

@@ -118,15 +118,15 @@ void LpvPropagatePass::bindResources(Device& d, const LpvGrid& g0, const LpvGrid
 }
 
 void LpvPropagatePass::record(VkCommandBuffer cmd, int srcIdx, uint32_t gridResolution,
-                              float occAmp, float gvOccStr) {
+                              float occlusionAmp, float gvOcclusionStr) {
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipeline);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
         m_pipelineLayout, 0, 1, &m_sets[srcIdx & 1], 0, nullptr);
 
     PropagatePC pc{};
     pc.gridResolution = gridResolution;
-    pc.occlusionAmplifier = occAmp;
-    pc.gvOcclusionStrength = gvOccStr;
+    pc.occlusionAmplifier = occlusionAmp;
+    pc.gvOcclusionStrength = gvOcclusionStr;
     pc._p1 = 0;
     vkCmdPushConstants(cmd, m_pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT,
                        0, sizeof(pc), &pc);
