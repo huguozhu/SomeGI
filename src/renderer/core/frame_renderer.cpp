@@ -154,10 +154,10 @@ void FrameRenderer::init(Device& d, VkCommandPool pool, VkExtent2D extent,
     m_vxgiMipmap.bindResources(m_vxgi);
     m_vxgiAniso.init(*m_rhiDevice, m_vxgi.mipLevels());
     m_vxgiAniso.bindResources(m_vxgi);
-    m_vxgiRelight.init(d);
-    m_vxgiRelight.bindResources(d, m_vxgi, m_vxgi.relightScratch().view());
-    m_vxgiRelight.bindResourcesPingPong(d, m_vxgi, false);
-    m_vxgiRelight.bindResourcesPingPong(d, m_vxgi, true);
+    m_vxgiRelight.init(*m_rhiDevice);
+    m_vxgiRelight.bindResources(m_vxgi, m_vxgi.relightScratch().view());
+    m_vxgiRelight.bindResourcesPingPong(m_vxgi, false);
+    m_vxgiRelight.bindResourcesPingPong(m_vxgi, true);
     if (m_vxgiSixAxisInited) {
         m_vxgiResolve6Axis.init(*m_rhiDevice);
         m_vxgiResolve6Axis.bindResources(m_vxgi);
