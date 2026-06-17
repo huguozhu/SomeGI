@@ -1,6 +1,6 @@
 // rhi/vulkan/vk_fence.h
 #pragma once
-#include "../fence.h"
+#include "../base/fence.h"
 #include "vk_device.h"
 
 namespace somegi {

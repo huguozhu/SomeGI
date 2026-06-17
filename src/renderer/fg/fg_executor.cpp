@@ -9,6 +9,7 @@
 #include "core/device.h"
 #include "core/image.h"
 #include "core/buffer.h"
+#include "rhi/base/command_buffer.h"  // RHICommandBuffer::nativeHandle
 #include <cstdio>
 
 namespace somegi {
@@ -132,6 +133,17 @@ void FGExecutor::execute(VkCommandBuffer cmd,
     recycleUnused(kRecycleFrames);
 
     ++m_currentFrame;
+}
+
+// ════════════════════════════════════════════════════════════════
+// RHI 执行路径（通过 nativeHandle() 桥接到现有 Vk 路径）
+// ════════════════════════════════════════════════════════════════
+void FGExecutor::executeRHI(rhi::RHICommandBuffer& rhiCmd,
+                            FGCompiler::CompiledGraph& compiled,
+                            const FGResources& viewCache) {
+    // 从 RHI 命令缓冲区提取原生 VkCommandBuffer，委托给现有 execute()
+    VkCommandBuffer vkCmd = (VkCommandBuffer)(uintptr_t)rhiCmd.nativeHandle();
+    execute(vkCmd, compiled, viewCache);
 }
 
 // ---- 别名组分配 ----

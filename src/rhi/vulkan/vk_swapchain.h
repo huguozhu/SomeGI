@@ -1,6 +1,6 @@
 // rhi/vulkan/vk_swapchain.h
 #pragma once
-#include "../swapchain.h"
+#include "../base/swapchain.h"
 #include "vk_device.h"
 #include "vk_texture.h"
 #include "vk_fence.h"

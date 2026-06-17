@@ -1,6 +1,6 @@
 // rhi/vulkan/vk_descriptor.h
 #pragma once
-#include "../descriptor.h"
+#include "../base/descriptor.h"
 #include "vk_device.h"
 #include <vulkan/vulkan.h>
 

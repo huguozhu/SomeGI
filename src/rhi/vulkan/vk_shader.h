@@ -1,6 +1,6 @@
 // rhi/vulkan/vk_shader.h
 #pragma once
-#include "../shader.h"
+#include "../base/shader.h"
 #include "vk_device.h"
 #include <filesystem>
 

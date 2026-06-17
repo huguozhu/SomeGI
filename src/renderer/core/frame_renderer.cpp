@@ -1,5 +1,6 @@
 #include "renderer/core/frame_renderer.h"
 #include "core/device.h"
+#include "rhi/vulkan/vk_device.h"  // VkRHIDevice shared-handle constructor
 #include "scene/upload.h"
 #include <cstdio>
 
@@ -13,6 +14,24 @@ void FrameRenderer::init(Device& d, VkCommandPool pool, VkExtent2D extent,
     m_rtSupported = rtSupported;
     m_meshShaderSupported = d.features().meshShader;
     m_taskShaderSupported = d.features().taskShader;
+
+    // ── 创建 RHI Device（共享 core::Device 的底层 Vulkan 句柄） ──
+    {
+        VkPhysicalDeviceProperties props;
+        vkGetPhysicalDeviceProperties(d.physicalDevice(), &props);
+        rhi::DeviceLimits rhiLimits;
+        rhiLimits.maxTextureSize      = props.limits.maxImageDimension2D;
+        rhiLimits.maxSampledTextures  = props.limits.maxPerStageDescriptorSampledImages;
+        rhiLimits.maxUniformBufferSize = props.limits.maxUniformBufferRange;
+        rhiLimits.maxStorageBufferSize = props.limits.maxStorageBufferRange;
+        rhiLimits.maxPushConstantsSize = props.limits.maxPushConstantsSize;
+        rhiLimits.timestampPeriod      = props.limits.timestampPeriod;
+        rhiLimits.meshShaderSupported  = d.features().meshShader;
+        rhiLimits.rayTracingSupported  = d.features().accelStruct && d.features().rayQuery;
+        m_rhiDevice = std::make_unique<rhi::VkRHIDevice>(
+            d.instance(), d.physicalDevice(), d.device(), d.allocator(),
+            d.graphicsQueue(), d.graphicsQueueFamily(), d.dispatch(), rhiLimits);
+    }
 
     // Timestamp query pool
     {
@@ -85,8 +104,8 @@ void FrameRenderer::init(Device& d, VkCommandPool pool, VkExtent2D extent,
         m_ndgi.weights3().handle(), m_ndgi.bias3().handle());
 
     std::printf("[init] ssao pass...\n");
-    m_ssao.init(d);
-    m_ssao.bindFrame(d, m_rt);
+    m_ssao.init(*m_rhiDevice);
+    m_ssao.bindFrame(m_rt);
     std::printf("[init] gtao pass...\n");
     m_gtao.init(d);
     m_gtao.bindFrame(d, m_rt, m_gbuffer.frameUboHandle());
@@ -240,7 +259,7 @@ void FrameRenderer::onResize(Device& d, VkExtent2D newExtent,
     m_lighting.bindFrame(d, m_rt, m_gbuffer.frameUboHandle(),
                          m_lpv.current(), m_vxgi, m_prt, m_ddgi,
                          m_ddgi.probeStates().handle());
-    m_ssao.bindFrame(d, m_rt);
+    m_ssao.bindFrame(m_rt);
     m_gtao.bindFrame(d, m_rt, m_gbuffer.frameUboHandle());
     m_ssr.bindFrame(d, m_rt, m_gbuffer.frameUboHandle());
     m_ssgi.bindFrame(d, m_rt, m_gbuffer.frameUboHandle());

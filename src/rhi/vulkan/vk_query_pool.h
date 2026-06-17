@@ -1,6 +1,6 @@
 // rhi/vulkan/vk_query_pool.h
 #pragma once
-#include "../command_buffer.h"  // RHIQueryPool
+#include "../base/command_buffer.h"  // RHIQueryPool
 #include "vk_device.h"
 
 namespace somegi {

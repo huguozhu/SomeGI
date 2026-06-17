@@ -190,6 +190,93 @@ std::unique_ptr<RHIPipelineState> VkRHIPipelineState::createCompute(VkRHIDevice&
     return pso;
 }
 
+// ════════════════════════════════════════════════════════════════
+// Ray Tracing PSO
+// ════════════════════════════════════════════════════════════════
+std::unique_ptr<RHIPipelineState> VkRHIPipelineState::createRayTracing(VkRHIDevice& device, const RayTracingPSODesc& desc) {
+    auto pso = std::unique_ptr<VkRHIPipelineState>(new VkRHIPipelineState(device));
+    VkDevice vkd = device.vkDevice();
+
+    // 光线追踪 GPU 不支持 → 返回空 PSO
+    if (!device.limits().rayTracingSupported) return pso;
+
+    // ── Shader stages：将 RHI shader 数组转换为 Vulkan 管线阶段 ──
+    std::vector<VkPipelineShaderStageCreateInfo> stages;
+    stages.reserve(desc.shaders.size());
+    for (auto* shader : desc.shaders) {
+        if (!shader) continue;
+        VkPipelineShaderStageCreateInfo si{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
+        si.module = (VkShaderModule)(uintptr_t)shader->nativeHandle();
+        si.pName = "main";
+        switch (shader->stage()) {
+            case ShaderStage::RayGen:        si.stage = VK_SHADER_STAGE_RAYGEN_BIT_KHR; break;
+            case ShaderStage::RayMiss:       si.stage = VK_SHADER_STAGE_MISS_BIT_KHR; break;
+            case ShaderStage::RayClosestHit: si.stage = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR; break;
+            case ShaderStage::RayAnyHit:     si.stage = VK_SHADER_STAGE_ANY_HIT_BIT_KHR; break;
+            default: continue;  // 跳过非 RT 阶段（如顶点/计算着色器）
+        }
+        stages.push_back(si);
+    }
+
+    // ── Shader groups：构造 SBT 着色器组 ──
+    std::vector<VkRayTracingShaderGroupCreateInfoKHR> groups;
+    groups.reserve(desc.groups.size());
+    for (auto& g : desc.groups) {
+        VkRayTracingShaderGroupCreateInfoKHR gi{VK_STRUCTURE_TYPE_RAY_TRACING_SHADER_GROUP_CREATE_INFO_KHR};
+        // 所有字段默认标记为"未使用"
+        gi.generalShader = VK_SHADER_UNUSED_KHR;
+        gi.closestHitShader = VK_SHADER_UNUSED_KHR;
+        gi.anyHitShader = VK_SHADER_UNUSED_KHR;
+        gi.intersectionShader = VK_SHADER_UNUSED_KHR;
+
+        switch (g.type) {
+            case ShaderGroupType::RayGen:
+            case ShaderGroupType::Miss:
+            case ShaderGroupType::Callable:
+                gi.type = VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR;
+                gi.generalShader = g.generalShader;
+                break;
+            case ShaderGroupType::Hit:
+                gi.type = VK_RAY_TRACING_SHADER_GROUP_TYPE_TRIANGLES_HIT_GROUP_KHR;
+                gi.closestHitShader = g.closestHitShader;
+                if (g.anyHitShader != UINT32_MAX) gi.anyHitShader = g.anyHitShader;
+                if (g.intersectionShader != UINT32_MAX) gi.intersectionShader = g.intersectionShader;
+                break;
+        }
+        groups.push_back(gi);
+    }
+
+    // ── Pipeline layout ──
+    std::vector<VkDescriptorSetLayout> setLayouts;
+    for (auto* l : desc.descriptorSetLayouts)
+        setLayouts.push_back((VkDescriptorSetLayout)(uintptr_t)l->nativeHandle());
+    std::vector<VkPushConstantRange> pcRanges;
+    for (auto& pc : desc.pushConstants)
+        pcRanges.push_back({toVkShaderStage(pc.stages), pc.offset, pc.size});
+
+    VkPipelineLayoutCreateInfo pl{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+    pl.setLayoutCount = (uint32_t)setLayouts.size();
+    pl.pSetLayouts = setLayouts.data();
+    pl.pushConstantRangeCount = (uint32_t)pcRanges.size();
+    pl.pPushConstantRanges = pcRanges.data();
+    vkCreatePipelineLayout(vkd, &pl, nullptr, &pso->m_pipelineLayout);
+
+    // ── 创建 RT 管线 ──
+    VkRayTracingPipelineCreateInfoKHR ci{VK_STRUCTURE_TYPE_RAY_TRACING_PIPELINE_CREATE_INFO_KHR};
+    ci.stageCount = (uint32_t)stages.size();
+    ci.pStages = stages.data();
+    ci.groupCount = (uint32_t)groups.size();
+    ci.pGroups = groups.data();
+    ci.maxPipelineRayRecursionDepth = desc.maxRecursionDepth;
+    ci.layout = pso->m_pipelineLayout;
+
+    // 使用 vkb dispatch 表调用（支持按需加载的扩展函数）
+    device.dispatch().createRayTracingPipelinesKHR(
+        VK_NULL_HANDLE, VK_NULL_HANDLE, 1, &ci, nullptr, &pso->m_pipeline);
+
+    return pso;
+}
+
 VkRHIPipelineState::~VkRHIPipelineState() {
     if (m_pipeline) vkDestroyPipeline(m_device.vkDevice(), m_pipeline, nullptr);
     if (m_pipelineLayout) vkDestroyPipelineLayout(m_device.vkDevice(), m_pipelineLayout, nullptr);

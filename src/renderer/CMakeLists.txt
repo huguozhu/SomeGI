@@ -34,5 +34,5 @@ add_library(somegi_renderer STATIC
     $<TARGET_OBJECTS:somegi_renderer_lumen>
 )
 target_link_libraries(somegi_renderer
-    PUBLIC somegi_core somegi_scene somegi_gi imgui
+    PUBLIC somegi_core somegi_scene somegi_gi somegi_rhi imgui
 )

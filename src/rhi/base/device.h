@@ -1,4 +1,4 @@
-// rhi/device.h — RHIDevice 接口
+// rhi/base/device.h — RHIDevice 接口
 #pragma once
 #include "common.h"
 #include <memory>
@@ -22,7 +22,9 @@ class RHIQueryPool;
 
 struct GraphicsPSODesc;
 struct ComputePSODesc;
+struct RayTracingPSODesc;
 struct DescSetLayoutDesc;
+struct SubmitDesc;
 
 // ════════════════════════════════════════════════════════════════
 // RHIDevice — 设备抽象
@@ -43,6 +45,7 @@ public:
     virtual std::unique_ptr<RHISwapchain> createSwapchain(void* nativeWindow, uint32_t width, uint32_t height) = 0;
     virtual std::unique_ptr<RHIPipelineState> createGraphicsPSO(const GraphicsPSODesc& desc) = 0;
     virtual std::unique_ptr<RHIPipelineState> createComputePSO(const ComputePSODesc& desc) = 0;
+    virtual std::unique_ptr<RHIPipelineState> createRayTracingPSO(const RayTracingPSODesc& desc) = 0;
     virtual std::unique_ptr<RHIDescriptorSetLayout> createDescriptorSetLayout(const DescSetLayoutDesc& desc) = 0;
     virtual std::unique_ptr<RHIDescriptorSet> createDescriptorSet(const RHIDescriptorSetLayout& layout) = 0;
     virtual std::unique_ptr<RHICommandPool> createCommandPool() = 0;
@@ -50,10 +53,15 @@ public:
     virtual std::unique_ptr<RHISemaphore> createSemaphore() = 0;
     virtual std::unique_ptr<RHIQueryPool> createQueryPool(uint32_t count) = 0;
 
-    // 同步
+    // ── 队列提交 ──
+    virtual void submit(const SubmitDesc& desc) = 0;
+    virtual void present(const RHISwapchain& swapchain, const RHISemaphore* waitSemaphore = nullptr) = 0;
+    virtual void waitForFence(const RHIFence& fence, uint64_t timeoutNs = UINT64_MAX) = 0;
+
+    // ── 同步 ──
     virtual void waitIdle() = 0;
 
-    // 原生句柄
+    // ── 原生句柄（兼容迁移期） ──
     virtual void* nativeDevice() const = 0;
     virtual void* nativePhysicalDevice() const = 0;
     virtual void* nativeQueue() const = 0;

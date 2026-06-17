@@ -1,6 +1,6 @@
 // rhi/vulkan/vk_pso.h
 #pragma once
-#include "../pipeline_state.h"
+#include "../base/pipeline_state.h"
 #include "vk_device.h"
 #include <vulkan/vulkan.h>
 #include <vector>
@@ -13,6 +13,7 @@ public:
     // 工厂方法
     static std::unique_ptr<RHIPipelineState> createGraphics(VkRHIDevice& device, const GraphicsPSODesc& desc);
     static std::unique_ptr<RHIPipelineState> createCompute(VkRHIDevice& device, const ComputePSODesc& desc);
+    static std::unique_ptr<RHIPipelineState> createRayTracing(VkRHIDevice& device, const RayTracingPSODesc& desc);
 
     ~VkRHIPipelineState() override;
     void* nativeHandle() const override { return (void*)m_pipeline; }

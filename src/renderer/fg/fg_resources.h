@@ -3,14 +3,22 @@
 #include "fg_common.h"
 #include <vulkan/vulkan.h>
 #include <vector>
+#include <memory>
 
 namespace somegi {
+
+namespace rhi {
+class RHIDevice;
+class RHITextureView;
+class RHIBuffer;
+}
+
 namespace fg {
 
 // ============================================================
 // FGResources: 提供给 pass execute 回调的只读资源视图
 //
-// 内部缓存了 handle → VkImageView / VkBuffer 的映射，
+// 内部缓存了 handle → VkImageView / VkBuffer / RHI 包装的映射，
 // 在 FrameGraph::execute() 开始时一次性填充。
 // ============================================================
 class FGResources {
@@ -27,8 +35,22 @@ public:
     // 获取资源 extent
     VkExtent3D extent(FGHandle handle) const;
 
+    // ── RHI 访问器（迁移期间与 Vk 方法并存） ──
+    // 设置 RHI 设备（在 populateViewCache 之前由 FrameGraph 调用）
+    void setRHIDevice(rhi::RHIDevice* rhiDevice) { m_rhiDevice = rhiDevice; }
+
+    // 获取 RHI 纹理视图（非拥有型包装，生命周期与 FGResources 相同）
+    const rhi::RHITextureView* getRHITextureView(FGHandle handle,
+                                                   uint32_t mip = 0,
+                                                   uint32_t layer = 0) const;
+
+    // 获取 RHI Buffer（非拥有型包装，生命周期与 FGResources 相同）
+    const rhi::RHIBuffer* getRHIBuffer(FGHandle handle,
+                                        uint64_t* outOffset = nullptr) const;
+
 private:
     friend class FrameGraph;
+    rhi::RHIDevice* m_rhiDevice = nullptr;
 
     struct TextureView {
         FGHandle handle;
@@ -48,6 +70,10 @@ private:
     std::vector<BufferView>  m_bufferByIndex;
     std::vector<TextureView> m_textures;  // 兼容旧线性遍历
     std::vector<BufferView>  m_buffers;
+
+    // RHI 非拥有型包装（与上面并行，在 populateViewCache 时构建）
+    mutable std::vector<std::unique_ptr<rhi::RHITextureView>> m_rhiTextureViews;
+    mutable std::vector<std::unique_ptr<rhi::RHIBuffer>>      m_rhiBuffers;
 };
 
 } // namespace fg

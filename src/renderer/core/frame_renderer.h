@@ -25,6 +25,7 @@
 #include "renderer/gi/ndgi/ndgi_resources.h"
 #include "renderer/gi/ndgi/ndgi_pass.h"
 #include "renderer/core/lighting_pass.h"
+#include "rhi/base/device.h"
 #include "renderer/ao/ssao_pass.h"
 #include "renderer/ao/gtao_pass.h"
 #include "renderer/screenspace/ssr_pass.h"
@@ -236,6 +237,7 @@ public:
 
 private:
     Device* m_device = nullptr;
+    std::unique_ptr<rhi::RHIDevice> m_rhiDevice;  // RHI 设备（共享 core::Device 的 Vulkan 句柄）
     VkCommandPool m_pool = VK_NULL_HANDLE;
 
     RenderTargets m_rt;

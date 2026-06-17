@@ -45,7 +45,9 @@ std::unique_ptr<RHIBuffer> VkRHIBuffer::create(VkRHIDevice& device, const Buffer
     return buf;
 }
 
-VkRHIBuffer::~VkRHIBuffer() { if (m_buffer) vmaDestroyBuffer(m_device.vma(), m_buffer, m_allocation); }
+VkRHIBuffer::~VkRHIBuffer() {
+    if (m_buffer && m_ownsBuffer) vmaDestroyBuffer(m_device.vma(), m_buffer, m_allocation);
+}
 void* VkRHIBuffer::map() { return m_mapped; }
 void VkRHIBuffer::unmap() { vmaFlushAllocation(m_device.vma(), m_allocation, 0, m_size); }
 } // namespace rhi

@@ -24,6 +24,32 @@ static VkImageLayout toVkLayout(TextureLayout l) {
     }
 }
 
+static VkPipelineStageFlags2 toVkStage(PipelineStage s) {
+    VkPipelineStageFlags2 f = 0;
+    if ((uint32_t)s & (uint32_t)PipelineStage::VertexShader)     f |= VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT;
+    if ((uint32_t)s & (uint32_t)PipelineStage::FragmentShader)   f |= VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+    if ((uint32_t)s & (uint32_t)PipelineStage::ComputeShader)    f |= VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+    if ((uint32_t)s & (uint32_t)PipelineStage::MeshShader)       f |= VK_PIPELINE_STAGE_2_MESH_SHADER_BIT_EXT;
+    if ((uint32_t)s & (uint32_t)PipelineStage::TaskShader)       f |= VK_PIPELINE_STAGE_2_TASK_SHADER_BIT_EXT;
+    if ((uint32_t)s & (uint32_t)PipelineStage::RayTracingShader) f |= VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
+    if ((uint32_t)s & (uint32_t)PipelineStage::Transfer)         f |= VK_PIPELINE_STAGE_2_COPY_BIT;
+    if (s == PipelineStage::AllCommands)                         f = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+    return f;
+}
+
+static VkAccessFlags2 toVkAccess(BufferAccess a) {
+    VkAccessFlags2 f = 0;
+    if ((uint32_t)a & (uint32_t)BufferAccess::UniformRead)   f |= VK_ACCESS_2_UNIFORM_READ_BIT;
+    if ((uint32_t)a & (uint32_t)BufferAccess::StorageRead)   f |= VK_ACCESS_2_SHADER_STORAGE_READ_BIT;
+    if ((uint32_t)a & (uint32_t)BufferAccess::StorageWrite)  f |= VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+    if ((uint32_t)a & (uint32_t)BufferAccess::IndexRead)     f |= VK_ACCESS_2_INDEX_READ_BIT;
+    if ((uint32_t)a & (uint32_t)BufferAccess::VertexRead)    f |= VK_ACCESS_2_VERTEX_ATTRIBUTE_READ_BIT;
+    if ((uint32_t)a & (uint32_t)BufferAccess::IndirectRead)  f |= VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT;
+    if ((uint32_t)a & (uint32_t)BufferAccess::TransferRead)  f |= VK_ACCESS_2_TRANSFER_READ_BIT;
+    if ((uint32_t)a & (uint32_t)BufferAccess::TransferWrite) f |= VK_ACCESS_2_TRANSFER_WRITE_BIT;
+    return f;
+}
+
 // ════════════════════════════════════════════════════════════════
 // Command Pool
 // ════════════════════════════════════════════════════════════════
@@ -59,6 +85,18 @@ void VkRHICommandBuffer::begin() {
 void VkRHICommandBuffer::end() { VK_CHECK(vkEndCommandBuffer(m_cmd)); }
 void VkRHICommandBuffer::reset() { VK_CHECK(vkResetCommandBuffer(m_cmd, VK_COMMAND_BUFFER_RESET_RELEASE_RESOURCES_BIT)); }
 
+// ════════════════════════════════════════════════════════════════
+// 动态状态
+// ════════════════════════════════════════════════════════════════
+void VkRHICommandBuffer::setViewport(float x, float y, float w, float h, float minD, float maxD) {
+    VkViewport vp{x, y, w, h, minD, maxD};
+    vkCmdSetViewport(m_cmd, 0, 1, &vp);
+}
+void VkRHICommandBuffer::setScissor(int32_t x, int32_t y, uint32_t w, uint32_t h) {
+    VkRect2D sc{{x, y}, {w, h}};
+    vkCmdSetScissor(m_cmd, 0, 1, &sc);
+}
+
 void VkRHICommandBuffer::bindPipelineState(const RHIPipelineState& pso) {
     auto* vkpso = static_cast<const VkRHIPipelineState*>(&pso);
     vkCmdBindPipeline(m_cmd, VK_PIPELINE_BIND_POINT_COMPUTE, (VkPipeline)(uintptr_t)pso.nativeHandle());
@@ -67,6 +105,14 @@ void VkRHICommandBuffer::bindPipelineState(const RHIPipelineState& pso) {
 void VkRHICommandBuffer::bindDescriptorSet(uint32_t slot, const RHIDescriptorSet& set) {
     VkDescriptorSet ds = (VkDescriptorSet)(uintptr_t)set.nativeHandle();
     vkCmdBindDescriptorSets(m_cmd, VK_PIPELINE_BIND_POINT_COMPUTE, VK_NULL_HANDLE, slot, 1, &ds, 0, nullptr);
+}
+void VkRHICommandBuffer::bindDescriptorSets(uint32_t firstSlot, uint32_t count,
+                                             const RHIDescriptorSet* const* sets) {
+    std::vector<VkDescriptorSet> vkSets(count);
+    for (uint32_t i = 0; i < count; ++i)
+        vkSets[i] = (VkDescriptorSet)(uintptr_t)sets[i]->nativeHandle();
+    vkCmdBindDescriptorSets(m_cmd, VK_PIPELINE_BIND_POINT_COMPUTE, VK_NULL_HANDLE,
+                            firstSlot, count, vkSets.data(), 0, nullptr);
 }
 void VkRHICommandBuffer::pushConstants(ShaderStage stage, const void* data, uint32_t size, uint32_t offset) {
     (void)stage;
@@ -84,11 +130,17 @@ void VkRHICommandBuffer::bindIndexBuffer(const RHIBuffer& buffer, uint64_t offse
 
 void VkRHICommandBuffer::draw(uint32_t vc, uint32_t fv, uint32_t fi) { vkCmdDraw(m_cmd, vc, 1, fv, fi); }
 void VkRHICommandBuffer::drawIndexed(uint32_t ic, uint32_t fi, int32_t vo) { vkCmdDrawIndexed(m_cmd, ic, 1, fi, vo, 0); }
+void VkRHICommandBuffer::drawIndirect(const RHIBuffer& buf, uint64_t off, uint32_t dc, uint32_t stride) {
+    vkCmdDrawIndirect(m_cmd, (VkBuffer)(uintptr_t)buf.nativeHandle(), off, dc, stride);
+}
 void VkRHICommandBuffer::drawIndexedIndirect(const RHIBuffer& buf, uint64_t off, uint32_t dc, uint32_t stride) {
     vkCmdDrawIndexedIndirect(m_cmd, (VkBuffer)(uintptr_t)buf.nativeHandle(), off, dc, stride);
 }
 void VkRHICommandBuffer::drawMeshTasks(uint32_t gx, uint32_t gy, uint32_t gz) {
-    vkCmdDrawMeshTasksEXT(m_cmd, gx, gy, gz);
+    m_device.dispatch().cmdDrawMeshTasksEXT(m_cmd, gx, gy, gz);
+}
+void VkRHICommandBuffer::drawMeshTasksIndirect(const RHIBuffer& buf, uint64_t off, uint32_t dc, uint32_t stride) {
+    m_device.dispatch().cmdDrawMeshTasksIndirectEXT(m_cmd, (VkBuffer)(uintptr_t)buf.nativeHandle(), off, dc, stride);
 }
 
 void VkRHICommandBuffer::dispatch(uint32_t gx, uint32_t gy, uint32_t gz) { vkCmdDispatch(m_cmd, gx, gy, gz); }
@@ -111,7 +163,12 @@ void VkRHICommandBuffer::copyTexture(const RHITexture& src, const RHITexture& ds
 void VkRHICommandBuffer::clearColor(const RHITextureView& view, float r, float g, float b, float a) {
     VkClearColorValue cv{r, g, b, a};
     VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-    vkCmdClearColorImage(m_cmd, VK_NULL_HANDLE, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &cv, 1, &range);
+    vkCmdClearColorImage(m_cmd, (VkImage)(uintptr_t)view.nativeHandle(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &cv, 1, &range);
+}
+void VkRHICommandBuffer::clearDepth(const RHITextureView& view, float depth, uint32_t stencil) {
+    VkClearDepthStencilValue cv{depth, stencil};
+    VkImageSubresourceRange range{VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT, 0, 1, 0, 1};
+    vkCmdClearDepthStencilImage(m_cmd, (VkImage)(uintptr_t)view.nativeHandle(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &cv, 1, &range);
 }
 
 void VkRHICommandBuffer::textureBarrier(const RHITexture& tex, TextureLayout oldLayout, TextureLayout newLayout) {
@@ -136,6 +193,22 @@ void VkRHICommandBuffer::globalBarrier() {
     b.dstAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT;
     VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
     di.memoryBarrierCount = 1; di.pMemoryBarriers = &b;
+    vkCmdPipelineBarrier2(m_cmd, &di);
+}
+void VkRHICommandBuffer::bufferBarrier(const RHIBuffer& buf,
+                                       PipelineStage srcStage, PipelineStage dstStage,
+                                       BufferAccess srcAccess, BufferAccess dstAccess) {
+    VkBufferMemoryBarrier2 b{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2};
+    b.srcStageMask = toVkStage(srcStage);
+    b.srcAccessMask = toVkAccess(srcAccess);
+    b.dstStageMask = toVkStage(dstStage);
+    b.dstAccessMask = toVkAccess(dstAccess);
+    b.buffer = (VkBuffer)(uintptr_t)buf.nativeHandle();
+    b.offset = 0;
+    b.size = VK_WHOLE_SIZE;
+    VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+    di.bufferMemoryBarrierCount = 1;
+    di.pBufferMemoryBarriers = &b;
     vkCmdPipelineBarrier2(m_cmd, &di);
 }
 

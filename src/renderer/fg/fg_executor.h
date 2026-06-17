@@ -15,6 +15,10 @@ namespace somegi {
 
 class Device;
 
+namespace rhi {
+class RHICommandBuffer;
+}
+
 namespace fg {
 
 struct FGPassNode;
@@ -43,10 +47,15 @@ public:
     void initTimestamps(Device& d, uint32_t maxPasses);
     const std::vector<float>& passGpuMs() const { return m_passGpuMs; }
 
-    // 执行编译后的图
+    // 执行编译后的图（原始 Vulkan 路径）
     void execute(VkCommandBuffer cmd,
                  FGCompiler::CompiledGraph& compiled,
                  const FGResources& viewCache);
+
+    // 执行编译后的图（RHI 路径，通过 nativeHandle() 桥接到 Vk）
+    void executeRHI(rhi::RHICommandBuffer& cmd,
+                    FGCompiler::CompiledGraph& compiled,
+                    const FGResources& viewCache);
 
     // 控制是否自动插入 barrier（默认 false，pass 内部管理 barrier）
     void setAutoBarriers(bool enabled) { m_autoBarriers = enabled; }

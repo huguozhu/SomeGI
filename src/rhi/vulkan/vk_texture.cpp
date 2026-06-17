@@ -67,7 +67,9 @@ std::unique_ptr<RHITextureView> VkRHITextureView::create(VkRHIDevice& device, co
     return v;
 }
 
-VkRHITextureView::~VkRHITextureView() { if (m_view) vkDestroyImageView(m_device.vkDevice(), m_view, nullptr); }
+VkRHITextureView::~VkRHITextureView() {
+    if (m_view && m_ownsView) vkDestroyImageView(m_device.vkDevice(), m_view, nullptr);
+}
 
 } // namespace rhi
 } // namespace somegi

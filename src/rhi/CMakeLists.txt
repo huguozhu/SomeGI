@@ -9,8 +9,10 @@ add_library(somegi_rhi OBJECT
     # Phase 2: PSO + Descriptor
     vulkan/vk_pso.cpp
     vulkan/vk_descriptor.cpp
-    # Phase 3: Command Buffer
+    # Phase 3: Command Buffer + Fence + Query
     vulkan/vk_command.cpp
+    vulkan/vk_fence.cpp
+    vulkan/vk_query_pool.cpp
 )
 target_include_directories(somegi_rhi PUBLIC ${CMAKE_SOURCE_DIR}/src)
 target_link_libraries(somegi_rhi PUBLIC somegi_core)

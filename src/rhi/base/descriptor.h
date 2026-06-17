@@ -13,7 +13,14 @@ class RHITextureView;
 // ════════════════════════════════════════════════════════════════
 // Descriptor Set Layout
 // ════════════════════════════════════════════════════════════════
-enum class DescriptorType { SampledImage, StorageImage, UniformBuffer, StorageBuffer, Sampler };
+enum class DescriptorType {
+    SampledImage,
+    StorageImage,
+    UniformBuffer,
+    StorageBuffer,
+    Sampler,
+    AccelerationStructure,  // TLAS / BLAS（光线追踪）
+};
 
 struct DescriptorBinding {
     uint32_t binding;

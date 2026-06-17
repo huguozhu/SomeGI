@@ -3,6 +3,10 @@
 #include "fg_pass_node.h"
 #include "fg_resource_node.h"
 #include "core/device.h"
+#include "rhi/base/device.h"
+#include "rhi/vulkan/vk_device.h"
+#include "rhi/vulkan/vk_texture.h"
+#include "rhi/vulkan/vk_buffer.h"
 
 namespace somegi {
 namespace fg {
@@ -128,6 +132,22 @@ void FrameGraph::execute(VkCommandBuffer cmd) {
     m_executor.execute(cmd, m_compiled, m_viewCache);
     m_debug.finishTimeline((uint32_t)m_compiled.passOrder.size());
     ++m_frameIndex;
+}
+
+void FrameGraph::executeRHI(rhi::RHICommandBuffer& cmd) {
+    if (!m_compiledThisFrame) return;
+    populateViewCache();
+    // 传递 RHI 设备给资源视图（用于创建非拥有型 RHI 包装）
+    m_viewCache.setRHIDevice(m_rhiDevice);
+    m_executor.setDebug(&m_debug);
+    m_executor.executeRHI(cmd, m_compiled, m_viewCache);
+    m_debug.finishTimeline((uint32_t)m_compiled.passOrder.size());
+    ++m_frameIndex;
+}
+
+// RHI 设备设置
+void FrameGraph::setRHIDevice(rhi::RHIDevice* rhiDevice) {
+    m_rhiDevice = rhiDevice;
 }
 
 // ---- 查询 ----
@@ -447,6 +467,48 @@ VkExtent3D FGResources::extent(FGHandle handle) const {
         if (tv.view) return tv.extent;
     }
     return {1, 1, 1};
+}
+
+// ── RHI 纹理视图访问器（按需创建非拥有型 VkRHITextureView 包装） ──
+const rhi::RHITextureView* FGResources::getRHITextureView(FGHandle handle,
+                                                            uint32_t mip, uint32_t layer) const {
+    if (!m_rhiDevice) return nullptr;
+    if (handle.index >= m_textureByIndex.size()) return nullptr;
+    auto& tv = m_textureByIndex[handle.index];
+    if (!tv.view) return nullptr;
+    (void)mip; (void)layer;
+
+    // 确保 RHI 包装容器足够大
+    size_t idx = handle.index;
+    if (idx >= m_rhiTextureViews.size())
+        m_rhiTextureViews.resize(idx + 1);
+
+    // 按需创建非拥有型 RHI 包装（不销毁底层 VkImageView）
+    if (!m_rhiTextureViews[idx]) {
+        auto* vkDevice = static_cast<rhi::VkRHIDevice*>(m_rhiDevice);
+        m_rhiTextureViews[idx] = rhi::VkRHITextureView::createNonOwning(*vkDevice, tv.view);
+    }
+    return m_rhiTextureViews[idx].get();
+}
+
+// ── RHI Buffer 访问器（按需创建非拥有型 VkRHIBuffer 包装） ──
+const rhi::RHIBuffer* FGResources::getRHIBuffer(FGHandle handle,
+                                                  uint64_t* outOffset) const {
+    if (!m_rhiDevice) return nullptr;
+    if (handle.index >= m_bufferByIndex.size()) return nullptr;
+    auto& bv = m_bufferByIndex[handle.index];
+    if (!bv.buffer) return nullptr;
+
+    size_t idx = handle.index;
+    if (idx >= m_rhiBuffers.size())
+        m_rhiBuffers.resize(idx + 1);
+
+    if (!m_rhiBuffers[idx]) {
+        auto* vkDevice = static_cast<rhi::VkRHIDevice*>(m_rhiDevice);
+        m_rhiBuffers[idx] = rhi::VkRHIBuffer::createNonOwning(*vkDevice, bv.buffer, bv.size);
+    }
+    if (outOffset) *outOffset = bv.offset;
+    return m_rhiBuffers[idx].get();
 }
 
 } // namespace fg

@@ -17,6 +17,11 @@ namespace somegi {
 
 class Device;
 
+namespace rhi {
+class RHIDevice;
+class RHICommandBuffer;
+}
+
 namespace fg {
 
 // ============================================================
@@ -63,6 +68,10 @@ public:
     // 调用 FGExecutor::execute()，遍历编译后的 pass 并执行
     void execute(VkCommandBuffer cmd);
 
+    // RHI 执行路径（迁移目标，与 Vk 路径并存）
+    void setRHIDevice(rhi::RHIDevice* rhiDevice);
+    void executeRHI(rhi::RHICommandBuffer& cmd);
+
     // ---- 查询（execute 期使用） ----
     VkImageView getTextureView(FGHandle handle,
                                uint32_t mip = 0,
@@ -91,6 +100,7 @@ private:
     friend class FGBuilder;
 
     Device* m_device = nullptr;
+    rhi::RHIDevice* m_rhiDevice = nullptr;
     uint64_t m_frameIndex = 0;
     uint32_t m_resourceGeneration = 0;  // 每帧递增，用于检测悬空 FGHandle
 

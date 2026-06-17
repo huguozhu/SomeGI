@@ -31,14 +31,15 @@ enum class Format : uint32_t {
 // Buffer
 // ════════════════════════════════════════════════════════════════
 enum class BufferUsage : uint32_t {
-    Vertex       = 1 << 0,
-    Index        = 1 << 1,
-    Uniform      = 1 << 2,
-    Storage      = 1 << 3,
-    Indirect     = 1 << 4,
-    TransferSrc  = 1 << 5,
-    TransferDst  = 1 << 6,
-    AccelStruct  = 1 << 7,
+    Vertex          = 1 << 0,
+    Index           = 1 << 1,
+    Uniform         = 1 << 2,
+    Storage         = 1 << 3,
+    Indirect        = 1 << 4,
+    TransferSrc     = 1 << 5,
+    TransferDst     = 1 << 6,
+    AccelStruct     = 1 << 7,  // 加速结构存储（VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR）
+    ShaderBindingTable = 1 << 8,  // SBT（VK_BUFFER_USAGE_SHADER_BINDING_TABLE_BIT_KHR）
 };
 
 enum class MemoryType {
@@ -134,7 +135,37 @@ struct BlendState { std::vector<BlendAttachment> attachments; };
 struct PushConstantRange { ShaderStage stages; uint32_t offset; uint32_t size; };
 
 // ════════════════════════════════════════════════════════════════
-// 布局
+// 管线阶段（用于 barrier）
+// ════════════════════════════════════════════════════════════════
+enum class PipelineStage : uint32_t {
+    None             = 0,
+    VertexShader     = 1 << 0,
+    FragmentShader   = 1 << 1,
+    ComputeShader    = 1 << 2,
+    MeshShader       = 1 << 3,
+    TaskShader       = 1 << 4,
+    RayTracingShader = 1 << 5,
+    Transfer         = 1 << 6,
+    AllCommands      = 0xFFFFFFFF,
+};
+
+// ════════════════════════════════════════════════════════════════
+// Buffer 访问类型（用于 buffer barrier）
+// ════════════════════════════════════════════════════════════════
+enum class BufferAccess : uint32_t {
+    None            = 0,
+    UniformRead     = 1 << 0,  // UBO 读取
+    StorageRead     = 1 << 1,  // SSBO 读取
+    StorageWrite    = 1 << 2,  // SSBO 写入
+    IndexRead       = 1 << 3,  // 索引缓冲读取
+    VertexRead      = 1 << 4,  // 顶点缓冲读取
+    IndirectRead    = 1 << 5,  // 间接绘制参数读取
+    TransferRead    = 1 << 6,  // 传输/复制源
+    TransferWrite   = 1 << 7,  // 传输/复制目标
+};
+
+// ════════════════════════════════════════════════════════════════
+// 纹理布局（用于 texture barrier）
 // ════════════════════════════════════════════════════════════════
 enum class TextureLayout : uint32_t {
     Undefined, General, ShaderReadOnly, ColorAttachment, DepthAttachment,

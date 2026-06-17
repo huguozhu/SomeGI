@@ -1,6 +1,6 @@
 // rhi/vulkan/vk_texture.h
 #pragma once
-#include "../texture.h"
+#include "../base/texture.h"
 #include "vk_device.h"
 
 namespace somegi {
@@ -28,6 +28,13 @@ class VkRHITextureView : public RHITextureView {
 public:
     VkRHITextureView(VkRHIDevice& d) : m_device(d) {}
     static std::unique_ptr<RHITextureView> create(VkRHIDevice& device, const RHITexture& tex, const TextureViewDesc& desc);
+    // 非拥有型包装：析构时不销毁 VkImageView（用于 FGResources 资源池包装）
+    static std::unique_ptr<RHITextureView> createNonOwning(VkRHIDevice& device, VkImageView view) {
+        auto v = std::unique_ptr<VkRHITextureView>(new VkRHITextureView(device));
+        v->m_ownsView = false;
+        v->m_view = view;
+        return v;
+    }
     ~VkRHITextureView() override;
     void* nativeHandle() const override { return (void*)m_view; }
     void setView(VkImageView v) { m_view = v; }
@@ -35,6 +42,7 @@ public:
 private:
     VkRHIDevice& m_device;
     VkImageView m_view = VK_NULL_HANDLE;
+    bool m_ownsView = true;
 };
 
 } // namespace rhi
