@@ -107,11 +107,18 @@ void VkRHIDescSet::write(const std::vector<DescriptorWrite>& writes) {
     std::vector<VkDescriptorBufferInfo> bufferInfos;
     std::vector<VkWriteDescriptorSetAccelerationStructureKHR> asInfos;
 
-    // 预分配容量，防止 push_back 导致 reallocate 使已存入 vkWrites 的指针悬空
+    // 预计算总容量（含纹理数组），防止 resize/reallocate 导致指针悬空
+    size_t totalImages = 0, totalBuffers = 0, totalAS = 0;
+    for (auto& w : writes) {
+        if (w.textureArrayCount > 0) totalImages += w.textureArrayCount;
+        else if (w.textureView || w.sampler) totalImages += 1;
+        if (w.buffer) totalBuffers += 1;
+        if (w.accelerationStructure) totalAS += 1;
+    }
     vkWrites.reserve(writes.size());
-    imageInfos.reserve(writes.size());
-    bufferInfos.reserve(writes.size());
-    asInfos.reserve(writes.size());
+    imageInfos.reserve(totalImages);
+    bufferInfos.reserve(totalBuffers);
+    asInfos.reserve(totalAS);
 
     for (auto& w : writes) {
         VkWriteDescriptorSet vw{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
