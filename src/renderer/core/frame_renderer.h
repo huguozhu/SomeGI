@@ -126,6 +126,7 @@ public:
     GtgiPass&            gtgi()        { return m_gtgi; }
     SkyboxPass&          skybox()      { return m_skybox; }
     TonemapPass&         tonemap()     { return m_tonemap; }
+    rhi::RHIDevice*       rhiDevice()   { return m_rhiDevice.get(); }
     TaaPass&             taa()         { return m_taa; }
     SmaaPass&            smaa()        { return m_smaa; }
     ImGuiPass&           imgui()       { return m_imgui; }

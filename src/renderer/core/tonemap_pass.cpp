@@ -1,128 +1,91 @@
+// TonemapPass RHI 实现 — 描述符 set=0 (3 bindings):
+//   0: hdrColor (sampled image)
+//   1: sampler  (linear clamp)
+//   2: outLdr   (storage image)
+// push constant: TonemapPC (16 bytes, hdrMode + exposure)
+
 #include "renderer/core/tonemap_pass.h"
-#include "core/device.h"
+#include "rhi/base/device.h"
+#include "rhi/base/descriptor.h"
+#include "rhi/base/pipeline_state.h"
+#include "rhi/base/command_buffer.h"
+#include "rhi/vulkan/vk_device.h"
+#include "rhi/vulkan/vk_shader.h"
+#include "rhi/vulkan/vk_texture.h"
+#include "rhi/vulkan/vk_command.h"
+#include "core/shader.h"
 #include <array>
 
 namespace somegi {
 
-namespace {
-struct TonemapPC {
-    uint32_t hdrMode;
-    float    exposure;
-    uint32_t pad0, pad1;
-};
-static_assert(sizeof(TonemapPC) == 16, "TonemapPC must match shader push constant layout");
-}
+namespace { struct TonemapPC { uint32_t hdrMode; float exposure; uint32_t pad0, pad1; };
+static_assert(sizeof(TonemapPC) == 16); }
 
-void TonemapPass::init(Device& d, VkSampler linearSampler) {
-    m_device = &d;
+TonemapPass::~TonemapPass() = default;
+
+void TonemapPass::init(rhi::RHIDevice& d, VkSampler linearSampler) {
+    m_rhiDevice = &d;
     m_sampler = linearSampler;
+    auto& vkDevice = static_cast<rhi::VkRHIDevice&>(d);
 
-    std::array<VkDescriptorSetLayoutBinding, 3> b{};
-    b[0] = {0, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
-    b[1] = {1, VK_DESCRIPTOR_TYPE_SAMPLER,       1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
-    b[2] = {2, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
+    rhi::DescSetLayoutDesc layoutDesc; layoutDesc.debugName = "Tonemap";
+    layoutDesc.bindings = {
+        {0, rhi::DescriptorType::SampledImage, 1, rhi::ShaderStage::Compute},
+        {1, rhi::DescriptorType::Sampler,       1, rhi::ShaderStage::Compute},
+        {2, rhi::DescriptorType::StorageImage,  1, rhi::ShaderStage::Compute},
+    };
+    m_setLayout = d.createDescriptorSetLayout(layoutDesc);
+    for (auto& s : m_sets) s = d.createDescriptorSet(*m_setLayout);
 
-    VkDescriptorSetLayoutCreateInfo li{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-    li.bindingCount = (uint32_t)b.size(); li.pBindings = b.data();
-    VK_CHECK(vkCreateDescriptorSetLayout(d.device(), &li, nullptr, &m_setLayout));
+    rhi::ShaderDesc sd; sd.stage = rhi::ShaderStage::Compute; sd.entryPoint = "cs_main";
+    auto shader = rhi::VkRHIShader::createFromFile(vkDevice, sd, shaderDir() / "tonemap" / "tonemap.spv");
 
-    VkPushConstantRange pc{VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(TonemapPC)};
-    VkPipelineLayoutCreateInfo plci{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
-    plci.setLayoutCount = 1; plci.pSetLayouts = &m_setLayout;
-    plci.pushConstantRangeCount = 1; plci.pPushConstantRanges = &pc;
-    VK_CHECK(vkCreatePipelineLayout(d.device(), &plci, nullptr, &m_pipelineLayout));
-
-    auto sd = shaderDir();
-    ShaderModule cs(d, sd / "tonemap" / "tonemap.spv");
-
-    VkPipelineShaderStageCreateInfo stage{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
-    stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
-    stage.module = cs.handle();
-    stage.pName = "cs_main";
-
-    VkComputePipelineCreateInfo cpci{VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
-    cpci.stage = stage;
-    cpci.layout = m_pipelineLayout;
-    VK_CHECK(vkCreateComputePipelines(d.device(), VK_NULL_HANDLE, 1, &cpci, nullptr, &m_pipeline));
-
-    std::array<VkDescriptorPoolSize, 3> ps{{
-        {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1u * kFramesInFlight},
-        {VK_DESCRIPTOR_TYPE_SAMPLER,       1u * kFramesInFlight},
-        {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1u * kFramesInFlight},
-    }};
-    VkDescriptorPoolCreateInfo pci{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
-    pci.maxSets = kFramesInFlight; pci.poolSizeCount = (uint32_t)ps.size(); pci.pPoolSizes = ps.data();
-    VK_CHECK(vkCreateDescriptorPool(d.device(), &pci, nullptr, &m_pool));
-
-    VkDescriptorSetLayout layouts[] = {m_setLayout, m_setLayout};
-    VkDescriptorSetAllocateInfo dai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
-    dai.descriptorPool = m_pool; dai.descriptorSetCount = kFramesInFlight; dai.pSetLayouts = layouts;
-    VK_CHECK(vkAllocateDescriptorSets(d.device(), &dai, m_sets));
+    rhi::ComputePSODesc psoDesc; psoDesc.debugName = "Tonemap";
+    psoDesc.computeShader = shader.get();
+    psoDesc.descriptorSetLayouts = {m_setLayout.get()};
+    psoDesc.pushConstants = {{rhi::ShaderStage::Compute, 0, sizeof(TonemapPC)}};
+    m_pipeline = d.createComputePSO(psoDesc);
 }
 
 void TonemapPass::destroy() {
-    if (!m_device) return;
-    auto dev = m_device->device();
-    if (m_pool) vkDestroyDescriptorPool(dev, m_pool, nullptr);
-    if (m_pipeline) vkDestroyPipeline(dev, m_pipeline, nullptr);
-    if (m_pipelineLayout) vkDestroyPipelineLayout(dev, m_pipelineLayout, nullptr);
-    if (m_setLayout) vkDestroyDescriptorSetLayout(dev, m_setLayout, nullptr);
-    m_device = nullptr;
+    for (auto& s : m_sets) s.reset();
+    m_pipeline.reset(); m_setLayout.reset(); m_rhiDevice = nullptr;
 }
 
-void TonemapPass::bindOutput(Device& d, VkImageView outView, uint32_t frameIdx) {
-    VkDescriptorImageInfo ldrInfo{};
-    ldrInfo.imageView = outView;
-    ldrInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-
-    VkWriteDescriptorSet w{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-    w.dstSet = m_sets[frameIdx]; w.dstBinding = 2; w.descriptorCount = 1;
-    w.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE; w.pImageInfo = &ldrInfo;
-    vkUpdateDescriptorSets(d.device(), 1, &w, 0, nullptr);
+void TonemapPass::bindOutput(VkImageView outView, uint32_t frameIdx) {
+    if (!m_sets[frameIdx]) return;
+    auto& vkD = static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
+    auto ao = rhi::VkRHITextureView::createNonOwning(vkD, outView);
+    m_sets[frameIdx]->write({{2, rhi::DescriptorType::StorageImage, ao.get()}});
 }
 
-void TonemapPass::bindTargets(Device& d, const RenderTargets& rt) {
-    VkDescriptorImageInfo hdrInfo{};
-    hdrInfo.imageView = rt.hdrColor.view();
-    hdrInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-
-    VkDescriptorImageInfo sampInfo{};
-    sampInfo.sampler = m_sampler;
-
-    VkDescriptorImageInfo ldrInfo{};
-    ldrInfo.imageView = rt.ldrTonemap.view();
-    ldrInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-
-    for (uint32_t fi = 0; fi < kFramesInFlight; ++fi) {
-        std::array<VkWriteDescriptorSet, 3> w{};
-        w[0] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-        w[0].dstSet = m_sets[fi]; w[0].dstBinding = 0; w[0].descriptorCount = 1;
-        w[0].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE; w[0].pImageInfo = &hdrInfo;
-        w[1] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-        w[1].dstSet = m_sets[fi]; w[1].dstBinding = 1; w[1].descriptorCount = 1;
-        w[1].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER; w[1].pImageInfo = &sampInfo;
-        w[2] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-        w[2].dstSet = m_sets[fi]; w[2].dstBinding = 2; w[2].descriptorCount = 1;
-        w[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE; w[2].pImageInfo = &ldrInfo;
-        vkUpdateDescriptorSets(d.device(), (uint32_t)w.size(), w.data(), 0, nullptr);
-    }
+void TonemapPass::bindTargets(const RenderTargets& rt) {
+    auto& vkD = static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
+    auto hdrView = rhi::VkRHITextureView::createNonOwning(vkD, rt.hdrColor.view());
+    auto ldrView = rhi::VkRHITextureView::createNonOwning(vkD, rt.ldrTonemap.view());
+    for (uint32_t fi = 0; fi < 2; ++fi)
+        m_sets[fi]->write({
+            {0, rhi::DescriptorType::SampledImage, hdrView.get()},
+            {1, rhi::DescriptorType::Sampler, nullptr, nullptr, 0, 0, (const void*)(uintptr_t)m_sampler},
+            {2, rhi::DescriptorType::StorageImage, ldrView.get()},
+        });
 }
 
-void TonemapPass::record(VkCommandBuffer cmd, const RenderTargets& rt, uint32_t frameIdx,
+void TonemapPass::record(rhi::RHICommandBuffer& cmd, const RenderTargets& rt, uint32_t fi,
                           bool hdrMode, float exposure) {
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipeline);
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
-                            m_pipelineLayout, 0, 1, &m_sets[frameIdx], 0, nullptr);
-
-    TonemapPC tpc{};
-    tpc.hdrMode = hdrMode ? 1u : 0u;
-    tpc.exposure = exposure;
-    vkCmdPushConstants(cmd, m_pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT,
-                       0, sizeof(tpc), &tpc);
-
-    uint32_t gx = (rt.extent.width  + 7) / 8;
-    uint32_t gy = (rt.extent.height + 7) / 8;
-    vkCmdDispatch(cmd, gx, gy, 1);
+    if (!m_pipeline || !m_sets[fi]) return;
+    cmd.bindPipelineState(*m_pipeline);
+    cmd.bindDescriptorSet(0, *m_sets[fi]);
+    TonemapPC pc{};
+    pc.hdrMode = hdrMode ? 1u : 0u; pc.exposure = exposure;
+    cmd.pushConstants(rhi::ShaderStage::Compute, &pc, sizeof(pc));
+    cmd.dispatch((rt.extent.width+7)/8, (rt.extent.height+7)/8, 1);
 }
 
+void TonemapPass::record(VkCommandBuffer vkCmd, const RenderTargets& rt, uint32_t fi,
+                          bool hdrMode, float exposure) {
+    rhi::VkRHICommandBuffer rhiCmd(static_cast<rhi::VkRHIDevice&>(*m_rhiDevice), vkCmd);
+    record(rhiCmd, rt, fi, hdrMode, exposure);
 }
+
+} // namespace somegi

@@ -278,7 +278,7 @@ void FrameRenderer::onResize(Device& d, VkExtent2D newExtent,
         m_lumenAtlasInited = false;
         m_lumenOutInited = false;
     }
-    m_tonemap.bindTargets(d, m_rt);
+    m_tonemap.bindTargets(m_rt);
     bootstrapHdrPrev();
     bootstrapSsgiTemporal();
 }

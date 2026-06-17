@@ -348,8 +348,8 @@ App::App() {
     applyShadowSelection();
 
     // Tonemap with scene sampler
-    m_renderer.tonemap().init(*m_device, m_sceneGpu.linearSampler);
-    m_renderer.tonemap().bindTargets(*m_device, m_renderer.rt());
+    m_renderer.tonemap().init(*m_renderer.rhiDevice(), m_sceneGpu.linearSampler);
+    m_renderer.tonemap().bindTargets(m_renderer.rt());
 
     std::printf("[init] all set up, entering main loop.\n");
     } catch (...) {
@@ -511,8 +511,8 @@ void App::applySceneSelection() {
     if (m_sceneIndexApplied >= 0) {
         // Tonemap pass cached the old sampler; old one was destroyed above.
         m_renderer.tonemap().destroy();
-        m_renderer.tonemap().init(*m_device, m_sceneGpu.linearSampler);
-        m_renderer.tonemap().bindTargets(*m_device, m_renderer.rt());
+        m_renderer.tonemap().init(*m_renderer.rhiDevice(), m_sceneGpu.linearSampler);
+        m_renderer.tonemap().bindTargets(m_renderer.rt());
         if (m_aaMethod == AAMethod::TAA || m_aaMethod == AAMethod::SMAA) {
             m_renderer.rt().ensureAaResources(*m_device);
             m_renderer.taa().bindResources(*m_device, m_renderer.rt(), 0);
@@ -730,7 +730,7 @@ void App::startBenchmark() {
                 m_renderer.aaHistoryNeedsInit() = true;
             } else {
                 m_renderer.rt().destroyAaResources();
-                m_renderer.tonemap().bindOutput(*m_device, m_renderer.rt().ldrTonemap.view(), 0);
+                m_renderer.tonemap().bindOutput(m_renderer.rt().ldrTonemap.view(), 0);
             }
         }
         // AO
@@ -756,7 +756,7 @@ void App::tickBenchmark(float dt) {
                 m_renderer.aaHistoryNeedsInit() = true;
             } else {
                 m_renderer.rt().destroyAaResources();
-                m_renderer.tonemap().bindOutput(*m_device, m_renderer.rt().ldrTonemap.view(), 0);
+                m_renderer.tonemap().bindOutput(m_renderer.rt().ldrTonemap.view(), 0);
             }
         }
         m_aoMethod = (AOMethod)ao;
@@ -815,7 +815,7 @@ void App::onSwapchainResized() {
                                              m_renderer.gbuffer().frameUboHandle(), true);
         }
     }
-    m_renderer.tonemap().bindTargets(*m_device, m_renderer.rt());
+    m_renderer.tonemap().bindTargets(m_renderer.rt());
     // AA resources were destroyed by m_renderer.rt().destroy(), recreate if needed
     if (m_aaMethod == AAMethod::TAA || m_aaMethod == AAMethod::SMAA) {
         m_renderer.rt().ensureAaResources(*m_device);
@@ -1225,7 +1225,7 @@ void App::buildUI() {
                                 m_renderer.smaa().bindResources(*m_device, m_renderer.rt());
                             } else {
                                 m_renderer.rt().destroyAaResources();
-                                m_renderer.tonemap().bindOutput(*m_device, m_renderer.rt().ldrTonemap.view(), 0);
+                                m_renderer.tonemap().bindOutput(m_renderer.rt().ldrTonemap.view(), 0);
                             }
                         }
                     }
@@ -3409,7 +3409,7 @@ void App::recordPostProcessing(VkCommandBuffer cmd) {
                     VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
                     VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
                     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
-                m_renderer.tonemap().bindOutput(*m_device, m_renderer.rt().aaHdr.view(), m_frameCtx.frameInFlight);
+                m_renderer.tonemap().bindOutput(m_renderer.rt().aaHdr.view(), m_frameCtx.frameInFlight);
                 m_renderer.tonemap().record(cmd, m_renderer.rt(), m_frameCtx.frameInFlight, true, 1.0f);
                 writeTimestamp(cmd, m_renderer.kTsTonemap);
 
@@ -3465,7 +3465,7 @@ void App::recordPostProcessing(VkCommandBuffer cmd) {
                 VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
                 VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
                 VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
-            m_renderer.tonemap().bindOutput(*m_device, m_frameCtx.swapView, m_frameCtx.frameInFlight);
+            m_renderer.tonemap().bindOutput(m_frameCtx.swapView, m_frameCtx.frameInFlight);
             m_renderer.tonemap().record(cmd, m_renderer.rt(), m_frameCtx.frameInFlight, true, 1.0f);
             writeTimestamp(cmd, m_renderer.kTsTonemap);
             writeTimestamp(cmd, m_renderer.kTsAA);
@@ -3486,7 +3486,7 @@ void App::recordPostProcessing(VkCommandBuffer cmd) {
                 VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
                 VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
                 VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
-            m_renderer.tonemap().bindOutput(*m_device, m_renderer.rt().aaHdr.view(), m_frameCtx.frameInFlight);
+            m_renderer.tonemap().bindOutput(m_renderer.rt().aaHdr.view(), m_frameCtx.frameInFlight);
             m_renderer.tonemap().record(cmd, m_renderer.rt(), m_frameCtx.frameInFlight);
             writeTimestamp(cmd, m_renderer.kTsTonemap);
 
@@ -3561,7 +3561,7 @@ void App::recordPostProcessing(VkCommandBuffer cmd) {
                 VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
                 VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
                 VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
-            m_renderer.tonemap().bindOutput(*m_device, m_renderer.rt().ldrTonemap.view(), m_frameCtx.frameInFlight);
+            m_renderer.tonemap().bindOutput(m_renderer.rt().ldrTonemap.view(), m_frameCtx.frameInFlight);
             m_renderer.tonemap().record(cmd, m_renderer.rt(), m_frameCtx.frameInFlight);
             writeTimestamp(cmd, m_renderer.kTsTonemap);
             writeTimestamp(cmd, m_renderer.kTsAA);
@@ -4995,7 +4995,7 @@ void App::setupFrameGraph() {
             b.write(m_fgh.aaHdr);
             b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
                 m_renderer.rt().ensureAaResources(*m_device);
-                m_renderer.tonemap().bindOutput(*m_device, m_renderer.rt().aaHdr.view(), m_frameCtx.frameInFlight);
+                m_renderer.tonemap().bindOutput(m_renderer.rt().aaHdr.view(), m_frameCtx.frameInFlight);
                 m_renderer.tonemap().record(cmd, m_renderer.rt(), m_frameCtx.frameInFlight, true, 1.0f);
             });
         });
