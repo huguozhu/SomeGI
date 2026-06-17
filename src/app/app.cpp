@@ -515,7 +515,7 @@ void App::applySceneSelection() {
         m_renderer.tonemap().bindTargets(m_renderer.rt());
         if (m_aaMethod == AAMethod::TAA || m_aaMethod == AAMethod::SMAA) {
             m_renderer.rt().ensureAaResources(*m_device);
-            m_renderer.taa().bindResources(*m_device, m_renderer.rt(), 0);
+            m_renderer.taa().bindResources(m_renderer.rt(), 0);
             m_renderer.smaa().bindResources(*m_device, m_renderer.rt());
         }
     }
@@ -725,7 +725,7 @@ void App::startBenchmark() {
             m_aaMethod = newAa;
             if (m_aaMethod == AAMethod::TAA || m_aaMethod == AAMethod::SMAA) {
                 m_renderer.rt().ensureAaResources(*m_device);
-                m_renderer.taa().bindResources(*m_device, m_renderer.rt(), 0);
+                m_renderer.taa().bindResources(m_renderer.rt(), 0);
                 m_renderer.smaa().bindResources(*m_device, m_renderer.rt());
                 m_renderer.aaHistoryNeedsInit() = true;
             } else {
@@ -751,7 +751,7 @@ void App::tickBenchmark(float dt) {
             m_aaMethod = newAa;
             if (m_aaMethod == AAMethod::TAA || m_aaMethod == AAMethod::SMAA) {
                 m_renderer.rt().ensureAaResources(*m_device);
-                m_renderer.taa().bindResources(*m_device, m_renderer.rt(), 0);
+                m_renderer.taa().bindResources(m_renderer.rt(), 0);
                 m_renderer.smaa().bindResources(*m_device, m_renderer.rt());
                 m_renderer.aaHistoryNeedsInit() = true;
             } else {
@@ -819,7 +819,7 @@ void App::onSwapchainResized() {
     // AA resources were destroyed by m_renderer.rt().destroy(), recreate if needed
     if (m_aaMethod == AAMethod::TAA || m_aaMethod == AAMethod::SMAA) {
         m_renderer.rt().ensureAaResources(*m_device);
-        m_renderer.taa().bindResources(*m_device, m_renderer.rt(), 0);
+        m_renderer.taa().bindResources(m_renderer.rt(), 0);
         m_renderer.smaa().destroy();
         m_renderer.smaa().init(*m_device, m_swap->extent());
         m_renderer.smaa().bindResources(*m_device, m_renderer.rt());
@@ -1221,7 +1221,7 @@ void App::buildUI() {
                             m_aaMethod = (AAMethod)i;
                             if (m_aaMethod == AAMethod::TAA || m_aaMethod == AAMethod::SMAA) {
                                 m_renderer.rt().ensureAaResources(*m_device);
-                                m_renderer.taa().bindResources(*m_device, m_renderer.rt(), 0);
+                                m_renderer.taa().bindResources(m_renderer.rt(), 0);
                                 m_renderer.smaa().bindResources(*m_device, m_renderer.rt());
                             } else {
                                 m_renderer.rt().destroyAaResources();
@@ -3425,8 +3425,8 @@ void App::recordPostProcessing(VkCommandBuffer cmd) {
                     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
 
                 if (m_aaMethod == AAMethod::TAA) {
-                    m_renderer.taa().bindResources(*m_device, m_renderer.rt(), m_frameCtx.frameInFlight);
-                    m_renderer.taa().bindOutput(*m_device, m_frameCtx.swapView, m_frameCtx.frameInFlight);
+                    m_renderer.taa().bindResources(m_renderer.rt(), m_frameCtx.frameInFlight);
+                    m_renderer.taa().bindOutput(m_frameCtx.swapView, m_frameCtx.frameInFlight);
                     m_renderer.taa().record(cmd, m_renderer.rt(), m_jitter, m_prevJitter,
                                 m_frameCtx.invViewProj, m_prevViewProj, m_frameCtx.frameInFlight, m_taaBlendAlpha);
                     // Copy aaHdr → aaHistory for next frame
@@ -3515,7 +3515,7 @@ void App::recordPostProcessing(VkCommandBuffer cmd) {
                     VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT,
                     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                     VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
-                m_renderer.taa().bindResources(*m_device, m_renderer.rt(), m_frameCtx.frameInFlight);
+                m_renderer.taa().bindResources(m_renderer.rt(), m_frameCtx.frameInFlight);
                 m_renderer.taa().record(cmd, m_renderer.rt(), m_jitter, m_prevJitter,
                             m_frameCtx.invViewProj, m_prevViewProj, m_frameCtx.frameInFlight, m_taaBlendAlpha);
 
@@ -5010,8 +5010,8 @@ void App::setupFrameGraph() {
                 b.read(m_fgh.depth, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
                 b.write(m_fgh.swapImage, VK_IMAGE_LAYOUT_GENERAL);
                 b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
-                    m_renderer.taa().bindResources(*m_device, m_renderer.rt(), m_frameCtx.frameInFlight);
-                    m_renderer.taa().bindOutput(*m_device, m_frameCtx.swapView, m_frameCtx.frameInFlight);
+                    m_renderer.taa().bindResources(m_renderer.rt(), m_frameCtx.frameInFlight);
+                    m_renderer.taa().bindOutput(m_frameCtx.swapView, m_frameCtx.frameInFlight);
                     m_renderer.taa().record(cmd, m_renderer.rt(), m_jitter, m_prevJitter,
                         m_frameCtx.invViewProj, m_prevViewProj, m_frameCtx.frameInFlight, m_taaBlendAlpha);
                 });

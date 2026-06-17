@@ -181,7 +181,7 @@ void FrameRenderer::init(Device& d, VkCommandPool pool, VkExtent2D extent,
     std::printf("[init] tonemap pass...\n");
     // linearSampler comes from SceneGpu — caller sets after scene load
     std::printf("[init] aa passes...\n");
-    m_taa.init(d);
+    m_taa.init(*m_rhiDevice);
     m_smaa.init(d, extent);
     std::printf("[init] imgui pass...\n");
 
