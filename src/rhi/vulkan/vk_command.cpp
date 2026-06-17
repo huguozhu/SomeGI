@@ -225,14 +225,14 @@ void VkRHICommandBuffer::bufferBarrier(const RHIBuffer& buf,
     vkCmdPipelineBarrier2(m_cmd, &di);
 }
 
-void VkRHICommandBuffer::beginRendering(const RHITextureView* colorViews, uint32_t colorCount,
+void VkRHICommandBuffer::beginRendering(const RHITextureView* const* colorViews, uint32_t colorCount,
                                          const RHITextureView* depthView, uint32_t width, uint32_t height,
                                          bool loadOnly) {
     VkAttachmentLoadOp loadOp = loadOnly ? VK_ATTACHMENT_LOAD_OP_LOAD : VK_ATTACHMENT_LOAD_OP_CLEAR;
     std::vector<VkRenderingAttachmentInfo> colors(colorCount);
     for (uint32_t i = 0; i < colorCount; ++i) {
         colors[i] = {VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
-        colors[i].imageView = (VkImageView)(uintptr_t)colorViews[i].nativeHandle();
+        colors[i].imageView = (VkImageView)(uintptr_t)colorViews[i]->nativeHandle();
         colors[i].imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
         colors[i].loadOp = loadOp;
         colors[i].storeOp = VK_ATTACHMENT_STORE_OP_STORE;

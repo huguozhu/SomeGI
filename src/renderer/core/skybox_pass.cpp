@@ -125,7 +125,8 @@ void SkyboxPass::record(rhi::RHICommandBuffer& cmd, const RenderTargets& rt) {
     // ── beginRendering ──
     auto colorView = rhi::VkRHITextureView::createNonOwning(vkDevice, rt.hdrColor.view());
     auto depthView = rhi::VkRHITextureView::createNonOwning(vkDevice, rt.depth.view());
-    cmd.beginRendering(colorView.get(), 1, depthView.get(), rt.extent.width, rt.extent.height, true);
+    const rhi::RHITextureView* cv = colorView.get();
+    cmd.beginRendering(&cv, 1, depthView.get(), rt.extent.width, rt.extent.height, true);
 
     cmd.setViewport(0, 0, (float)rt.extent.width, (float)rt.extent.height);
     cmd.setScissor(0, 0, rt.extent.width, rt.extent.height);

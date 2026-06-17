@@ -61,7 +61,7 @@ void FrameRenderer::init(Device& d, VkCommandPool pool, VkExtent2D extent,
     std::printf("[init] forward pass...\n");
     m_forward.init(d, VK_FORMAT_R16G16B16A16_SFLOAT, VK_FORMAT_D32_SFLOAT, 128);
     std::printf("[init] rsm geometry pass...\n");
-    m_rsmGeom.init(d, 128);
+    m_rsmGeom.init(d, *m_rhiDevice, 128);
     std::printf("[init] rsm sample pass...\n");
     m_rsmSample.init(*m_rhiDevice);
 
@@ -286,7 +286,7 @@ void FrameRenderer::onResize(Device& d, VkExtent2D newExtent,
 void FrameRenderer::bindScenePasses(Device& d, const SceneGpu& gpu, uint32_t textureCount) {
     m_gbuffer.bindScene(d, gpu, textureCount);
     m_forward.bindScene(d, gpu, textureCount);
-    m_rsmGeom.bindScene(d, gpu, textureCount);
+    m_rsmGeom.bindScene(gpu, textureCount);
     m_vxgiVoxelize.bindScene(gpu, textureCount, m_vxgi);
 }
 
