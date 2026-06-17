@@ -150,8 +150,8 @@ void FrameRenderer::init(Device& d, VkCommandPool pool, VkExtent2D extent,
     m_vxgiVoxelize.init(d, 128);
     m_vxgiInject.init(d, RsmGeometryPass::kRsmSize);
     m_vxgiInject.bindResources(d, m_rsmGeom.position(), m_rsmGeom.flux(), m_vxgi);
-    m_vxgiMipmap.init(d, m_vxgi.mipLevels());
-    m_vxgiMipmap.bindResources(d, m_vxgi);
+    m_vxgiMipmap.init(*m_rhiDevice, m_vxgi.mipLevels());
+    m_vxgiMipmap.bindResources(m_vxgi);
     m_vxgiAniso.init(d, m_vxgi.mipLevels());
     m_vxgiAniso.bindResources(d, m_vxgi);
     m_vxgiRelight.init(d);
