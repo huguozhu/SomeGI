@@ -85,6 +85,12 @@ void VkRHIDescSet::write(const std::vector<DescriptorWrite>& writes) {
     std::vector<VkDescriptorBufferInfo> bufferInfos;
     std::vector<VkWriteDescriptorSetAccelerationStructureKHR> asInfos;
 
+    // 预分配容量，防止 push_back 导致 reallocate 使已存入 vkWrites 的指针悬空
+    vkWrites.reserve(writes.size());
+    imageInfos.reserve(writes.size());
+    bufferInfos.reserve(writes.size());
+    asInfos.reserve(writes.size());
+
     for (auto& w : writes) {
         VkWriteDescriptorSet vw{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
         vw.dstSet = m_set;
