@@ -52,7 +52,8 @@ public:
     virtual void pushConstants(ShaderStage stage, const void* data, uint32_t size, uint32_t offset = 0) = 0;
 
     // ── 顶点 / 索引 ──
-    virtual void bindVertexBuffer(const RHIBuffer& buffer, uint64_t offset = 0) = 0;
+    virtual void bindVertexBuffer(uint32_t binding, const RHIBuffer& buffer,
+                                  uint64_t offset = 0, uint64_t stride = 0) = 0;
     virtual void bindIndexBuffer(const RHIBuffer& buffer, uint64_t offset = 0, bool uint16 = true) = 0;
 
     // ── Draw ──
@@ -60,6 +61,10 @@ public:
     virtual void drawIndexed(uint32_t indexCount, uint32_t firstIndex = 0, int32_t vertexOffset = 0) = 0;
     virtual void drawIndirect(const RHIBuffer& buffer, uint64_t offset, uint32_t drawCount, uint32_t stride) = 0;
     virtual void drawIndexedIndirect(const RHIBuffer& buffer, uint64_t offset, uint32_t drawCount, uint32_t stride) = 0;
+    // GPU-driven: draw count 来自 countBuffer（vkCmdDrawIndexedIndirectCount）
+    virtual void drawIndexedIndirectCount(const RHIBuffer& buffer, uint64_t offset,
+                                          const RHIBuffer& countBuffer, uint64_t countOffset,
+                                          uint32_t maxDrawCount, uint32_t stride) = 0;
     virtual void drawMeshTasks(uint32_t groupX, uint32_t groupY = 1, uint32_t groupZ = 1) = 0;
     virtual void drawMeshTasksIndirect(const RHIBuffer& buffer, uint64_t offset,
                                        uint32_t drawCount, uint32_t stride) = 0;
@@ -72,6 +77,7 @@ public:
     virtual void copyBuffer(const RHIBuffer& src, const RHIBuffer& dst, uint64_t size,
                             uint64_t srcOffset = 0, uint64_t dstOffset = 0) = 0;
     virtual void copyTexture(const RHITexture& src, const RHITexture& dst) = 0;
+    virtual void fillBuffer(const RHIBuffer& dst, uint64_t offset, uint64_t size, uint32_t data) = 0;
     // clearColor/clearDepth 需要 VkImage（非 VkImageView），因此接受 RHITexture
     virtual void clearColor(const RHITexture& tex, float r, float g, float b, float a) = 0;
     virtual void clearDepth(const RHITexture& tex, float depth, uint32_t stencil = 0) = 0;

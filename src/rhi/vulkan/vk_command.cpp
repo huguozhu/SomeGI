@@ -120,10 +120,12 @@ void VkRHICommandBuffer::pushConstants(ShaderStage stage, const void* data, uint
     vkCmdPushConstants(m_cmd, m_boundLayout, VK_SHADER_STAGE_ALL, offset, size, data);
 }
 
-void VkRHICommandBuffer::bindVertexBuffer(const RHIBuffer& buffer, uint64_t offset) {
+void VkRHICommandBuffer::bindVertexBuffer(uint32_t binding, const RHIBuffer& buffer,
+                                          uint64_t offset, uint64_t stride) {
+    (void)stride;
     VkBuffer b = (VkBuffer)(uintptr_t)buffer.nativeHandle();
     VkDeviceSize o = (VkDeviceSize)offset;
-    vkCmdBindVertexBuffers(m_cmd, 0, 1, &b, &o);
+    vkCmdBindVertexBuffers(m_cmd, binding, 1, &b, &o);
 }
 void VkRHICommandBuffer::bindIndexBuffer(const RHIBuffer& buffer, uint64_t offset, bool uint16) {
     vkCmdBindIndexBuffer(m_cmd, (VkBuffer)(uintptr_t)buffer.nativeHandle(), offset, uint16 ? VK_INDEX_TYPE_UINT16 : VK_INDEX_TYPE_UINT32);
@@ -136,6 +138,13 @@ void VkRHICommandBuffer::drawIndirect(const RHIBuffer& buf, uint64_t off, uint32
 }
 void VkRHICommandBuffer::drawIndexedIndirect(const RHIBuffer& buf, uint64_t off, uint32_t dc, uint32_t stride) {
     vkCmdDrawIndexedIndirect(m_cmd, (VkBuffer)(uintptr_t)buf.nativeHandle(), off, dc, stride);
+}
+void VkRHICommandBuffer::drawIndexedIndirectCount(const RHIBuffer& buf, uint64_t off,
+                                                   const RHIBuffer& countBuf, uint64_t countOff,
+                                                   uint32_t maxDraws, uint32_t stride) {
+    vkCmdDrawIndexedIndirectCount(m_cmd, (VkBuffer)(uintptr_t)buf.nativeHandle(), off,
+                                  (VkBuffer)(uintptr_t)countBuf.nativeHandle(), countOff,
+                                  maxDraws, stride);
 }
 void VkRHICommandBuffer::drawMeshTasks(uint32_t gx, uint32_t gy, uint32_t gz) {
     m_device.dispatch().cmdDrawMeshTasksEXT(m_cmd, gx, gy, gz);
@@ -160,6 +169,9 @@ void VkRHICommandBuffer::copyTexture(const RHITexture& src, const RHITexture& ds
     region.extent = {src.width(), src.height(), 1};
     vkCmdCopyImage(m_cmd, (VkImage)(uintptr_t)src.nativeHandle(), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                    (VkImage)(uintptr_t)dst.nativeHandle(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+}
+void VkRHICommandBuffer::fillBuffer(const RHIBuffer& dst, uint64_t offset, uint64_t size, uint32_t data) {
+    vkCmdFillBuffer(m_cmd, (VkBuffer)(uintptr_t)dst.nativeHandle(), offset, size, data);
 }
 void VkRHICommandBuffer::clearColor(const RHITexture& tex, float r, float g, float b, float a) {
     VkClearColorValue cv{r, g, b, a};

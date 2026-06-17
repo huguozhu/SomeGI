@@ -43,7 +43,8 @@ public:
     void pushConstants(ShaderStage stage, const void* data, uint32_t size, uint32_t offset = 0) override;
 
     // 顶点 / 索引
-    void bindVertexBuffer(const RHIBuffer& buffer, uint64_t offset = 0) override;
+    void bindVertexBuffer(uint32_t binding, const RHIBuffer& buffer,
+                          uint64_t offset = 0, uint64_t stride = 0) override;
     void bindIndexBuffer(const RHIBuffer& buffer, uint64_t offset = 0, bool uint16 = true) override;
 
     // Draw
@@ -51,6 +52,9 @@ public:
     void drawIndexed(uint32_t indexCount, uint32_t firstIndex = 0, int32_t vertexOffset = 0) override;
     void drawIndirect(const RHIBuffer& buffer, uint64_t offset, uint32_t drawCount, uint32_t stride) override;
     void drawIndexedIndirect(const RHIBuffer& buffer, uint64_t offset, uint32_t drawCount, uint32_t stride) override;
+    void drawIndexedIndirectCount(const RHIBuffer& buffer, uint64_t offset,
+                                  const RHIBuffer& countBuffer, uint64_t countOffset,
+                                  uint32_t maxDrawCount, uint32_t stride) override;
     void drawMeshTasks(uint32_t groupX, uint32_t groupY = 1, uint32_t groupZ = 1) override;
     void drawMeshTasksIndirect(const RHIBuffer& buffer, uint64_t offset,
                                uint32_t drawCount, uint32_t stride) override;
@@ -63,6 +67,7 @@ public:
     void copyBuffer(const RHIBuffer& src, const RHIBuffer& dst, uint64_t size,
                     uint64_t srcOffset = 0, uint64_t dstOffset = 0) override;
     void copyTexture(const RHITexture& src, const RHITexture& dst) override;
+    void fillBuffer(const RHIBuffer& dst, uint64_t offset, uint64_t size, uint32_t data) override;
     void clearColor(const RHITexture& tex, float r, float g, float b, float a) override;
     void clearDepth(const RHITexture& tex, float depth, uint32_t stencil = 0) override;
 
