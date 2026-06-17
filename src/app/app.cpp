@@ -778,7 +778,7 @@ void App::onSwapchainResized() {
     m_renderer.ssgi().bindFrame(m_renderer.rt(), m_renderer.gbuffer().frameUboHandle());
     m_renderer.gtgi().bindFrame(m_renderer.rt(), m_renderer.gbuffer().frameUboHandle());
     // SDFGI trace 也读 rt.gNormalRough/depth/ssgi → resize 后重绑。
-    m_renderer.sdfgiPass().bindResources(*m_device, m_renderer.sdfgi(), m_renderer.vxgi(), m_renderer.rt(), m_renderer.gbuffer().frameUboHandle());
+    m_renderer.sdfgiPass().bindResources(m_renderer.sdfgi(), m_renderer.vxgi(), m_renderer.rt(), m_renderer.gbuffer().frameUboHandle());
     // ReSTIR：reservoir image 跟 swapchain，需重建；lightBuffer 跨帧持久。
     m_renderer.restir().resize(*m_device, m_swap->extent());
     m_renderer.restirPass().bindResources(*m_device, m_renderer.restir(), m_renderer.vxgi(), m_renderer.rt(), m_renderer.gbuffer().frameUboHandle());

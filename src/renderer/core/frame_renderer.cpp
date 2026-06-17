@@ -121,8 +121,8 @@ void FrameRenderer::init(Device& d, VkCommandPool pool, VkExtent2D extent,
 
     std::printf("[init] sdfgi resources/pass...\n");
     m_sdfgi.create(d, kSdfgiResolution);
-    m_sdfgiPass.init(d);
-    m_sdfgiPass.bindResources(d, m_sdfgi, m_vxgi, m_rt, m_gbuffer.frameUboHandle());
+    m_sdfgiPass.init(*m_rhiDevice);
+    m_sdfgiPass.bindResources(m_sdfgi, m_vxgi, m_rt, m_gbuffer.frameUboHandle());
 
     std::printf("[init] restir resources/pass...\n");
     m_restir.create(d, extent, kRestirMaxLights);
@@ -264,7 +264,7 @@ void FrameRenderer::onResize(Device& d, VkExtent2D newExtent,
     m_ssr.bindFrame(m_rt, m_gbuffer.frameUboHandle());
     m_ssgi.bindFrame(m_rt, m_gbuffer.frameUboHandle());
     m_gtgi.bindFrame(m_rt, m_gbuffer.frameUboHandle());
-    m_sdfgiPass.bindResources(d, m_sdfgi, m_vxgi, m_rt, m_gbuffer.frameUboHandle());
+    m_sdfgiPass.bindResources(m_sdfgi, m_vxgi, m_rt, m_gbuffer.frameUboHandle());
     m_restir.resize(d, newExtent);
     m_restirPass.bindResources(d, m_restir, m_vxgi, m_rt, m_gbuffer.frameUboHandle());
     m_restirOutInited = false;
