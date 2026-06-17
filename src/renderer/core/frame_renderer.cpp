@@ -185,8 +185,8 @@ void FrameRenderer::init(Device& d, VkCommandPool pool, VkExtent2D extent,
     m_smaa.init(d, extent);
     std::printf("[init] imgui pass...\n");
 
-    m_cullPass.init(d, 4096);
-    m_hizPass.init(d, extent);
+    m_cullPass.init(d, *m_rhiDevice, 4096);
+    m_hizPass.init(d, *m_rhiDevice, extent);
     registerPipelineSteps();
 
     // Mesh Shader：支持时默认启用

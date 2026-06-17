@@ -1,23 +1,47 @@
+// FrustumCullPass —— 视锥剔除 + Hi-Z 遮挡剔除（单 Compute Pass），已迁移到 RHI。
 #pragma once
-#include "core/vk_common.h"
 #include "core/buffer.h"
 #include <glm/glm.hpp>
+#include <memory>
+#include <vulkan/vulkan.h>
 
 namespace somegi {
+
 class Device;
 struct RenderTargets;
 
+namespace rhi {
+class RHIDevice;
+class RHIDescriptorSetLayout;
+class RHIPipelineState;
+class RHIDescriptorSet;
+class RHIBuffer;
+class RHICommandBuffer;
+}
+
 class FrustumCullPass {
 public:
-    void init(Device& d, uint32_t maxDraws);
+    ~FrustumCullPass();
+    void init(Device& d, rhi::RHIDevice& rhiDevice, uint32_t maxDraws);
     void destroy();
 
-    // Without Hi-Z (Phase 2)
+    // RHI 路径（无 Hi-Z）
+    void record(rhi::RHICommandBuffer& cmd, VkBuffer drawBuf, uint32_t drawCount,
+                VkBuffer indirectOut, VkBuffer countOut,
+                const glm::mat4& vp, VkExtent2D screenSize, uint32_t flightIdx);
+
+    // RHI 路径（含 Hi-Z）
+    void record(rhi::RHICommandBuffer& cmd, VkBuffer drawBuf, uint32_t drawCount,
+                VkBuffer indirectOut, VkBuffer countOut,
+                const glm::mat4& vp, VkExtent2D screenSize, uint32_t flightIdx,
+                VkImageView hizMip1, VkImageView hizMip2,
+                VkImageView hizMip3, VkImageView hizMip4);
+
+    // 兼容 VkCommandBuffer（迁移期间）
     void record(VkCommandBuffer cmd, VkBuffer drawBuf, uint32_t drawCount,
                 VkBuffer indirectOut, VkBuffer countOut,
                 const glm::mat4& vp, VkExtent2D screenSize, uint32_t flightIdx);
 
-    // With Hi-Z (Phase 3): takes Hi-Z mip image views for occlusion test
     void record(VkCommandBuffer cmd, VkBuffer drawBuf, uint32_t drawCount,
                 VkBuffer indirectOut, VkBuffer countOut,
                 const glm::mat4& vp, VkExtent2D screenSize, uint32_t flightIdx,
@@ -26,14 +50,15 @@ public:
 
 private:
     Device* m_device = nullptr;
-    VkDescriptorSetLayout m_dsl = VK_NULL_HANDLE;
-    VkPipelineLayout m_pl = VK_NULL_HANDLE;
-    VkPipeline m_pipe = VK_NULL_HANDLE;
-    VkDescriptorPool m_pool = VK_NULL_HANDLE;
-    VkDescriptorSet m_sets[kFramesInFlight]{};
-    Buffer m_ubo;
+    rhi::RHIDevice* m_rhiDevice = nullptr;
+
+    std::unique_ptr<rhi::RHIDescriptorSetLayout> m_dsl;
+    std::unique_ptr<rhi::RHIPipelineState>       m_pipeline;
+    std::unique_ptr<rhi::RHIDescriptorSet>        m_sets[2];  // double-buffered
+    Buffer m_ubo;  // CullUbo (仍使用 core::Buffer，GPU 可见)
     uint32_t m_maxDraws = 0;
 };
 
 void extractFrustumPlanes(const glm::mat4& vp, glm::vec4 f[6]);
-}
+
+} // namespace somegi
