@@ -77,8 +77,8 @@ void FrameRenderer::init(Device& d, VkCommandPool pool, VkExtent2D extent,
     oneShotSubmit(d, pool, [&](VkCommandBuffer cmd) {
         vkCmdFillBuffer(cmd, m_ddgi.probeStates().handle(), 0, VK_WHOLE_SIZE, 1u);
     });
-    m_ddgiPass.init(d);
-    m_ddgiPass.bindResources(d, m_ddgi, m_vxgi);
+    m_ddgiPass.init(*m_rhiDevice);
+    m_ddgiPass.bindResources(m_ddgi, m_vxgi);
 
     std::printf("[init] ndgi resources + pass...\n");
     m_ndgi.create(d);
