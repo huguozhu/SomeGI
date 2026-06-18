@@ -11,6 +11,7 @@
 #include "rhi/vulkan/vk_texture.h"
 #include "rhi/vulkan/vk_buffer.h"
 #include "rhi/vulkan/vk_command.h"
+#include "rhi/vulkan/vk_sampler.h"
 #include "core/shader.h"
 #include <array>
 #include <cstring>
@@ -36,8 +37,9 @@ void VxgiVoxelizePass::bindScene(const SceneGpu& gpu,uint32_t tc,const VxgiResou
     auto vox=rhi::VkRHITextureView::createNonOwning(vkD,vxgi.mipView(0));
     m_texViews.clear(); m_texViewPtrs.clear(); m_texViews.reserve(m_maxTextures); m_texViewPtrs.reserve(m_maxTextures);
     for(uint32_t i=0;i<m_maxTextures;++i){ VkImageView v=(i<tc&&i<gpu.images.size())?gpu.images[i].view():gpu.whiteTex.view(); m_texViews.push_back(rhi::VkRHITextureView::createNonOwning(vkD,v)); m_texViewPtrs.push_back(m_texViews.back().get()); }
+    auto vxSampler = rhi::VkRHISampler::createNonOwning(vkD, gpu.linearSampler);
     rhi::DescriptorWrite w[6]={};
-    w[0]={0,rhi::DescriptorType::StorageBuffer,nullptr,vb.get()}; w[1]={1,rhi::DescriptorType::StorageBuffer,nullptr,ib.get()}; w[2]={2,rhi::DescriptorType::StorageBuffer,nullptr,mb.get()}; w[3]={3,rhi::DescriptorType::Sampler,nullptr,nullptr,0,0,(const void*)(uintptr_t)gpu.linearSampler}; w[4]={4,rhi::DescriptorType::SampledImage,nullptr,nullptr,0,0,nullptr,nullptr,m_maxTextures,m_texViewPtrs.data()}; w[5]={5,rhi::DescriptorType::StorageImage,vox.get()};
+    w[0]={0,rhi::DescriptorType::StorageBuffer,nullptr,vb.get()}; w[1]={1,rhi::DescriptorType::StorageBuffer,nullptr,ib.get()}; w[2]={2,rhi::DescriptorType::StorageBuffer,nullptr,mb.get()}; w[3]={3,rhi::DescriptorType::Sampler,nullptr,nullptr,0,0,vxSampler.get()}; w[4]={4,rhi::DescriptorType::SampledImage,nullptr,nullptr,0,0,nullptr,nullptr,m_maxTextures,m_texViewPtrs.data()}; w[5]={5,rhi::DescriptorType::StorageImage,vox.get()};
     m_set->write({w,w+6});
 }
 void VxgiVoxelizePass::record(rhi::RHICommandBuffer& cmd,const SceneCpu& cpu,const SceneGpu&,const glm::vec3& gm,float cs,uint32_t gr){ if(!m_pipeline||!m_set)return;

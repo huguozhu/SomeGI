@@ -55,7 +55,7 @@ struct DescriptorWrite {
     const RHIBuffer* buffer = nullptr;
     uint64_t bufferOffset = 0;
     uint64_t bufferRange = 0;
-    const void* sampler = nullptr;  // 原生 VkSampler（迁移过渡期）/ RHISampler::nativeHandle()
+    const RHISampler* sampler = nullptr;
     const void* accelerationStructure = nullptr;  // 原生 VkAccelerationStructureKHR
 
     // 纹理数组绑定（count > 1 时使用，与 textureView 互斥）

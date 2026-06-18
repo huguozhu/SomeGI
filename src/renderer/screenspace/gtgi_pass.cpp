@@ -71,7 +71,7 @@ void GtgiPass::bindFrame(const RenderTargets& rt, VkBuffer frameUbo) {
         {1, rhi::DescriptorType::SampledImage,  rhi::VkRHITextureView::createNonOwning(vkD, rt.gNormalRough.view()).get()},
         {2, rhi::DescriptorType::SampledImage,  rhi::VkRHITextureView::createNonOwning(vkD, rt.depth.view()).get()},
         {3, rhi::DescriptorType::SampledImage,  rhi::VkRHITextureView::createNonOwning(vkD, rt.hdrPrev.view()).get()},
-        {4, rhi::DescriptorType::Sampler, nullptr, nullptr, 0, 0, m_linearClamp->nativeHandle()},
+        {4, rhi::DescriptorType::Sampler, nullptr, nullptr, 0, 0, m_linearClamp.get()},
         {5, rhi::DescriptorType::StorageImage,  rhi::VkRHITextureView::createNonOwning(vkD, rt.ssgi.view()).get()},
         {6, rhi::DescriptorType::SampledImage,  rhi::VkRHITextureView::createNonOwning(vkD, rt.ssgiPrev.view()).get()},
     });

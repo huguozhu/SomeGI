@@ -53,7 +53,7 @@ void RsmSamplePass::bindFrame(const RenderTargets& rt, VkBuffer frameUbo, VkBuff
         {3,rhi::DescriptorType::SampledImage,rhi::VkRHITextureView::createNonOwning(vkD,rsmPos.view()).get()},
         {4,rhi::DescriptorType::SampledImage,rhi::VkRHITextureView::createNonOwning(vkD,rsmN.view()).get()},
         {5,rhi::DescriptorType::SampledImage,rhi::VkRHITextureView::createNonOwning(vkD,rsmFlux.view()).get()},
-        {6,rhi::DescriptorType::Sampler,nullptr,nullptr,0,0,m_linearClamp->nativeHandle()},
+        {6,rhi::DescriptorType::Sampler,nullptr,nullptr,0,0,m_linearClamp.get()},
         {7,rhi::DescriptorType::UniformBuffer,nullptr,rhi::VkRHIBuffer::createNonOwning(vkD,rsmUbo,VK_WHOLE_SIZE).get()},
         {8,rhi::DescriptorType::StorageImage,rhi::VkRHITextureView::createNonOwning(vkD,rt.rsmGI.view()).get()},
     });

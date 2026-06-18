@@ -13,6 +13,7 @@
 #include "rhi/vulkan/vk_texture.h"
 #include "rhi/vulkan/vk_buffer.h"
 #include "rhi/vulkan/vk_pso.h"
+#include "rhi/vulkan/vk_sampler.h"
 #include "core/shader.h"
 #include <array>
 namespace somegi {
@@ -49,7 +50,8 @@ void NdgiPass::bindResources(const NdgiResources& res,SceneRtAS& rtAS,const Scen
     auto cntB=rhi::VkRHIBuffer::createNonOwning(vkD,res.sampleCount().handle(),VK_WHOLE_SIZE);
     std::vector<std::unique_ptr<rhi::RHITextureView>> tvs; std::vector<const rhi::RHITextureView*> tvp;
     for(uint32_t i=0;i<128;++i){ VkImageView v=(i<(uint32_t)scene.images.size())?scene.images[i].view():scene.whiteTex.view(); tvs.push_back(rhi::VkRHITextureView::createNonOwning(vkD,v)); tvp.push_back(tvs.back().get()); }
-    m_traceSet->write({{0,rhi::DescriptorType::AccelerationStructure,nullptr,nullptr,0,0,nullptr,tasInfo.pAccelerationStructures},{1,rhi::DescriptorType::StorageBuffer,nullptr,inst.get()},{2,rhi::DescriptorType::StorageBuffer,nullptr,vert.get()},{3,rhi::DescriptorType::StorageBuffer,nullptr,ind.get()},{4,rhi::DescriptorType::StorageBuffer,nullptr,mat.get()},{5,rhi::DescriptorType::SampledImage,nullptr,nullptr,0,0,nullptr,nullptr,128,tvp.data()},{6,rhi::DescriptorType::Sampler,nullptr,nullptr,0,0,(const void*)(uintptr_t)scene.linearSampler},{7,rhi::DescriptorType::UniformBuffer,nullptr,ubo.get()},{8,rhi::DescriptorType::StorageBuffer,nullptr,sampB.get()},{9,rhi::DescriptorType::StorageBuffer,nullptr,cntB.get()}});
+    auto ndgiSampler = rhi::VkRHISampler::createNonOwning(vkD, scene.linearSampler);
+    m_traceSet->write({{0,rhi::DescriptorType::AccelerationStructure,nullptr,nullptr,0,0,nullptr,tasInfo.pAccelerationStructures},{1,rhi::DescriptorType::StorageBuffer,nullptr,inst.get()},{2,rhi::DescriptorType::StorageBuffer,nullptr,vert.get()},{3,rhi::DescriptorType::StorageBuffer,nullptr,ind.get()},{4,rhi::DescriptorType::StorageBuffer,nullptr,mat.get()},{5,rhi::DescriptorType::SampledImage,nullptr,nullptr,0,0,nullptr,nullptr,128,tvp.data()},{6,rhi::DescriptorType::Sampler,nullptr,nullptr,0,0,ndgiSampler.get()},{7,rhi::DescriptorType::UniformBuffer,nullptr,ubo.get()},{8,rhi::DescriptorType::StorageBuffer,nullptr,sampB.get()},{9,rhi::DescriptorType::StorageBuffer,nullptr,cntB.get()}});
     writeInitDescriptors(res);
 }
 void NdgiPass::writeInitDescriptors(const NdgiResources& res){ if(!m_initSet)return; auto& vkD=static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);

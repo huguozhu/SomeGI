@@ -13,6 +13,7 @@
 #include "rhi/vulkan/vk_shader.h"
 #include "rhi/vulkan/vk_texture.h"
 #include "rhi/vulkan/vk_command.h"
+#include "rhi/vulkan/vk_sampler.h"
 #include "core/shader.h"
 #include <array>
 
@@ -63,10 +64,11 @@ void TonemapPass::bindTargets(const RenderTargets& rt) {
     auto& vkD = static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
     auto hdrView = rhi::VkRHITextureView::createNonOwning(vkD, rt.hdrColor.view());
     auto ldrView = rhi::VkRHITextureView::createNonOwning(vkD, rt.ldrTonemap.view());
+    auto tmSampler = rhi::VkRHISampler::createNonOwning(vkD, m_sampler);
     for (uint32_t fi = 0; fi < 2; ++fi)
         m_sets[fi]->write({
             {0, rhi::DescriptorType::SampledImage, hdrView.get()},
-            {1, rhi::DescriptorType::Sampler, nullptr, nullptr, 0, 0, (const void*)(uintptr_t)m_sampler},
+            {1, rhi::DescriptorType::Sampler, nullptr, nullptr, 0, 0, tmSampler.get()},
             {2, rhi::DescriptorType::StorageImage, ldrView.get()},
         });
 }

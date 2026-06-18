@@ -12,6 +12,7 @@
 #include "rhi/vulkan/vk_texture.h"
 #include "rhi/vulkan/vk_buffer.h"
 #include "rhi/vulkan/vk_command.h"
+#include "rhi/vulkan/vk_sampler.h"
 #include "core/shader.h"
 #include <glm/gtc/matrix_transform.hpp>
 #include <array>
@@ -90,9 +91,10 @@ void RsmGeometryPass::bindScene(const SceneGpu& gpu, uint32_t tc) {
     auto matBuf=rhi::VkRHIBuffer::createNonOwning(vkD,gpu.materialBuffer.handle(),VK_WHOLE_SIZE);
     m_texViews.clear(); m_texViewPtrs.clear(); m_texViews.reserve(m_maxTextures); m_texViewPtrs.reserve(m_maxTextures);
     for(uint32_t i=0;i<m_maxTextures;++i){ VkImageView v=(i<tc&&i<gpu.images.size())?gpu.images[i].view():gpu.whiteTex.view(); m_texViews.push_back(rhi::VkRHITextureView::createNonOwning(vkD,v)); m_texViewPtrs.push_back(m_texViews.back().get()); }
+    auto rsmSampler = rhi::VkRHISampler::createNonOwning(vkD, gpu.linearSampler);
     rhi::DescriptorWrite w[3]={};
     w[0]={1,rhi::DescriptorType::StorageBuffer,nullptr,matBuf.get()};
-    w[1]={2,rhi::DescriptorType::Sampler,nullptr,nullptr,0,0,(const void*)(uintptr_t)gpu.linearSampler};
+    w[1]={2,rhi::DescriptorType::Sampler,nullptr,nullptr,0,0,rsmSampler.get()};
     w[2]={3,rhi::DescriptorType::SampledImage,nullptr,nullptr,0,0,nullptr,nullptr,m_maxTextures,m_texViewPtrs.data()};
     m_set->write({w,w+3});
 }

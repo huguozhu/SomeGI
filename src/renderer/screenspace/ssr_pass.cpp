@@ -99,7 +99,7 @@ void SsrPass::bindFrame(const RenderTargets& rt, VkBuffer frameUbo) {
         {1, rhi::DescriptorType::SampledImage,  nrView.get()},
         {2, rhi::DescriptorType::SampledImage,  dpView.get()},
         {3, rhi::DescriptorType::SampledImage,  hpView.get()},
-        {4, rhi::DescriptorType::Sampler, nullptr, nullptr, 0, 0, m_linearClamp->nativeHandle()},
+        {4, rhi::DescriptorType::Sampler, nullptr, nullptr, 0, 0, m_linearClamp.get()},
         {5, rhi::DescriptorType::StorageImage,  srView.get()},
     });
 }

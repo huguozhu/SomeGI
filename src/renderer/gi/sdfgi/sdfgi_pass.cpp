@@ -49,7 +49,7 @@ void SdfgiPass::bindResources(const SdfgiResources& sf,const VxgiResources& vx,c
     m_jfaAB->write({{0,rhi::DescriptorType::SampledImage,sa.get()},{1,rhi::DescriptorType::StorageImage,sb.get()}});
     m_jfaBA->write({{0,rhi::DescriptorType::SampledImage,sb.get()},{1,rhi::DescriptorType::StorageImage,sa.get()}});
     m_finA->write({{0,rhi::DescriptorType::SampledImage,sa.get()},{1,rhi::DescriptorType::StorageImage,udf.get()}}); m_finB->write({{0,rhi::DescriptorType::SampledImage,sb.get()},{1,rhi::DescriptorType::StorageImage,udf.get()}});
-    m_traceSet->write({{0,rhi::DescriptorType::UniformBuffer,nullptr,ubo.get()},{1,rhi::DescriptorType::SampledImage,nr.get()},{2,rhi::DescriptorType::SampledImage,dp.get()},{3,rhi::DescriptorType::SampledImage,vox.get()},{4,rhi::DescriptorType::SampledImage,aniso.get()},{5,rhi::DescriptorType::Sampler,nullptr,nullptr,0,0,m_linearClamp->nativeHandle()},{6,rhi::DescriptorType::StorageImage,out.get()}});
+    m_traceSet->write({{0,rhi::DescriptorType::UniformBuffer,nullptr,ubo.get()},{1,rhi::DescriptorType::SampledImage,nr.get()},{2,rhi::DescriptorType::SampledImage,dp.get()},{3,rhi::DescriptorType::SampledImage,vox.get()},{4,rhi::DescriptorType::SampledImage,aniso.get()},{5,rhi::DescriptorType::Sampler,nullptr,nullptr,0,0,m_linearClamp.get()},{6,rhi::DescriptorType::StorageImage,out.get()}});
 }
 void SdfgiPass::record(VkCommandBuffer vkCmd,const SdfgiResources& sf,const RenderTargets& rt,uint32_t fi,float st,float md,uint32_t nr,uint32_t ms,float rm,float he){
     auto h=[&](auto& p){return (VkPipeline)(uintptr_t)p->nativeHandle();}; auto l=[&](auto& p){return static_cast<rhi::VkRHIPipelineState&>(*p).layout();}; auto s=[&](auto& x){return (VkDescriptorSet)(uintptr_t)x->nativeHandle();};

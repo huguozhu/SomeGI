@@ -29,11 +29,11 @@ void VxgiRelightPass::init(rhi::RHIDevice& d){ m_rhiDevice=&d; auto& vkD=static_
 }
 void VxgiRelightPass::destroy(){ m_linearClamp.reset(); m_setPP1.reset(); m_setPP0.reset(); m_set.reset(); m_pipeline.reset(); m_setLayout.reset(); m_rhiDevice=nullptr; }
 void VxgiRelightPass::bindResources(const VxgiResources& vxgi,VkImageView dstView){ auto& vkD=static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
-    m_set->write({{0,rhi::DescriptorType::SampledImage,rhi::VkRHITextureView::createNonOwning(vkD,vxgi.fullView()).get()},{1,rhi::DescriptorType::SampledImage,rhi::VkRHITextureView::createNonOwning(vkD,vxgi.anisoFullView()).get()},{2,rhi::DescriptorType::Sampler,nullptr,nullptr,0,0,m_linearClamp->nativeHandle()},{3,rhi::DescriptorType::StorageImage,rhi::VkRHITextureView::createNonOwning(vkD,dstView).get()}});
+    m_set->write({{0,rhi::DescriptorType::SampledImage,rhi::VkRHITextureView::createNonOwning(vkD,vxgi.fullView()).get()},{1,rhi::DescriptorType::SampledImage,rhi::VkRHITextureView::createNonOwning(vkD,vxgi.anisoFullView()).get()},{2,rhi::DescriptorType::Sampler,nullptr,nullptr,0,0,m_linearClamp.get()},{3,rhi::DescriptorType::StorageImage,rhi::VkRHITextureView::createNonOwning(vkD,dstView).get()}});
 }
 void VxgiRelightPass::bindResourcesPingPong(const VxgiResources& vxgi,bool sw){ auto& vkD=static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
     auto& target=sw?*m_setPP1:*m_setPP0;
-    target.write({{0,rhi::DescriptorType::SampledImage,rhi::VkRHITextureView::createNonOwning(vkD,sw?vxgi.relightScratch2View():vxgi.relightScratchView()).get()},{1,rhi::DescriptorType::SampledImage,rhi::VkRHITextureView::createNonOwning(vkD,vxgi.anisoFullView()).get()},{2,rhi::DescriptorType::Sampler,nullptr,nullptr,0,0,m_linearClamp->nativeHandle()},{3,rhi::DescriptorType::StorageImage,rhi::VkRHITextureView::createNonOwning(vkD,sw?vxgi.relightScratchView():vxgi.relightScratch2View()).get()}});
+    target.write({{0,rhi::DescriptorType::SampledImage,rhi::VkRHITextureView::createNonOwning(vkD,sw?vxgi.relightScratch2View():vxgi.relightScratchView()).get()},{1,rhi::DescriptorType::SampledImage,rhi::VkRHITextureView::createNonOwning(vkD,vxgi.anisoFullView()).get()},{2,rhi::DescriptorType::Sampler,nullptr,nullptr,0,0,m_linearClamp.get()},{3,rhi::DescriptorType::StorageImage,rhi::VkRHITextureView::createNonOwning(vkD,sw?vxgi.relightScratchView():vxgi.relightScratch2View()).get()}});
 }
 void VxgiRelightPass::record(VkCommandBuffer vkCmd,VkDescriptorSet set,uint32_t gr,uint32_t ml,float cs,const glm::vec3& gm,float bs){
     auto& vkPso=static_cast<rhi::VkRHIPipelineState&>(*m_pipeline);

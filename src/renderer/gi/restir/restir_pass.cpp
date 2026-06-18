@@ -43,7 +43,7 @@ void RestirPass::bindResources(const RestirResources& res,const VxgiResources& v
     auto ub=rhi::VkRHIBuffer::createNonOwning(vkD,ubo,VK_WHOLE_SIZE); auto lb=rhi::VkRHIBuffer::createNonOwning(vkD,res.lightBuffer(),VK_WHOLE_SIZE);
     auto ra=rhi::VkRHITextureView::createNonOwning(vkD,res.reservoirA().view()); auto rb=rhi::VkRHITextureView::createNonOwning(vkD,res.reservoirB().view());
     auto out=rhi::VkRHITextureView::createNonOwning(vkD,rt.restir.view()); auto vox=rhi::VkRHITextureView::createNonOwning(vkD,vxgi.fullView());
-    const void* sp=m_linearClamp->nativeHandle();
+    const rhi::RHISampler* sp=m_linearClamp.get();
     m_initSet->write({{0,rhi::DescriptorType::UniformBuffer,nullptr,ub.get()},{1,rhi::DescriptorType::SampledImage,ab.get()},{2,rhi::DescriptorType::SampledImage,nr.get()},{3,rhi::DescriptorType::SampledImage,dp.get()},{4,rhi::DescriptorType::StorageBuffer,nullptr,lb.get()},{5,rhi::DescriptorType::StorageImage,ra.get()}});
     m_spatialSet->write({{0,rhi::DescriptorType::UniformBuffer,nullptr,ub.get()},{1,rhi::DescriptorType::SampledImage,ab.get()},{2,rhi::DescriptorType::SampledImage,nr.get()},{3,rhi::DescriptorType::SampledImage,dp.get()},{4,rhi::DescriptorType::StorageBuffer,nullptr,lb.get()},{5,rhi::DescriptorType::SampledImage,ra.get()},{6,rhi::DescriptorType::StorageImage,rb.get()}});
     m_shadeSet->write({{0,rhi::DescriptorType::UniformBuffer,nullptr,ub.get()},{1,rhi::DescriptorType::SampledImage,ab.get()},{2,rhi::DescriptorType::SampledImage,nr.get()},{3,rhi::DescriptorType::SampledImage,dp.get()},{4,rhi::DescriptorType::StorageBuffer,nullptr,lb.get()},{5,rhi::DescriptorType::SampledImage,rb.get()},{6,rhi::DescriptorType::SampledImage,vox.get()},{7,rhi::DescriptorType::Sampler,nullptr,nullptr,0,0,sp},{8,rhi::DescriptorType::StorageImage,out.get()}});
@@ -52,7 +52,7 @@ void RestirPass::bindResourcesRt(const RestirResources& res,const RenderTargets&
     auto ab=rhi::VkRHITextureView::createNonOwning(vkD,rt.gAlbedoMetal.view()); auto nr=rhi::VkRHITextureView::createNonOwning(vkD,rt.gNormalRough.view()); auto dp=rhi::VkRHITextureView::createNonOwning(vkD,rt.depth.view());
     auto ub=rhi::VkRHIBuffer::createNonOwning(vkD,ubo,VK_WHOLE_SIZE); auto lb=rhi::VkRHIBuffer::createNonOwning(vkD,res.lightBuffer(),VK_WHOLE_SIZE);
     auto rb=rhi::VkRHITextureView::createNonOwning(vkD,res.reservoirB().view()); auto out=rhi::VkRHITextureView::createNonOwning(vkD,rt.restir.view());
-    const void* sp=m_linearClamp->nativeHandle();
+    const rhi::RHISampler* sp=m_linearClamp.get();
     m_shadeRtSet->write({{0,rhi::DescriptorType::UniformBuffer,nullptr,ub.get()},{1,rhi::DescriptorType::SampledImage,ab.get()},{2,rhi::DescriptorType::SampledImage,nr.get()},{3,rhi::DescriptorType::SampledImage,dp.get()},{4,rhi::DescriptorType::StorageBuffer,nullptr,lb.get()},{5,rhi::DescriptorType::SampledImage,rb.get()},{6,rhi::DescriptorType::AccelerationStructure,nullptr,nullptr,0,0,nullptr,&tlas},{7,rhi::DescriptorType::StorageImage,out.get()},{8,rhi::DescriptorType::Sampler,nullptr,nullptr,0,0,sp}});
 }
 void RestirPass::record(VkCommandBuffer vkCmd,const RestirResources&,const RenderTargets& rt,uint32_t nl,uint32_t nc,uint32_t nn,float sr,uint32_t ss,float is,uint32_t fi,bool useRt){

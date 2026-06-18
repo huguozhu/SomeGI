@@ -51,7 +51,7 @@ void DdgiPass::bindResources(const DdgiResources& ddgi,const VxgiResources& vxgi
     auto dist=rhi::VkRHITextureView::createNonOwning(vkD,ddgi.distance().view());
     auto rb=rhi::VkRHIBuffer::createNonOwning(vkD,ddgi.rayBuffer().handle(),VK_WHOLE_SIZE);
     auto ps=rhi::VkRHIBuffer::createNonOwning(vkD,ddgi.probeStates().handle(),VK_WHOLE_SIZE);
-    m_setUpdate->write({{0,rhi::DescriptorType::SampledImage,vox.get()},{1,rhi::DescriptorType::Sampler,nullptr,nullptr,0,0,m_linearClamp->nativeHandle()},{2,rhi::DescriptorType::StorageBuffer,nullptr,rb.get()}});
+    m_setUpdate->write({{0,rhi::DescriptorType::SampledImage,vox.get()},{1,rhi::DescriptorType::Sampler,nullptr,nullptr,0,0,m_linearClamp.get()},{2,rhi::DescriptorType::StorageBuffer,nullptr,rb.get()}});
     m_setBlend->write({{0,rhi::DescriptorType::StorageBuffer,nullptr,rb.get()},{1,rhi::DescriptorType::StorageImage,irr.get()},{2,rhi::DescriptorType::StorageImage,dist.get()}});
     m_setClassify->write({{0,rhi::DescriptorType::StorageBuffer,nullptr,rb.get()},{1,rhi::DescriptorType::StorageBuffer,nullptr,ps.get()}});
 }

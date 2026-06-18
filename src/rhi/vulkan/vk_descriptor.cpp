@@ -2,6 +2,7 @@
 #include "vk_descriptor.h"
 #include "vk_buffer.h"
 #include "vk_texture.h"
+#include "../base/sampler.h"
 #include <map>
 
 namespace somegi {
@@ -149,7 +150,7 @@ void VkRHIDescSet::write(const std::vector<DescriptorWrite>& writes) {
         }
         if (w.sampler) {
             // 独立 Sampler 绑定（VK_DESCRIPTOR_TYPE_SAMPLER）
-            imageInfos.push_back({(VkSampler)(uintptr_t)w.sampler, VK_NULL_HANDLE, VK_IMAGE_LAYOUT_UNDEFINED});
+            imageInfos.push_back({(VkSampler)(uintptr_t)w.sampler->nativeHandle(), VK_NULL_HANDLE, VK_IMAGE_LAYOUT_UNDEFINED});
             vw.pImageInfo = &imageInfos.back();
         }
         if (w.accelerationStructure) {

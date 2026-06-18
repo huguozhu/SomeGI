@@ -12,6 +12,7 @@
 #include "rhi/vulkan/vk_texture.h"
 #include "rhi/vulkan/vk_buffer.h"
 #include "rhi/vulkan/vk_command.h"
+#include "rhi/vulkan/vk_sampler.h"
 #include "core/shader.h"
 #include <array>
 #include <cstring>
@@ -105,9 +106,10 @@ void SkyboxPass::bindEnv(VkImageView envCubeView, VkSampler linearSampler) {
     auto& vkDevice = static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
 
     auto cubeView = rhi::VkRHITextureView::createNonOwning(vkDevice, envCubeView);
+    auto skySampler = rhi::VkRHISampler::createNonOwning(vkDevice, linearSampler);
     m_set->write({
         {1, rhi::DescriptorType::SampledImage, cubeView.get()},
-        {2, rhi::DescriptorType::Sampler, nullptr, nullptr, 0, 0, (const void*)(uintptr_t)linearSampler},
+        {2, rhi::DescriptorType::Sampler, nullptr, nullptr, 0, 0, skySampler.get()},
     });
 }
 

@@ -86,7 +86,7 @@ void SsgiPass::bindFrame(const RenderTargets& rt, VkBuffer frameUbo) {
         {1, rhi::DescriptorType::SampledImage,  nr.get()},
         {2, rhi::DescriptorType::SampledImage,  dp.get()},
         {3, rhi::DescriptorType::SampledImage,  hp.get()},
-        {4, rhi::DescriptorType::Sampler, nullptr, nullptr, 0, 0, m_linearClamp->nativeHandle()},
+        {4, rhi::DescriptorType::Sampler, nullptr, nullptr, 0, 0, m_linearClamp.get()},
         {5, rhi::DescriptorType::StorageImage,  gi.get()},
         {6, rhi::DescriptorType::SampledImage,  gp.get()},
     });
