@@ -16,6 +16,21 @@ class RHISemaphore;
 class RHIQueryPool;
 
 // ════════════════════════════════════════════════════════════════
+// RenderingAttachmentInfo — beginRendering 的 attachment 描述
+// ════════════════════════════════════════════════════════════════
+struct RenderingAttachmentInfo {
+    const RHITextureView* view = nullptr;
+    AttachmentLoadOp loadOp = AttachmentLoadOp::Clear;
+    AttachmentStoreOp storeOp = AttachmentStoreOp::Store;
+    float clearColor[4] = {0, 0, 0, 0};
+    float clearDepth = 1.0f;
+    uint32_t clearStencil = 0;
+    // MSAA resolve：非 MSAA 时留空
+    const RHITextureView* resolveView = nullptr;
+    ResolveMode resolveMode = ResolveMode::Average;
+};
+
+// ════════════════════════════════════════════════════════════════
 // RHICommandPool
 // ════════════════════════════════════════════════════════════════
 class RHICommandBuffer; // 前向声明
@@ -93,11 +108,12 @@ public:
     virtual void globalBarrier() = 0;
 
     // ── 渲染通道（Metal 显式 render pass 模型） ──
-    // loadOnly=true: LOAD_OP_LOAD（保留已有内容）；false: LOAD_OP_CLEAR（清除）
-    virtual void beginRendering(const RHITextureView* const* colorViews, uint32_t colorCount,
-                                const RHITextureView* depthView,
-                                uint32_t width, uint32_t height,
-                                bool loadOnly = false) = 0;
+    // 每个 attachment 独立控制 loadOp/storeOp/clearValue/MSAA resolve。
+    // depthAttachment 为 nullptr 时表示 depth-only pass。
+    // resolveView 非空时，endRendering 自动执行 MSAA resolve。
+    virtual void beginRendering(const RenderingAttachmentInfo* colorAttachments, uint32_t colorCount,
+                                const RenderingAttachmentInfo* depthAttachment,
+                                uint32_t width, uint32_t height) = 0;
     virtual void endRendering() = 0;
 
     // ── 时间戳 ──

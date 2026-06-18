@@ -90,6 +90,7 @@ public:
     // Bootstrap
     void bootstrapHdrPrev();
     void bootstrapSsgiTemporal();
+    void bootstrapAllTargets();
 
     // Accessors — App needs these for buildUI() and run()
     RenderTargets&       rt()          { return m_rt; }
@@ -137,6 +138,10 @@ public:
     LumenFilterPass&     lumenFilter() { return m_lumenFilterPass; }
     LumenGatherPass&     lumenGather() { return m_lumenGatherPass; }
     RenderPipeline&      pipeline()    { return m_pipeline; }
+
+    // Debug: 保存 GBuffer 渲染目标到 PNG 文件（仅调试用）
+    void debugDumpGBuffer(Device& d, VkCommandPool pool);
+
     FrustumCullPass& cullPass() { return m_cullPass; }
     HiZBuildPass& hizPass() { return m_hizPass; }
 

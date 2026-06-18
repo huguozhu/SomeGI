@@ -134,8 +134,10 @@ void RsmGeometryPass::record(rhi::RHICommandBuffer& cmd, VkBuffer indirectBuf, u
     auto cv1=rhi::VkRHITextureView::createNonOwning(vkD,m_normal.view());
     auto cv2=rhi::VkRHITextureView::createNonOwning(vkD,m_flux.view());
     auto dv=rhi::VkRHITextureView::createNonOwning(vkD,m_depth.view());
-    const rhi::RHITextureView* cvs[]={cv0.get(),cv1.get(),cv2.get()};
-    cmd.beginRendering(cvs,3,dv.get(),kRsmSize,kRsmSize,false); // CLEAR
+    rhi::RenderingAttachmentInfo cAttach[3]{};
+    for(int i=0;i<3;++i){cAttach[i].view=(i==0?cv0:i==1?cv1:cv2).get();cAttach[i].loadOp=rhi::AttachmentLoadOp::Clear;}
+    rhi::RenderingAttachmentInfo dAttach{}; dAttach.view=dv.get(); dAttach.loadOp=rhi::AttachmentLoadOp::Clear; dAttach.clearDepth=1.f;
+    cmd.beginRendering(cAttach,3,&dAttach,kRsmSize,kRsmSize);
     cmd.setViewport(0,0,(float)kRsmSize,(float)kRsmSize);
     cmd.setScissor(0,0,kRsmSize,kRsmSize);
     cmd.bindPipelineState(*m_pipeline); cmd.bindDescriptorSet(0,*m_set);

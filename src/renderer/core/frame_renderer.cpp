@@ -1,6 +1,7 @@
 #include "renderer/core/frame_renderer.h"
 #include "core/device.h"
 #include "rhi/vulkan/vk_device.h"  // VkRHIDevice shared-handle constructor
+#include "core/debug_dump.h"
 #include "scene/upload.h"
 #include <cstdio>
 
@@ -174,6 +175,7 @@ void FrameRenderer::init(Device& d, VkCommandPool pool, VkExtent2D extent,
 
     bootstrapHdrPrev();
     bootstrapSsgiTemporal();
+    bootstrapAllTargets();
 
     std::printf("[init] skybox pass...\n");
     m_skybox.init(d, *m_rhiDevice, VK_FORMAT_R16G16B16A16_SFLOAT, VK_FORMAT_D32_SFLOAT);
@@ -281,6 +283,7 @@ void FrameRenderer::onResize(Device& d, VkExtent2D newExtent,
     m_tonemap.bindTargets(m_rt);
     bootstrapHdrPrev();
     bootstrapSsgiTemporal();
+    bootstrapAllTargets();
 }
 
 void FrameRenderer::bindScenePasses(Device& d, const SceneGpu& gpu, uint32_t textureCount) {
@@ -408,6 +411,37 @@ void FrameRenderer::bootstrapSsgiTemporal() {
     });
 }
 
+// ── 通用引导：清空所有未初始化的渲染目标纹理 ──
+void FrameRenderer::bootstrapAllTargets() {
+    oneShotSubmit(*m_device, m_pool, [&](VkCommandBuffer cmd) {
+        auto initImg = [&](VkImage img, VkImageAspectFlags aspect) {
+            if (!img) return;
+            VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+            b.srcStageMask=VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT; b.srcAccessMask=0;
+            b.dstStageMask=VK_PIPELINE_STAGE_2_CLEAR_BIT; b.dstAccessMask=VK_ACCESS_2_TRANSFER_WRITE_BIT;
+            b.oldLayout=VK_IMAGE_LAYOUT_UNDEFINED; b.newLayout=VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+            b.image=img; b.subresourceRange={aspect,0,1,0,1};
+            VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO}; di.imageMemoryBarrierCount=1; di.pImageMemoryBarriers=&b;
+            vkCmdPipelineBarrier2(cmd,&di);
+            if(aspect==VK_IMAGE_ASPECT_COLOR_BIT) {
+                VkClearColorValue z{}; VkImageSubresourceRange r{VK_IMAGE_ASPECT_COLOR_BIT,0,1,0,1};
+                vkCmdClearColorImage(cmd,img,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,&z,1,&r);
+            }
+            b.srcStageMask=VK_PIPELINE_STAGE_2_CLEAR_BIT; b.srcAccessMask=VK_ACCESS_2_TRANSFER_WRITE_BIT;
+            b.dstStageMask=VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT; b.dstAccessMask=VK_ACCESS_2_MEMORY_READ_BIT|VK_ACCESS_2_MEMORY_WRITE_BIT;
+            b.oldLayout=VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL; b.newLayout=VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            vkCmdPipelineBarrier2(cmd,&di);
+        };
+        auto& rt=m_rt;
+        initImg(rt.ssr.image(), VK_IMAGE_ASPECT_COLOR_BIT);
+        initImg(rt.rsmGI.image(), VK_IMAGE_ASPECT_COLOR_BIT);
+        initImg(rt.restir.image(), VK_IMAGE_ASPECT_COLOR_BIT);
+        initImg(rt.rtGI.image(), VK_IMAGE_ASPECT_COLOR_BIT);
+        initImg(rt.lumenGI.image(), VK_IMAGE_ASPECT_COLOR_BIT);
+        initImg(rt.ssao.image(), VK_IMAGE_ASPECT_COLOR_BIT);
+    });
+}
+
 void FrameRenderer::writeTimestamp(VkCommandBuffer cmd, uint32_t slot) {
     uint32_t base = (m_frameIndex % kFramesInFlight) * kTimestampSlots;
     vkCmdWriteTimestamp2(cmd, VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT,
@@ -522,6 +556,60 @@ void FrameRenderer::buildPipelineTable(const PipelineConfig& cfg) {
     m_pipeline.setEnabled("RSM-Clear", !fwd && !m_rsmSample.enabled);
 
     m_pipeline.build();
+}
+
+// ──────────────────────────────────────────────────────────────────
+// Debug: 保存 GBuffer 渲染目标到 PNG 文件
+// ──────────────────────────────────────────────────────────────────
+void FrameRenderer::debugDumpGBuffer(Device& d, VkCommandPool pool) {
+    auto& rt = m_rt;
+    uint32_t w = rt.extent.width, h = rt.extent.height;
+
+    DebugDump dump;
+    dump.init(d, w, h);
+
+    // 辅助：dump 单个附件（transition→copy→transition back）
+    // 注：使用 GENERAL layout 避免要求 TRANSFER_SRC usage
+    auto capture = [&](VkImage img, VkFormat fmt, VkImageAspectFlags aspect, const char* name) {
+        oneShotSubmit(d, pool, [&](VkCommandBuffer cmd) {
+            VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+            b.srcStageMask  = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+            b.srcAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT;
+            b.dstStageMask  = VK_PIPELINE_STAGE_2_COPY_BIT;
+            b.dstAccessMask = VK_ACCESS_2_TRANSFER_READ_BIT;
+            b.oldLayout     = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            b.newLayout     = VK_IMAGE_LAYOUT_GENERAL;
+            b.image         = img;
+            b.subresourceRange = {aspect, 0, 1, 0, 1};
+            VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+            di.imageMemoryBarrierCount = 1; di.pImageMemoryBarriers = &b;
+            vkCmdPipelineBarrier2(cmd, &di);
+
+            dump.recordCopy(cmd, img, fmt, w, h);
+
+            // Transition back
+            b.srcStageMask  = VK_PIPELINE_STAGE_2_COPY_BIT;
+            b.srcAccessMask = VK_ACCESS_2_TRANSFER_READ_BIT;
+            b.dstStageMask  = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+            b.dstAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT;
+            b.oldLayout     = VK_IMAGE_LAYOUT_GENERAL;
+            b.newLayout     = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            vkCmdPipelineBarrier2(cmd, &di);
+        });
+        dump.savePng(std::string("debug_dump/") + name, fmt, w, h);
+    };
+
+    capture(rt.gAlbedoMetal.image(), VK_FORMAT_R8G8B8A8_UNORM,
+            VK_IMAGE_ASPECT_COLOR_BIT, "gbuffer_albedo.png");
+    capture(rt.gNormalRough.image(), VK_FORMAT_R16G16B16A16_SFLOAT,
+            VK_IMAGE_ASPECT_COLOR_BIT, "gbuffer_normal.png");
+    capture(rt.gEmissiveAO.image(), VK_FORMAT_R8G8B8A8_UNORM,
+            VK_IMAGE_ASPECT_COLOR_BIT, "gbuffer_emissive.png");
+    capture(rt.depth.image(), VK_FORMAT_D32_SFLOAT,
+            VK_IMAGE_ASPECT_DEPTH_BIT, "gbuffer_depth.png");
+
+    dump.destroy();
+    std::printf("[debug_dump] GBuffer targets saved to debug_dump/\n");
 }
 
 } // namespace somegi

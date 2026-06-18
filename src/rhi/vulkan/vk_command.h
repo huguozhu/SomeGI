@@ -79,9 +79,8 @@ public:
     void globalBarrier() override;
 
     // 渲染通道
-    void beginRendering(const RHITextureView* const* colorViews, uint32_t colorCount,
-                        const RHITextureView* depthView, uint32_t width, uint32_t height,
-                        bool loadOnly = false) override;
+    void beginRendering(const RenderingAttachmentInfo* colorAttachments, uint32_t colorCount,
+                        const RenderingAttachmentInfo* depthAttachment, uint32_t width, uint32_t height) override;
     void endRendering() override;
 
     // 时间戳

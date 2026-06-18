@@ -10,6 +10,7 @@
 #include "rhi/base/pipeline_state.h"
 #include "rhi/vulkan/vk_device.h"
 #include "rhi/vulkan/vk_shader.h"
+#include "rhi/vulkan/vk_acceleration_structure.h"
 #include "rhi/vulkan/vk_texture.h"
 #include "rhi/vulkan/vk_buffer.h"
 #include "rhi/vulkan/vk_pso.h"
@@ -40,7 +41,7 @@ void NdgiPass::init(rhi::RHIDevice& d,bool rtSupported){ m_rhiDevice=&d; m_rtSup
 }
 void NdgiPass::destroy(){ m_initSet.reset(); m_traceSet.reset(); m_initPipeline.reset(); m_trainPipeline.reset(); m_tracePipeline.reset(); m_initDsl.reset(); m_traceDsl.reset(); m_rhiDevice=nullptr; }
 void NdgiPass::bindResources(const NdgiResources& res,SceneRtAS& rtAS,const SceneGpu& scene,const RenderTargets&,VkBuffer frameUbo){ auto& vkD=static_cast<rhi::VkRHIDevice&>(*m_rhiDevice); if(!m_rtSupported||!m_traceSet)return;
-    auto tasInfo=rtAS.tlasWriteInfo();
+    auto tlasRHI=rhi::VkRHIAccelerationStructure::createNonOwning(vkD,rtAS.tlas());
     auto inst=rhi::VkRHIBuffer::createNonOwning(vkD,rtAS.instanceDataBuffer(),VK_WHOLE_SIZE);
     auto vert=rhi::VkRHIBuffer::createNonOwning(vkD,scene.vertexBuffer.handle(),VK_WHOLE_SIZE);
     auto ind=rhi::VkRHIBuffer::createNonOwning(vkD,scene.indexBuffer.handle(),VK_WHOLE_SIZE);
@@ -51,7 +52,7 @@ void NdgiPass::bindResources(const NdgiResources& res,SceneRtAS& rtAS,const Scen
     std::vector<std::unique_ptr<rhi::RHITextureView>> tvs; std::vector<const rhi::RHITextureView*> tvp;
     for(uint32_t i=0;i<128;++i){ VkImageView v=(i<(uint32_t)scene.images.size())?scene.images[i].view():scene.whiteTex.view(); tvs.push_back(rhi::VkRHITextureView::createNonOwning(vkD,v)); tvp.push_back(tvs.back().get()); }
     auto ndgiSampler = rhi::VkRHISampler::createNonOwning(vkD, scene.linearSampler);
-    m_traceSet->write({{0,rhi::DescriptorType::AccelerationStructure,nullptr,nullptr,0,0,nullptr,tasInfo.pAccelerationStructures},{1,rhi::DescriptorType::StorageBuffer,nullptr,inst.get()},{2,rhi::DescriptorType::StorageBuffer,nullptr,vert.get()},{3,rhi::DescriptorType::StorageBuffer,nullptr,ind.get()},{4,rhi::DescriptorType::StorageBuffer,nullptr,mat.get()},{5,rhi::DescriptorType::SampledImage,nullptr,nullptr,0,0,nullptr,nullptr,128,tvp.data()},{6,rhi::DescriptorType::Sampler,nullptr,nullptr,0,0,ndgiSampler.get()},{7,rhi::DescriptorType::UniformBuffer,nullptr,ubo.get()},{8,rhi::DescriptorType::StorageBuffer,nullptr,sampB.get()},{9,rhi::DescriptorType::StorageBuffer,nullptr,cntB.get()}});
+    m_traceSet->write({{0,rhi::DescriptorType::AccelerationStructure,nullptr,nullptr,0,0,nullptr,tlasRHI.get()},{1,rhi::DescriptorType::StorageBuffer,nullptr,inst.get()},{2,rhi::DescriptorType::StorageBuffer,nullptr,vert.get()},{3,rhi::DescriptorType::StorageBuffer,nullptr,ind.get()},{4,rhi::DescriptorType::StorageBuffer,nullptr,mat.get()},{5,rhi::DescriptorType::SampledImage,nullptr,nullptr,0,0,nullptr,nullptr,128,tvp.data()},{6,rhi::DescriptorType::Sampler,nullptr,nullptr,0,0,ndgiSampler.get()},{7,rhi::DescriptorType::UniformBuffer,nullptr,ubo.get()},{8,rhi::DescriptorType::StorageBuffer,nullptr,sampB.get()},{9,rhi::DescriptorType::StorageBuffer,nullptr,cntB.get()}});
     writeInitDescriptors(res);
 }
 void NdgiPass::writeInitDescriptors(const NdgiResources& res){ if(!m_initSet)return; auto& vkD=static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);

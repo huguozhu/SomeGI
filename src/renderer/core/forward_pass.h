@@ -62,6 +62,8 @@ private:
     uint32_t m_meshGroupCount = 0;
 
     Buffer m_frameUbo;
+    Buffer m_iblParamsUbo;  // IBL intensity UBO (set=1 binding 4)
+    Buffer m_dummySBuf;     // 占位 STORAGE buffer（NDGI weights 初始值）
     uint32_t m_maxTextures = 0;
     std::vector<std::unique_ptr<rhi::RHITextureView>> m_texViews;
     std::vector<const rhi::RHITextureView*> m_texViewPtrs;

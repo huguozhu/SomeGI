@@ -2,11 +2,26 @@
 #include "vk_descriptor.h"
 #include "vk_buffer.h"
 #include "vk_texture.h"
+#include "vk_acceleration_structure.h"
 #include "../base/sampler.h"
 #include <map>
 
 namespace somegi {
 namespace rhi {
+
+static VkShaderStageFlags toVkShaderStage(ShaderStage s) {
+    VkShaderStageFlags f = 0;
+    if ((uint32_t)s & (uint32_t)ShaderStage::Vertex)        f |= VK_SHADER_STAGE_VERTEX_BIT;
+    if ((uint32_t)s & (uint32_t)ShaderStage::Fragment)      f |= VK_SHADER_STAGE_FRAGMENT_BIT;
+    if ((uint32_t)s & (uint32_t)ShaderStage::Compute)       f |= VK_SHADER_STAGE_COMPUTE_BIT;
+    if ((uint32_t)s & (uint32_t)ShaderStage::Mesh)          f |= VK_SHADER_STAGE_MESH_BIT_EXT;
+    if ((uint32_t)s & (uint32_t)ShaderStage::Task)          f |= VK_SHADER_STAGE_TASK_BIT_EXT;
+    if ((uint32_t)s & (uint32_t)ShaderStage::RayGen)        f |= VK_SHADER_STAGE_RAYGEN_BIT_KHR;
+    if ((uint32_t)s & (uint32_t)ShaderStage::RayMiss)       f |= VK_SHADER_STAGE_MISS_BIT_KHR;
+    if ((uint32_t)s & (uint32_t)ShaderStage::RayClosestHit) f |= VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
+    if ((uint32_t)s & (uint32_t)ShaderStage::RayAnyHit)     f |= VK_SHADER_STAGE_ANY_HIT_BIT_KHR;
+    return f;
+}
 
 static VkDescriptorType toVkDescType(DescriptorType t) {
     switch (t) {
@@ -32,7 +47,7 @@ std::unique_ptr<RHIDescriptorSetLayout> VkRHIDescSetLayout::create(VkRHIDevice& 
         lb.binding = b.binding;
         lb.descriptorType = toVkDescType(b.type);
         lb.descriptorCount = b.count;
-        lb.stageFlags = VK_SHADER_STAGE_ALL;
+        lb.stageFlags = toVkShaderStage(b.visibility);
         bindings.push_back(lb);
         VkDescriptorBindingFlags f = 0;
         if (b.partiallyBound) f |= VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT;
@@ -85,6 +100,8 @@ std::unique_ptr<RHIDescriptorSet> VkRHIDescSet::create(VkRHIDevice& device, cons
     pci.maxSets = 1;
     pci.poolSizeCount = (uint32_t)poolSizes.size();
     pci.pPoolSizes = poolSizes.data();
+    if (layoutDesc.updateAfterBind)
+        pci.flags |= VK_DESCRIPTOR_POOL_CREATE_UPDATE_AFTER_BIND_BIT;
     vkCreateDescriptorPool(device.vkDevice(), &pci, nullptr, &s->m_pool);
 
     // 分配 descriptor set
@@ -107,6 +124,7 @@ void VkRHIDescSet::write(const std::vector<DescriptorWrite>& writes) {
     std::vector<VkDescriptorImageInfo> imageInfos;
     std::vector<VkDescriptorBufferInfo> bufferInfos;
     std::vector<VkWriteDescriptorSetAccelerationStructureKHR> asInfos;
+    std::vector<VkAccelerationStructureKHR> asHandles;  // 持有 handle 值，供 asInfos 引用
 
     // 预计算总容量（含纹理数组），防止 resize/reallocate 导致指针悬空
     size_t totalImages = 0, totalBuffers = 0, totalAS = 0;
@@ -155,9 +173,10 @@ void VkRHIDescSet::write(const std::vector<DescriptorWrite>& writes) {
         }
         if (w.accelerationStructure) {
             // TLAS 绑定（VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR）
+            asHandles.push_back((VkAccelerationStructureKHR)(uintptr_t)w.accelerationStructure->nativeHandle());
             asInfos.push_back({VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR});
             asInfos.back().accelerationStructureCount = 1;
-            asInfos.back().pAccelerationStructures = (const VkAccelerationStructureKHR*)w.accelerationStructure;
+            asInfos.back().pAccelerationStructures = &asHandles.back();
             vw.pNext = &asInfos.back();
         }
         if (w.buffer) {

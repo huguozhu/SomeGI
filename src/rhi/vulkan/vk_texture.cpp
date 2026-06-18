@@ -62,7 +62,7 @@ std::unique_ptr<RHITextureView> VkRHITextureView::create(VkRHIDevice& device, co
     ci.image = (VkImage)(uintptr_t)tex.nativeHandle();
     ci.viewType = VK_IMAGE_VIEW_TYPE_2D;
     ci.format = desc.format != Format::Unknown ? toVkFormat(desc.format) : toVkFormat(tex.format());
-    ci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, desc.baseMip, desc.mipCount, desc.baseLayer, desc.layerCount};
+    ci.subresourceRange = {toVkAspect(tex.format()), desc.baseMip, desc.mipCount, desc.baseLayer, desc.layerCount};
     vkCreateImageView(device.vkDevice(), &ci, nullptr, &v->m_view);
     return v;
 }

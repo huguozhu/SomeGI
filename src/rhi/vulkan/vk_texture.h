@@ -6,6 +6,17 @@
 namespace somegi {
 namespace rhi {
 
+// 根据 RHI Format 推断 Vulkan image aspect（用于 barrier / view creation）
+inline VkImageAspectFlags toVkAspect(Format f) {
+    switch (f) {
+        case Format::D32_SFLOAT:
+            return VK_IMAGE_ASPECT_DEPTH_BIT;
+        // 未来：D24_UNORM_S8_UINT → VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT
+        default:
+            return VK_IMAGE_ASPECT_COLOR_BIT;
+    }
+}
+
 class VkRHITexture : public RHITexture {
 public:
     static std::unique_ptr<RHITexture> create(VkRHIDevice& device, const TextureDesc& desc);

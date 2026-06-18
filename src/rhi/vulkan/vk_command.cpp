@@ -171,8 +171,9 @@ void VkRHICommandBuffer::copyBuffer(const RHIBuffer& src, const RHIBuffer& dst, 
 }
 void VkRHICommandBuffer::copyTexture(const RHITexture& src, const RHITexture& dst) {
     VkImageCopy region{};
-    region.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-    region.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    auto aspect = toVkAspect(src.format());
+    region.srcSubresource = {aspect, 0, 0, 1};
+    region.dstSubresource = {aspect, 0, 0, 1};
     region.extent = {src.width(), src.height(), 1};
     vkCmdCopyImage(m_cmd, (VkImage)(uintptr_t)src.nativeHandle(), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                    (VkImage)(uintptr_t)dst.nativeHandle(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
@@ -182,7 +183,7 @@ void VkRHICommandBuffer::fillBuffer(const RHIBuffer& dst, uint64_t offset, uint6
 }
 void VkRHICommandBuffer::clearColor(const RHITexture& tex, float r, float g, float b, float a) {
     VkClearColorValue cv{r, g, b, a};
-    VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, tex.mipLevels(), 0, 1};
+    VkImageSubresourceRange range{toVkAspect(tex.format()), 0, tex.mipLevels(), 0, 1};
     vkCmdClearColorImage(m_cmd, (VkImage)(uintptr_t)tex.nativeHandle(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &cv, 1, &range);
 }
 void VkRHICommandBuffer::clearDepth(const RHITexture& tex, float depth, uint32_t stencil) {
@@ -200,7 +201,7 @@ void VkRHICommandBuffer::textureBarrier(const RHITexture& tex, TextureLayout old
     b.oldLayout = toVkLayout(oldLayout);
     b.newLayout = toVkLayout(newLayout);
     b.image = (VkImage)(uintptr_t)tex.nativeHandle();
-    b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, tex.mipLevels(), 0, 1};
+    b.subresourceRange = {toVkAspect(tex.format()), 0, tex.mipLevels(), 0, 1};
     VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
     di.imageMemoryBarrierCount = 1; di.pImageMemoryBarriers = &b;
     vkCmdPipelineBarrier2(m_cmd, &di);
@@ -232,32 +233,75 @@ void VkRHICommandBuffer::bufferBarrier(const RHIBuffer& buf,
     vkCmdPipelineBarrier2(m_cmd, &di);
 }
 
-void VkRHICommandBuffer::beginRendering(const RHITextureView* const* colorViews, uint32_t colorCount,
-                                         const RHITextureView* depthView, uint32_t width, uint32_t height,
-                                         bool loadOnly) {
-    VkAttachmentLoadOp loadOp = loadOnly ? VK_ATTACHMENT_LOAD_OP_LOAD : VK_ATTACHMENT_LOAD_OP_CLEAR;
+static VkAttachmentLoadOp toVkLoadOp(AttachmentLoadOp op) {
+    switch (op) {
+        case AttachmentLoadOp::Clear:    return VK_ATTACHMENT_LOAD_OP_CLEAR;
+        case AttachmentLoadOp::Load:     return VK_ATTACHMENT_LOAD_OP_LOAD;
+        case AttachmentLoadOp::DontCare: return VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        default: return VK_ATTACHMENT_LOAD_OP_CLEAR;
+    }
+}
+static VkAttachmentStoreOp toVkStoreOp(AttachmentStoreOp op) {
+    switch (op) {
+        case AttachmentStoreOp::Store:    return VK_ATTACHMENT_STORE_OP_STORE;
+        case AttachmentStoreOp::DontCare: return VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        default: return VK_ATTACHMENT_STORE_OP_STORE;
+    }
+}
+static VkResolveModeFlagBits toVkResolveMode(ResolveMode m) {
+    switch (m) {
+        case ResolveMode::Average: return VK_RESOLVE_MODE_AVERAGE_BIT;
+        case ResolveMode::Min:     return VK_RESOLVE_MODE_MIN_BIT;
+        case ResolveMode::Max:     return VK_RESOLVE_MODE_MAX_BIT;
+        default: return VK_RESOLVE_MODE_AVERAGE_BIT;
+    }
+}
+
+void VkRHICommandBuffer::beginRendering(const RenderingAttachmentInfo* colorAttachments, uint32_t colorCount,
+                                         const RenderingAttachmentInfo* depthAttachment, uint32_t width, uint32_t height) {
+    // ── Color attachments ──
     std::vector<VkRenderingAttachmentInfo> colors(colorCount);
     for (uint32_t i = 0; i < colorCount; ++i) {
+        auto& a = colorAttachments[i];
         colors[i] = {VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
-        colors[i].imageView = (VkImageView)(uintptr_t)colorViews[i]->nativeHandle();
+        colors[i].imageView   = (VkImageView)(uintptr_t)a.view->nativeHandle();
         colors[i].imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-        colors[i].loadOp = loadOp;
-        colors[i].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        colors[i].loadOp      = toVkLoadOp(a.loadOp);
+        colors[i].storeOp     = toVkStoreOp(a.storeOp);
+        std::memcpy(colors[i].clearValue.color.float32, a.clearColor, sizeof(a.clearColor));
+        // MSAA resolve
+        if (a.resolveView) {
+            colors[i].resolveImageView   = (VkImageView)(uintptr_t)a.resolveView->nativeHandle();
+            colors[i].resolveMode        = toVkResolveMode(a.resolveMode);
+            colors[i].resolveImageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        }
     }
+
+    // ── Depth attachment ──
     VkRenderingAttachmentInfo depth{};
-    if (depthView) {
+    VkRenderingAttachmentInfo* pDepth = nullptr;
+    if (depthAttachment && depthAttachment->view) {
         depth = {VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
-        depth.imageView = (VkImageView)(uintptr_t)depthView->nativeHandle();
+        depth.imageView   = (VkImageView)(uintptr_t)depthAttachment->view->nativeHandle();
         depth.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
-        depth.loadOp = loadOp;
-        depth.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        depth.loadOp      = toVkLoadOp(depthAttachment->loadOp);
+        depth.storeOp     = toVkStoreOp(depthAttachment->storeOp);
+        depth.clearValue.depthStencil = {depthAttachment->clearDepth, depthAttachment->clearStencil};
+        // MSAA resolve
+        if (depthAttachment->resolveView) {
+            depth.resolveImageView   = (VkImageView)(uintptr_t)depthAttachment->resolveView->nativeHandle();
+            depth.resolveMode        = toVkResolveMode(depthAttachment->resolveMode);
+            depth.resolveImageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+        }
+        pDepth = &depth;
     }
+
     VkRenderingInfo ri{VK_STRUCTURE_TYPE_RENDERING_INFO};
     ri.renderArea = {{0, 0}, {width, height}};
     ri.layerCount = 1;
     ri.colorAttachmentCount = colorCount;
-    ri.pColorAttachments = colors.data();
-    ri.pDepthAttachment = depthView ? &depth : nullptr;
+    ri.pColorAttachments    = colors.data();
+    ri.pDepthAttachment     = pDepth;
     vkCmdBeginRendering(m_cmd, &ri);
 }
 void VkRHICommandBuffer::endRendering() { vkCmdEndRendering(m_cmd); }

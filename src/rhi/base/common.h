@@ -150,12 +150,28 @@ struct VertexAttribute { uint32_t location; VertexFormat format; uint32_t offset
 struct VertexBinding { uint32_t binding; uint32_t stride; bool perInstance = false; };
 struct VertexInputState { std::vector<VertexBinding> bindings; std::vector<VertexAttribute> attributes; };
 
-struct RasterizationState { FillMode fill = FillMode::Solid; CullMode cull = CullMode::Back; bool frontCCW = true; };
+struct RasterizationState {
+    FillMode fill = FillMode::Solid;
+    CullMode cull = CullMode::Back;
+    bool frontCCW = true;
+    // Depth bias（阴影贴图消除 shadow acne）
+    bool depthBiasEnable = false;
+    float depthBiasConstantFactor = 0.0f;
+    float depthBiasSlopeFactor = 0.0f;
+    float depthBiasClamp = 0.0f;
+};
 struct DepthStencilState { bool depthTest = true; bool depthWrite = true; CompareFunc depthCompare = CompareFunc::Less; };
 struct BlendAttachment { bool blendEnable = false; BlendFactor srcColor = BlendFactor::One; BlendFactor dstColor = BlendFactor::Zero; BlendOp colorOp = BlendOp::Add; };
 struct BlendState { std::vector<BlendAttachment> attachments; };
 
 struct PushConstantRange { ShaderStage stages; uint32_t offset; uint32_t size; };
+
+// ════════════════════════════════════════════════════════════════
+// 渲染通道（beginRendering attachment 描述）
+// ════════════════════════════════════════════════════════════════
+enum class AttachmentLoadOp { Clear, Load, DontCare };
+enum class AttachmentStoreOp { Store, DontCare };
+enum class ResolveMode { Average, Min, Max };
 
 // ════════════════════════════════════════════════════════════════
 // 管线阶段（用于 barrier）

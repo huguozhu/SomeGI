@@ -10,6 +10,7 @@ namespace rhi {
 class RHIBuffer;
 class RHITextureView;
 class RHISampler;
+class RHIAccelerationStructure;
 
 // ════════════════════════════════════════════════════════════════
 // Descriptor Set Layout
@@ -56,7 +57,7 @@ struct DescriptorWrite {
     uint64_t bufferOffset = 0;
     uint64_t bufferRange = 0;
     const RHISampler* sampler = nullptr;
-    const void* accelerationStructure = nullptr;  // 原生 VkAccelerationStructureKHR
+    const RHIAccelerationStructure* accelerationStructure = nullptr;  // TLAS / BLAS
 
     // 纹理数组绑定（count > 1 时使用，与 textureView 互斥）
     uint32_t textureArrayCount = 0;

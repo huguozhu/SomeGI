@@ -43,6 +43,14 @@ void ForwardPass::init(Device& d, rhi::RHIDevice& rhiDevice, VkFormat colorFmt, 
 
     m_frameUbo=Buffer(d,sizeof(FrameUBO),VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT|VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
 
+    // 占位 STORAGE buffer（NDGI weights 初始值）
+    m_dummySBuf=Buffer(d,4,VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT|VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+
+    // IBL params UBO (set=1 binding 4, gIblParams)
+    { struct IblParams { float intensity; float _pad[3]; };
+      m_iblParamsUbo=Buffer(d,sizeof(IblParams),VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT|VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+      IblParams p{1.0f}; std::memcpy(m_iblParamsUbo.mapped(),&p,sizeof(p)); }
+
     // IBL set=1
     {
         rhi::DescSetLayoutDesc ld; ld.debugName="ForwardIBL";
@@ -57,7 +65,7 @@ void ForwardPass::init(Device& d, rhi::RHIDevice& rhiDevice, VkFormat colorFmt, 
         auto vs=rhi::VkRHIShader::createFromFile(vkD,vsd,spv); auto fs=rhi::VkRHIShader::createFromFile(vkD,fsd,spv);
         rhi::GraphicsPSODesc pd; pd.debugName="Forward"; pd.vertexShader=vs.get(); pd.fragmentShader=fs.get();
         pd.vertexInput.bindings={{0,sizeof(Vertex),false}};
-        pd.vertexInput.attributes={{0,rhi::VertexFormat::Float3,offsetof(Vertex,position),0},{1,rhi::VertexFormat::Float3,offsetof(Vertex,normal),0},{2,rhi::VertexFormat::Float2,offsetof(Vertex,uv0),0}};
+        pd.vertexInput.attributes={{0,rhi::VertexFormat::Float3,offsetof(Vertex,position),0},{1,rhi::VertexFormat::Float3,offsetof(Vertex,normal),0},{2,rhi::VertexFormat::Float2,offsetof(Vertex,uv0),0},{3,rhi::VertexFormat::Float4,offsetof(Vertex,tangent),0}};
         pd.topology=rhi::PrimitiveTopology::TriangleList;
         pd.rasterization.cull=rhi::CullMode::Back; pd.rasterization.frontCCW=true;
         pd.depthStencil.depthTest=true; pd.depthStencil.depthWrite=true; pd.depthStencil.depthCompare=rhi::CompareFunc::LessEqual;
@@ -129,7 +137,7 @@ void ForwardPass::destroy() {
     if(m_meshPipelineLayout) vkDestroyPipelineLayout(m_device->device(),m_meshPipelineLayout,nullptr);
     if(m_meshPool) vkDestroyDescriptorPool(m_device->device(),m_meshPool,nullptr);
     if(m_meshSetLayout) vkDestroyDescriptorSetLayout(m_device->device(),m_meshSetLayout,nullptr);
-    m_frameUbo.reset(); m_cullUbo.reset(); m_meshGroupBuf.reset();
+    m_frameUbo.reset(); m_iblParamsUbo.reset(); m_dummySBuf.reset(); m_cullUbo.reset(); m_meshGroupBuf.reset();
     m_device=nullptr; m_rhiDevice=nullptr;
 }
 
@@ -140,7 +148,8 @@ void ForwardPass::bindIblResources(Device& d, const IblResources& ibl) {
     auto spec=rhi::VkRHITextureView::createNonOwning(vkD,ibl.specularCube.view());
     auto lut=rhi::VkRHITextureView::createNonOwning(vkD,ibl.brdfLut.view());
     auto ibs=rhi::VkRHISampler::createNonOwning(vkD,ibl.linear);
-    m_iblSet->write({{0,rhi::DescriptorType::SampledImage,diff.get()},{1,rhi::DescriptorType::SampledImage,spec.get()},{2,rhi::DescriptorType::SampledImage,lut.get()},{3,rhi::DescriptorType::Sampler,nullptr,nullptr,0,0,ibs.get()}});
+    auto ibp=rhi::VkRHIBuffer::createNonOwning(vkD,m_iblParamsUbo.handle(),sizeof(float)*4);
+    m_iblSet->write({{0,rhi::DescriptorType::SampledImage,diff.get()},{1,rhi::DescriptorType::SampledImage,spec.get()},{2,rhi::DescriptorType::SampledImage,lut.get()},{3,rhi::DescriptorType::Sampler,nullptr,nullptr,0,0,ibs.get()},{4,rhi::DescriptorType::UniformBuffer,nullptr,ibp.get()}});
 }
 
 void ForwardPass::bindScene(Device&, const SceneGpu& gpu, uint32_t tc) {
@@ -150,7 +159,7 @@ void ForwardPass::bindScene(Device&, const SceneGpu& gpu, uint32_t tc) {
     auto ubo=rhi::VkRHIBuffer::createNonOwning(vkD,m_frameUbo.handle(),sizeof(FrameUBO));
     m_texViews.clear(); m_texViewPtrs.clear(); m_texViews.reserve(m_maxTextures); m_texViewPtrs.reserve(m_maxTextures);
     for(uint32_t i=0;i<m_maxTextures;++i){ VkImageView v=(i<tc&&i<gpu.images.size())?gpu.images[i].view():gpu.whiteTex.view(); m_texViews.push_back(rhi::VkRHITextureView::createNonOwning(vkD,v)); m_texViewPtrs.push_back(m_texViews.back().get()); }
-    auto dumB=rhi::VkRHIBuffer::createNonOwning(vkD,m_frameUbo.handle(),4);
+    auto dumB=rhi::VkRHIBuffer::createNonOwning(vkD,m_dummySBuf.handle(),4);
     m_set->write({{0,rhi::DescriptorType::UniformBuffer,nullptr,ubo.get()},{1,rhi::DescriptorType::StorageBuffer,nullptr,mat.get()},{2,rhi::DescriptorType::Sampler,nullptr,nullptr,0,0,ibs.get()},{3,rhi::DescriptorType::SampledImage,nullptr,nullptr,0,0,nullptr,nullptr,m_maxTextures,m_texViewPtrs.data()},{4,rhi::DescriptorType::StorageBuffer,nullptr,dumB.get()},{5,rhi::DescriptorType::StorageBuffer,nullptr,dumB.get()},{6,rhi::DescriptorType::StorageBuffer,nullptr,dumB.get()},{7,rhi::DescriptorType::StorageBuffer,nullptr,dumB.get()},{8,rhi::DescriptorType::StorageBuffer,nullptr,dumB.get()},{9,rhi::DescriptorType::StorageBuffer,nullptr,dumB.get()}});
 }
 

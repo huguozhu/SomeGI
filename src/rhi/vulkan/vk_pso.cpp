@@ -88,6 +88,10 @@ std::unique_ptr<RHIPipelineState> VkRHIPipelineState::createGraphics(VkRHIDevice
     rs.cullMode = (desc.rasterization.cull == CullMode::Back) ? VK_CULL_MODE_BACK_BIT : (desc.rasterization.cull == CullMode::None ? VK_CULL_MODE_NONE : VK_CULL_MODE_FRONT_BIT);
     rs.frontFace = desc.rasterization.frontCCW ? VK_FRONT_FACE_COUNTER_CLOCKWISE : VK_FRONT_FACE_CLOCKWISE;
     rs.lineWidth = 1.0f;
+    rs.depthBiasEnable = desc.rasterization.depthBiasEnable ? VK_TRUE : VK_FALSE;
+    rs.depthBiasConstantFactor = desc.rasterization.depthBiasConstantFactor;
+    rs.depthBiasSlopeFactor = desc.rasterization.depthBiasSlopeFactor;
+    rs.depthBiasClamp = desc.rasterization.depthBiasClamp;
 
     // Depth stencil
     VkPipelineDepthStencilStateCreateInfo ds{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
