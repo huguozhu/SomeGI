@@ -1,531 +1,204 @@
+// ForwardPass RHI — Graphics PSO + IBL set=1。Mesh Shader 保留 Vk。
 #include "renderer/core/forward_pass.h"
 #include "core/device.h"
+#include "core/shader.h"
+#include "rhi/vulkan/vk_device.h"
+#include "rhi/vulkan/vk_shader.h"
+#include "rhi/vulkan/vk_texture.h"
+#include "rhi/vulkan/vk_buffer.h"
+#include "rhi/vulkan/vk_sampler.h"
+#include "rhi/vulkan/vk_pso.h"
 #include <array>
 #include <cstring>
 
 namespace somegi {
+namespace { struct PC { glm::mat4 model; int materialIndex; int p0,p1,p2; };
+static_assert(sizeof(PC)==80); }
 
-namespace {
-struct PC {
-    glm::mat4 model;
-    int materialIndex;
-    int p0, p1, p2;
-};
-static_assert(sizeof(PC) == 80, "PC must match shader push constant layout");
+static VkDescriptorSet VkSet(auto& p) { return (VkDescriptorSet)(uintptr_t)p->nativeHandle(); }
+static VkPipelineLayout VkLay(auto& p) { return static_cast<rhi::VkRHIPipelineState&>(*p).layout(); }
+static rhi::Format toRF(VkFormat f) {
+    switch (f) { case VK_FORMAT_R16G16B16A16_SFLOAT: return rhi::Format::R16G16B16A16_SFLOAT;
+                 case VK_FORMAT_D32_SFLOAT: return rhi::Format::D32_SFLOAT; default: return rhi::Format::Unknown; }
 }
+
+ForwardPass::~ForwardPass() = default;
 
 void ForwardPass::init(Device& d, rhi::RHIDevice& rhiDevice, VkFormat colorFmt, VkFormat depthFmt, uint32_t maxTextures) {
-    m_device = &d;
-    m_rhiDevice = &rhiDevice;
-    m_colorFmt = colorFmt;
-    m_depthFmt = depthFmt;
-    m_maxTextures = maxTextures;
+    m_device=&d; m_rhiDevice=&rhiDevice; m_colorFmt=colorFmt; m_depthFmt=depthFmt; m_maxTextures=maxTextures;
+    auto& vkD=static_cast<rhi::VkRHIDevice&>(rhiDevice);
+    using DS=rhi::DescriptorType; using SS=rhi::ShaderStage;
+    auto VSFS=static_cast<SS>(static_cast<uint32_t>(SS::Vertex)|static_cast<uint32_t>(SS::Fragment));
 
-    // === Set=0 layout ===
-    std::array<VkDescriptorSetLayoutBinding, 11> b{};
-    b[0] = {0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_VERTEX_BIT|VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
-    b[1] = {1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
-    b[2] = {2, VK_DESCRIPTOR_TYPE_SAMPLER,         1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
-    b[3] = {3, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,   maxTextures, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
-    // NDGI MLP 权重 (bindings 4-9)
-    for (uint32_t i = 4; i < 10; ++i)
-        b[i] = {i, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
-    // GPU-driven DrawData (binding 10)
-    b[10] = {10, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_VERTEX_BIT, nullptr};
-
-    std::array<VkDescriptorBindingFlags, 11> bf{};
-    bf[3] = VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT;
-    VkDescriptorSetLayoutBindingFlagsCreateInfo bfci{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO};
-    bfci.bindingCount = (uint32_t)bf.size(); bfci.pBindingFlags = bf.data();
-
-    VkDescriptorSetLayoutCreateInfo li{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-    li.pNext = &bfci;
-    li.bindingCount = (uint32_t)b.size(); li.pBindings = b.data();
-    VK_CHECK(vkCreateDescriptorSetLayout(d.device(), &li, nullptr, &m_setLayout));
-
-    // === Descriptor pool + Set=0 alloc ===
-    std::array<VkDescriptorPoolSize, 4> ps{{
-        {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1},
-        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 8},  // +6 NDGI
-        {VK_DESCRIPTOR_TYPE_SAMPLER, 1},
-        {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, maxTextures},
-    }};
-    VkDescriptorPoolCreateInfo pci{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
-    pci.maxSets = 1; pci.poolSizeCount = (uint32_t)ps.size(); pci.pPoolSizes = ps.data();
-    VK_CHECK(vkCreateDescriptorPool(d.device(), &pci, nullptr, &m_pool));
-
-    VkDescriptorSetAllocateInfo dai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
-    dai.descriptorPool = m_pool; dai.descriptorSetCount = 1; dai.pSetLayouts = &m_setLayout;
-    VK_CHECK(vkAllocateDescriptorSets(d.device(), &dai, &m_set));
-
-    m_frameUbo = Buffer(d, sizeof(FrameUBO),
-                       VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
-                       VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-
-    // ── Mesh Shader set=0 descriptor layout ──
+    // set=0 (11 bindings, PARTIALLY_BOUND on 3)
     {
-        const VkShaderStageFlags kTS = VK_SHADER_STAGE_TASK_BIT_EXT | VK_SHADER_STAGE_MESH_BIT_EXT;
-        std::array<VkDescriptorSetLayoutBinding, 12> mb{};
-        mb[0] = {0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, kTS, nullptr};
-        mb[1] = {1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, kTS, nullptr};  // MeshGroup 映射
-        for (uint32_t i = 0; i < 4; ++i)
-            mb[2+i] = {2+i, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, kTS, nullptr};
-        mb[6] = {6, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, kTS | VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
-        mb[7] = {7, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, kTS, nullptr};
-        mb[8] = {8, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, kTS, nullptr};
-        mb[9] = {9, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
-        mb[10]= {10, VK_DESCRIPTOR_TYPE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
-        mb[11]= {11, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, m_maxTextures, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
+        rhi::DescSetLayoutDesc ld; ld.debugName="Forward";
+        ld.bindings={{0,DS::UniformBuffer,1,VSFS},{1,DS::StorageBuffer,1,SS::Fragment},{2,DS::Sampler,1,SS::Fragment}};
+        ld.bindings.push_back({3,DS::SampledImage,maxTextures,SS::Fragment,true}); // PARTIALLY_BOUND
+        for(uint32_t i=4;i<10;++i) ld.bindings.push_back({i,DS::StorageBuffer,1,SS::Fragment}); // NDGI weights
+        ld.bindings.push_back({10,DS::StorageBuffer,1,SS::Vertex}); // DrawData
+        m_setLayout=rhiDevice.createDescriptorSetLayout(ld);
+        m_set=rhiDevice.createDescriptorSet(*m_setLayout);
+    }
 
-        std::array<VkDescriptorBindingFlags, 12> mbf{};
-        mbf[11] = VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT;
+    m_frameUbo=Buffer(d,sizeof(FrameUBO),VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT|VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+
+    // IBL set=1
+    {
+        rhi::DescSetLayoutDesc ld; ld.debugName="ForwardIBL";
+        ld.bindings={{0,DS::SampledImage,1,VSFS},{1,DS::SampledImage,1,VSFS},{2,DS::SampledImage,1,VSFS},{3,DS::Sampler,1,VSFS},{4,DS::UniformBuffer,1,VSFS}};
+        m_iblDsl=rhiDevice.createDescriptorSetLayout(ld);
+    }
+
+    // Graphics PSO (vertex+fragment from forward_ibl.spv)
+    {
+        auto spv=shaderDir()/"forward"/"forward_ibl.spv";
+        rhi::ShaderDesc vsd,fsd; vsd.stage=SS::Vertex; vsd.entryPoint="vs_main"; fsd.stage=SS::Fragment; fsd.entryPoint="ps_main";
+        auto vs=rhi::VkRHIShader::createFromFile(vkD,vsd,spv); auto fs=rhi::VkRHIShader::createFromFile(vkD,fsd,spv);
+        rhi::GraphicsPSODesc pd; pd.debugName="Forward"; pd.vertexShader=vs.get(); pd.fragmentShader=fs.get();
+        pd.vertexInput.bindings={{0,sizeof(Vertex),false}};
+        pd.vertexInput.attributes={{0,rhi::VertexFormat::Float3,offsetof(Vertex,position),0},{1,rhi::VertexFormat::Float3,offsetof(Vertex,normal),0},{2,rhi::VertexFormat::Float2,offsetof(Vertex,uv0),0}};
+        pd.topology=rhi::PrimitiveTopology::TriangleList;
+        pd.rasterization.cull=rhi::CullMode::Back; pd.rasterization.frontCCW=true;
+        pd.depthStencil.depthTest=true; pd.depthStencil.depthWrite=true; pd.depthStencil.depthCompare=rhi::CompareFunc::LessEqual;
+        pd.renderTargets.colorFormats={toRF(colorFmt)}; pd.renderTargets.depthFormat=toRF(depthFmt);
+        pd.descriptorSetLayouts={m_setLayout.get(),m_iblDsl.get()};
+        pd.pushConstants={{SS::Vertex|SS::Fragment,0,sizeof(PC)}};
+        m_pipeline=rhiDevice.createGraphicsPSO(pd);
+    }
+
+    // Mesh Shader (Vk, 保留原实现)
+    if(d.features().meshShader) {
+        auto sd=shaderDir();
+        const VkShaderStageFlags kTS=VK_SHADER_STAGE_TASK_BIT_EXT|VK_SHADER_STAGE_MESH_BIT_EXT;
+        std::array<VkDescriptorSetLayoutBinding,12> mb{};
+        mb[0]={0,VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,1,kTS,nullptr}; mb[1]={1,VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,1,kTS,nullptr};
+        for(uint32_t i=0;i<4;++i) mb[2+i]={2u+i,VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,1,kTS,nullptr};
+        mb[6]={6,VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,1,kTS,nullptr}; mb[7]={7,VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,1,kTS,nullptr};
+        mb[8]={8,VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,maxTextures,kTS,nullptr};
+        for(uint32_t i=9;i<12;++i) mb[i]={i,VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,1,kTS,nullptr};
+        std::array<VkDescriptorBindingFlags,12> mbf{}; mbf[8]=VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT;
         VkDescriptorSetLayoutBindingFlagsCreateInfo mbfci{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO};
-        mbfci.bindingCount = (uint32_t)mbf.size(); mbfci.pBindingFlags = mbf.data();
-
+        mbfci.bindingCount=(uint32_t)mbf.size(); mbfci.pBindingFlags=mbf.data();
         VkDescriptorSetLayoutCreateInfo mli{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-        mli.pNext = &mbfci;
-        mli.bindingCount = (uint32_t)mb.size(); mli.pBindings = mb.data();
-        VK_CHECK(vkCreateDescriptorSetLayout(d.device(), &mli, nullptr, &m_meshSetLayout));
-
-        std::array<VkDescriptorPoolSize, 4> mps{{
-            {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 5},
-            {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1},
-            {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, m_maxTextures + 4},
-            {VK_DESCRIPTOR_TYPE_SAMPLER, 1},
-        }};
+        mli.pNext=&mbfci; mli.bindingCount=(uint32_t)mb.size(); mli.pBindings=mb.data();
+        VK_CHECK(vkCreateDescriptorSetLayout(d.device(),&mli,nullptr,&m_meshSetLayout));
+        std::array<VkDescriptorPoolSize,2> mps{{{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,10},{VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,maxTextures+4}}};
         VkDescriptorPoolCreateInfo mpci{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
-        mpci.maxSets = 1; mpci.poolSizeCount = (uint32_t)mps.size(); mpci.pPoolSizes = mps.data();
-        VK_CHECK(vkCreateDescriptorPool(d.device(), &mpci, nullptr, &m_meshPool));
-
+        mpci.maxSets=1; mpci.poolSizeCount=(uint32_t)mps.size(); mpci.pPoolSizes=mps.data();
+        VK_CHECK(vkCreateDescriptorPool(d.device(),&mpci,nullptr,&m_meshPool));
         VkDescriptorSetAllocateInfo mdai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
-        mdai.descriptorPool = m_meshPool; mdai.descriptorSetCount = 1; mdai.pSetLayouts = &m_meshSetLayout;
-        VK_CHECK(vkAllocateDescriptorSets(d.device(), &mdai, &m_meshSet));
-
-        m_cullUbo = Buffer(d, sizeof(glm::vec4)*6 + sizeof(glm::vec2) + sizeof(uint32_t)*2,
-            VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
-            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+        mdai.descriptorPool=m_meshPool; mdai.descriptorSetCount=1; mdai.pSetLayouts=&m_meshSetLayout;
+        VK_CHECK(vkAllocateDescriptorSets(d.device(),&mdai,&m_meshSet));
+        VkPushConstantRange mpc{VK_SHADER_STAGE_TASK_BIT_EXT|VK_SHADER_STAGE_MESH_BIT_EXT,0,sizeof(PC)};
+        VkPipelineLayoutCreateInfo mpli{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+        mpli.setLayoutCount=1; mpli.pSetLayouts=&m_meshSetLayout; mpli.pushConstantRangeCount=1; mpli.pPushConstantRanges=&mpc;
+        VK_CHECK(vkCreatePipelineLayout(d.device(),&mpli,nullptr,&m_meshPipelineLayout));
+        m_meshGroupBuf=Buffer(d,m_maxTextures*sizeof(uint32_t)*2,VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT|VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+        ShaderModule meshMod(d,sd/"forward"/"forward_mesh_no_task_mesh.spv"),fragMod(d,sd/"forward"/"forward_mesh_no_task_frag.spv");
+        std::vector<VkPipelineShaderStageCreateInfo> mstages;
+        mstages.push_back({VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,nullptr,0,VK_SHADER_STAGE_MESH_BIT_EXT,meshMod.handle(),"main",nullptr});
+        mstages.push_back({VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,nullptr,0,VK_SHADER_STAGE_FRAGMENT_BIT,fragMod.handle(),"main",nullptr});
+        VkGraphicsPipelineCreateInfo mgci{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
+        mgci.stageCount=(uint32_t)mstages.size(); mgci.pStages=mstages.data();
+        VkPipelineVertexInputStateCreateInfo mvi{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
+        VkPipelineInputAssemblyStateCreateInfo mia{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
+        mia.topology=VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+        VkPipelineRasterizationStateCreateInfo mrs{VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
+        mrs.cullMode=VK_CULL_MODE_BACK_BIT; mrs.frontFace=VK_FRONT_FACE_COUNTER_CLOCKWISE; mrs.lineWidth=1.f;
+        VkPipelineMultisampleStateCreateInfo mms{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO}; mms.rasterizationSamples=VK_SAMPLE_COUNT_1_BIT;
+        VkPipelineDepthStencilStateCreateInfo mds{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
+        mds.depthTestEnable=VK_TRUE; mds.depthWriteEnable=VK_TRUE; mds.depthCompareOp=VK_COMPARE_OP_LESS_OR_EQUAL;
+        VkPipelineColorBlendAttachmentState mba{}; mba.colorWriteMask=0xF;
+        VkPipelineColorBlendStateCreateInfo mcb{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO}; mcb.attachmentCount=1; mcb.pAttachments=&mba;
+        VkPipelineViewportStateCreateInfo mvp{VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO}; mvp.viewportCount=1; mvp.scissorCount=1;
+        VkDynamicState mdyn[]={VK_DYNAMIC_STATE_VIEWPORT,VK_DYNAMIC_STATE_SCISSOR};
+        VkPipelineDynamicStateCreateInfo mdyni{VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO}; mdyni.dynamicStateCount=2; mdyni.pDynamicStates=mdyn;
+        VkPipelineRenderingCreateInfo mrci{VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO};
+        mrci.colorAttachmentCount=1; mrci.pColorAttachmentFormats=&m_colorFmt; mrci.depthAttachmentFormat=m_depthFmt;
+        mgci.pVertexInputState=&mvi; mgci.pInputAssemblyState=&mia; mgci.pRasterizationState=&mrs;
+        mgci.pMultisampleState=&mms; mgci.pDepthStencilState=&mds; mgci.pColorBlendState=&mcb;
+        mgci.pViewportState=&mvp; mgci.pDynamicState=&mdyni; mgci.layout=m_meshPipelineLayout; mgci.pNext=&mrci;
+        VK_CHECK(vkCreateGraphicsPipelines(d.device(),VK_NULL_HANDLE,1,&mgci,nullptr,&m_meshPipeline));
     }
-}
-
-void ForwardPass::buildPipeline() {
-    auto& d = *m_device;
-
-    // set=0（帧/材质/纹理）+ set=1（IBL cube 贴图）
-    std::array<VkDescriptorSetLayout, 2> sets{m_setLayout, m_iblDsl};
-    VkPipelineLayoutCreateInfo plci{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
-    plci.setLayoutCount = 2;
-    plci.pSetLayouts = sets.data();
-    plci.pushConstantRangeCount = 0; plci.pPushConstantRanges = nullptr;
-    VK_CHECK(vkCreatePipelineLayout(d.device(), &plci, nullptr, &m_pipelineLayout));
-
-    auto sd = shaderDir();
-    ShaderModule shader(d, sd / "forward" / "forward_ibl.spv");
-
-    VkPipelineShaderStageCreateInfo stages[2]{};
-    stages[0] = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
-    stages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
-    stages[0].module = shader.handle(); stages[0].pName = "vs_main";
-    stages[1] = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
-    stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
-    stages[1].module = shader.handle(); stages[1].pName = "ps_main";
-
-    VkVertexInputBindingDescription vib{0, sizeof(Vertex), VK_VERTEX_INPUT_RATE_VERTEX};
-    std::array<VkVertexInputAttributeDescription, 4> via{};
-    via[0] = {0, 0, VK_FORMAT_R32G32B32_SFLOAT,    offsetof(Vertex,position)};
-    via[1] = {1, 0, VK_FORMAT_R32G32B32_SFLOAT,    offsetof(Vertex,normal)};
-    via[2] = {2, 0, VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(Vertex,tangent)};
-    via[3] = {3, 0, VK_FORMAT_R32G32_SFLOAT,       offsetof(Vertex,uv0)};
-
-    VkPipelineVertexInputStateCreateInfo vi{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
-    vi.vertexBindingDescriptionCount = 1; vi.pVertexBindingDescriptions = &vib;
-    vi.vertexAttributeDescriptionCount = (uint32_t)via.size(); vi.pVertexAttributeDescriptions = via.data();
-
-    VkPipelineInputAssemblyStateCreateInfo ia{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
-    ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
-
-    VkPipelineViewportStateCreateInfo vp{VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};
-    vp.viewportCount = 1; vp.scissorCount = 1;
-
-    VkPipelineRasterizationStateCreateInfo rs{VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
-    rs.cullMode = VK_CULL_MODE_BACK_BIT;
-    rs.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
-    rs.lineWidth = 1.0f;
-
-    VkPipelineMultisampleStateCreateInfo ms{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
-    ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
-
-    VkPipelineDepthStencilStateCreateInfo ds{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
-    ds.depthTestEnable = VK_TRUE; ds.depthWriteEnable = VK_TRUE;
-    ds.depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
-
-    VkPipelineColorBlendAttachmentState ba{}; ba.colorWriteMask = 0xF;
-    VkPipelineColorBlendStateCreateInfo cb{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
-    cb.attachmentCount = 1; cb.pAttachments = &ba;
-
-    VkDynamicState dyn[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
-    VkPipelineDynamicStateCreateInfo dyni{VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};
-    dyni.dynamicStateCount = 2; dyni.pDynamicStates = dyn;
-
-    VkPipelineRenderingCreateInfo rci{VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO};
-    rci.colorAttachmentCount = 1; rci.pColorAttachmentFormats = &m_colorFmt;
-    rci.depthAttachmentFormat = m_depthFmt;
-
-    VkGraphicsPipelineCreateInfo gpci{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
-    gpci.pNext = &rci;
-    gpci.stageCount = 2; gpci.pStages = stages;
-    gpci.pVertexInputState = &vi; gpci.pInputAssemblyState = &ia;
-    gpci.pViewportState = &vp; gpci.pRasterizationState = &rs;
-    gpci.pMultisampleState = &ms; gpci.pDepthStencilState = &ds;
-    gpci.pColorBlendState = &cb; gpci.pDynamicState = &dyni;
-    gpci.layout = m_pipelineLayout;
-    VK_CHECK(vkCreateGraphicsPipelines(d.device(), VK_NULL_HANDLE, 1, &gpci, nullptr, &m_pipeline));
-}
-
-void ForwardPass::destroyPipeline() {
-    if (!m_device) return;
-    if (m_pipeline)       vkDestroyPipeline(m_device->device(), m_pipeline, nullptr);
-    if (m_pipelineLayout) vkDestroyPipelineLayout(m_device->device(), m_pipelineLayout, nullptr);
-    if (m_meshPipeline)   vkDestroyPipeline(m_device->device(), m_meshPipeline, nullptr);
-    if (m_meshPipelineLayout) vkDestroyPipelineLayout(m_device->device(), m_meshPipelineLayout, nullptr);
-    m_pipeline = VK_NULL_HANDLE; m_pipelineLayout = VK_NULL_HANDLE;
-    m_meshPipeline = VK_NULL_HANDLE; m_meshPipelineLayout = VK_NULL_HANDLE;
-}
-
-void ForwardPass::buildMeshPipeline() {
-    auto& d = *m_device;
-
-    std::array<VkDescriptorSetLayout, 2> sets{m_meshSetLayout, m_iblDsl};
-    VkPipelineLayoutCreateInfo plci{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
-    plci.setLayoutCount = 2; plci.pSetLayouts = sets.data();
-    VK_CHECK(vkCreatePipelineLayout(d.device(), &plci, nullptr, &m_meshPipelineLayout));
-
-    auto sd = shaderDir();
-    bool hasTask = false;
-    ShaderModule meshMod(d, sd / "forward" / "forward_mesh_no_task_mesh.spv");
-    ShaderModule fragMod(d, sd / "forward" / "forward_mesh_no_task_frag.spv");
-    ShaderModule taskMod;  // UNUSED: hasTask always false
-
-    std::vector<VkPipelineShaderStageCreateInfo> si;
-    if (hasTask) {
-        VkPipelineShaderStageCreateInfo s{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
-        s.stage = VK_SHADER_STAGE_TASK_BIT_EXT; s.module = taskMod.handle(); s.pName = "ts_main";
-        si.push_back(s);
-    }
-    {
-        VkPipelineShaderStageCreateInfo s{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
-        s.stage = VK_SHADER_STAGE_MESH_BIT_EXT; s.module = meshMod.handle(); s.pName = "main";
-        si.push_back(s);
-    }
-    {
-        VkPipelineShaderStageCreateInfo s{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
-        s.stage = VK_SHADER_STAGE_FRAGMENT_BIT; s.module = fragMod.handle(); s.pName = "main";
-        si.push_back(s);
-    }
-
-    VkPipelineVertexInputStateCreateInfo vi{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
-    vi.vertexBindingDescriptionCount = 0; vi.vertexAttributeDescriptionCount = 0;
-    VkPipelineInputAssemblyStateCreateInfo ia{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
-    ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
-    VkPipelineViewportStateCreateInfo vp{VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};
-    vp.viewportCount = 1; vp.scissorCount = 1;
-    VkPipelineRasterizationStateCreateInfo rs{VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
-    rs.cullMode = VK_CULL_MODE_BACK_BIT; rs.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE; rs.lineWidth = 1.0f;
-    VkPipelineMultisampleStateCreateInfo ms{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
-    ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
-    VkPipelineDepthStencilStateCreateInfo ds{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
-    ds.depthTestEnable = VK_TRUE; ds.depthWriteEnable = VK_TRUE; ds.depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
-    VkPipelineColorBlendAttachmentState ba{}; ba.colorWriteMask = 0xF;
-    VkPipelineColorBlendStateCreateInfo cb{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
-    cb.attachmentCount = 1; cb.pAttachments = &ba;
-    VkDynamicState dyn[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
-    VkPipelineDynamicStateCreateInfo dyni{VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};
-    dyni.dynamicStateCount = 2; dyni.pDynamicStates = dyn;
-    VkPipelineRenderingCreateInfo rci{VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO};
-    rci.colorAttachmentCount = 1; rci.pColorAttachmentFormats = &m_colorFmt;
-    rci.depthAttachmentFormat = m_depthFmt;
-    VkGraphicsPipelineCreateInfo gpci{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
-    gpci.pNext = &rci; gpci.stageCount = (uint32_t)si.size(); gpci.pStages = si.data();
-    gpci.pVertexInputState = &vi; gpci.pInputAssemblyState = &ia;
-    gpci.pViewportState = &vp; gpci.pRasterizationState = &rs; gpci.pMultisampleState = &ms;
-    gpci.pDepthStencilState = &ds; gpci.pColorBlendState = &cb; gpci.pDynamicState = &dyni;
-    gpci.layout = m_meshPipelineLayout;
-    VK_CHECK(vkCreateGraphicsPipelines(d.device(), VK_NULL_HANDLE, 1, &gpci, nullptr, &m_meshPipeline));
-}
-
-void ForwardPass::bindHiZViews(VkImageView mip1, VkImageView mip2, VkImageView mip3, VkImageView mip4) {
-    auto hz = [](VkImageView v) { VkDescriptorImageInfo i{}; i.imageView=v; i.imageLayout=VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL; return i; };
-    VkDescriptorImageInfo h[4] = {hz(mip1),hz(mip2),hz(mip3),hz(mip4)};
-    std::array<VkWriteDescriptorSet, 4> w{};
-    for (uint32_t i=0;i<4;++i) { w[i]={VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET}; w[i].dstSet=m_meshSet; w[i].dstBinding=2+i; w[i].descriptorCount=1; w[i].descriptorType=VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE; w[i].pImageInfo=&h[i]; }
-    vkUpdateDescriptorSets(m_device->device(),4,w.data(),0,nullptr);
-}
-
-void ForwardPass::buildMeshGroups(const std::vector<DrawEntry>& entries) {
-    struct MeshGroup { uint32_t drawIndex; uint32_t triOffset; };
-    constexpr uint32_t kShaderMaxTris = 85;
-    uint32_t kMaxTris = kShaderMaxTris;
-    if (m_device) {
-        uint32_t gpuLimit = m_device->features().maxMeshOutputPrimitives;
-        if (gpuLimit < kMaxTris) kMaxTris = gpuLimit;
-    }
-    std::vector<MeshGroup> groups;
-    for (uint32_t d = 0; d < (uint32_t)entries.size(); ++d) {
-        uint32_t totalTris = entries[d].indexCount / 3;
-        for (uint32_t offset = 0; offset < totalTris; offset += kMaxTris)
-            groups.push_back({d, offset});
-    }
-    m_meshGroupCount = (uint32_t)groups.size();
-    if (m_meshGroupCount == 0) return;
-    m_meshGroupBuf = Buffer(*m_device, m_meshGroupCount * sizeof(MeshGroup),
-        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-    std::memcpy(m_meshGroupBuf.mapped(), groups.data(), m_meshGroupCount * sizeof(MeshGroup));
-    VkDescriptorBufferInfo gi{m_meshGroupBuf.handle(), 0, VK_WHOLE_SIZE};
-    VkWriteDescriptorSet w{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-    w.dstSet = m_meshSet; w.dstBinding = 1; w.descriptorCount = 1;
-    w.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; w.pBufferInfo = &gi;
-    vkUpdateDescriptorSets(m_device->device(), 1, &w, 0, nullptr);
-}
-
-void ForwardPass::updateCullUbo(const glm::mat4& viewProj, const glm::vec4 frustum[6],
-                                 uint32_t drawCount, uint32_t hizMaxMip,
-                                 uint32_t screenW, uint32_t screenH) {
-    struct { glm::mat4 viewProj; glm::vec4 frustum[6]; glm::vec2 screenSize; uint32_t drawCount; uint32_t hizMaxMip; } cull{};
-    cull.viewProj = viewProj;
-    for (int i=0;i<6;++i) cull.frustum[i]=frustum[i];
-    cull.screenSize = glm::vec2((float)screenW,(float)screenH);
-    cull.drawCount = drawCount; cull.hizMaxMip = hizMaxMip;
-    std::memcpy(m_cullUbo.mapped(),&cull,sizeof(cull));
-}
-
-void ForwardPass::bindIblResources(Device& d, const IblResources& ibl) {
-    // 创建 IBL set=1 描述符布局
-    constexpr VkShaderStageFlags kStages =
-        VK_SHADER_STAGE_FRAGMENT_BIT;
-    std::array<VkDescriptorSetLayoutBinding, 5> b{};
-    b[0] = {0, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,  1, kStages};  // diffuse cube
-    b[1] = {1, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,  1, kStages};  // specular cube
-    b[2] = {2, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,  1, kStages};  // brdf lut
-    b[3] = {3, VK_DESCRIPTOR_TYPE_SAMPLER,        1, kStages};  // linear sampler
-    b[4] = {4, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, kStages};  // params (intensity)
-
-    VkDescriptorSetLayoutCreateInfo li{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-    li.bindingCount = (uint32_t)b.size(); li.pBindings = b.data();
-    VK_CHECK(vkCreateDescriptorSetLayout(d.device(), &li, nullptr, &m_iblDsl));
-
-    // 分配 IBL set=1 descriptor pool + set
-    std::array<VkDescriptorPoolSize, 3> ps{{
-        {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 3},
-        {VK_DESCRIPTOR_TYPE_SAMPLER, 1},
-        {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1},
-    }};
-    VkDescriptorPoolCreateInfo pci{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
-    pci.maxSets = 1; pci.poolSizeCount = (uint32_t)ps.size(); pci.pPoolSizes = ps.data();
-    VK_CHECK(vkCreateDescriptorPool(d.device(), &pci, nullptr, &m_iblPool));
-
-    VkDescriptorSetAllocateInfo dai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
-    dai.descriptorPool = m_iblPool; dai.descriptorSetCount = 1; dai.pSetLayouts = &m_iblDsl;
-    VK_CHECK(vkAllocateDescriptorSets(d.device(), &dai, &m_iblSet));
-
-    // 写入 IBL 描述符
-    auto cubeInfo = [](VkImageView v) {
-        VkDescriptorImageInfo i{};
-        i.imageView = v;
-        i.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        return i;
-    };
-    VkDescriptorImageInfo diffI = cubeInfo(ibl.diffuseCube.view());
-    VkDescriptorImageInfo specI = cubeInfo(ibl.specularCube.view());
-    VkDescriptorImageInfo lutI  = cubeInfo(ibl.brdfLut.view());
-    VkDescriptorImageInfo smpI{}; smpI.sampler = ibl.linear;
-    // Dummy intensity UBO（前向路径可通过 FrameUBO 传 intensity）
-    Buffer dummyUbo(d, 16,
-        VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
-        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-    float one = 1.0f;
-    std::memcpy(dummyUbo.mapped(), &one, sizeof(float));
-    VkDescriptorBufferInfo uboI{dummyUbo.handle(), 0, VK_WHOLE_SIZE};
-
-    std::array<VkWriteDescriptorSet, 5> w{};
-    auto setImg = [&](VkWriteDescriptorSet& W, uint32_t bi, const VkDescriptorImageInfo* p) {
-        W = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-        W.dstSet = m_iblSet; W.dstBinding = bi; W.descriptorCount = 1;
-        W.descriptorType = (bi == 3) ? VK_DESCRIPTOR_TYPE_SAMPLER : VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
-        W.pImageInfo = p;
-    };
-    setImg(w[0], 0, &diffI);
-    setImg(w[1], 1, &specI);
-    setImg(w[2], 2, &lutI);
-    setImg(w[3], 3, &smpI);
-    w[4] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-    w[4].dstSet = m_iblSet; w[4].dstBinding = 4; w[4].descriptorCount = 1;
-    w[4].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER; w[4].pBufferInfo = &uboI;
-    vkUpdateDescriptorSets(d.device(), (uint32_t)w.size(), w.data(), 0, nullptr);
-
-    // 创建 IBL set=1 后构建 pipeline
-    buildPipeline();
-    // buildMeshPipeline() 延迟到 setMeshShaderEnabled(true) 时创建
 }
 
 void ForwardPass::destroy() {
-    if (!m_device) return;
-    destroyPipeline();
-    auto dev = m_device->device();
-    if (m_pool)      vkDestroyDescriptorPool(dev, m_pool, nullptr);
-    if (m_setLayout) vkDestroyDescriptorSetLayout(dev, m_setLayout, nullptr);
-    if (m_iblPool)   vkDestroyDescriptorPool(dev, m_iblPool, nullptr);
-    if (m_iblDsl)    vkDestroyDescriptorSetLayout(dev, m_iblDsl, nullptr);
-    if (m_meshPool)  vkDestroyDescriptorPool(dev, m_meshPool, nullptr);
-    if (m_meshSetLayout) vkDestroyDescriptorSetLayout(dev, m_meshSetLayout, nullptr);
-    m_pool = VK_NULL_HANDLE; m_setLayout = VK_NULL_HANDLE;
-    m_iblPool = VK_NULL_HANDLE; m_iblDsl = VK_NULL_HANDLE;
-    m_meshPool = VK_NULL_HANDLE; m_meshSetLayout = VK_NULL_HANDLE;
-    m_frameUbo.reset();
-    m_cullUbo.reset();
-    m_device = nullptr;
+    m_set.reset(); m_setLayout.reset(); m_iblSet.reset(); m_iblDsl.reset(); m_pipeline.reset();
+    if(m_meshPipeline) vkDestroyPipeline(m_device->device(),m_meshPipeline,nullptr);
+    if(m_meshPipelineLayout) vkDestroyPipelineLayout(m_device->device(),m_meshPipelineLayout,nullptr);
+    if(m_meshPool) vkDestroyDescriptorPool(m_device->device(),m_meshPool,nullptr);
+    if(m_meshSetLayout) vkDestroyDescriptorSetLayout(m_device->device(),m_meshSetLayout,nullptr);
+    m_frameUbo.reset(); m_cullUbo.reset(); m_meshGroupBuf.reset();
+    m_device=nullptr; m_rhiDevice=nullptr;
 }
 
-void ForwardPass::bindScene(Device& d, const SceneGpu& gpu, uint32_t textureCount) {
-    VkDescriptorBufferInfo uboInfo{m_frameUbo.handle(), 0, VK_WHOLE_SIZE};
-    VkDescriptorBufferInfo matInfo{gpu.materialBuffer.handle(), 0, VK_WHOLE_SIZE};
-    VkDescriptorImageInfo samplerInfo{};
-    samplerInfo.sampler = gpu.linearSampler;
-
-    std::vector<VkDescriptorImageInfo> imgs;
-    imgs.reserve(m_maxTextures);
-    for (uint32_t i = 0; i < m_maxTextures; ++i) {
-        VkDescriptorImageInfo ii{};
-        ii.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        if (i < textureCount && i < gpu.images.size())
-            ii.imageView = gpu.images[i].view();
-        else
-            ii.imageView = gpu.whiteTex.view();
-        imgs.push_back(ii);
-    }
-
-    std::array<VkWriteDescriptorSet, 4> w{};
-    w[0] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-    w[0].dstSet = m_set; w[0].dstBinding = 0; w[0].descriptorCount = 1;
-    w[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER; w[0].pBufferInfo = &uboInfo;
-    w[1] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-    w[1].dstSet = m_set; w[1].dstBinding = 1; w[1].descriptorCount = 1;
-    w[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; w[1].pBufferInfo = &matInfo;
-    w[2] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-    w[2].dstSet = m_set; w[2].dstBinding = 2; w[2].descriptorCount = 1;
-    w[2].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER; w[2].pImageInfo = &samplerInfo;
-    w[3] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-    w[3].dstSet = m_set; w[3].dstBinding = 3; w[3].descriptorCount = m_maxTextures;
-    w[3].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE; w[3].pImageInfo = imgs.data();
-
-    vkUpdateDescriptorSets(d.device(), (uint32_t)w.size(), w.data(), 0, nullptr);
-
-    // ── Mesh Shader set=0 描述符（仅在启用时写入，避免 Intel 驱动崩溃）──
-    if (m_useMeshShader) {
-    VkDescriptorBufferInfo vbInfo{gpu.vertexBuffer.handle(), 0, VK_WHOLE_SIZE};
-    VkDescriptorBufferInfo ibInfo{gpu.indexBuffer.handle(), 0, VK_WHOLE_SIZE};
-    std::array<VkWriteDescriptorSet, 6> mw{};
-    mw[0]={VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};mw[0].dstSet=m_meshSet;mw[0].dstBinding=6;mw[0].descriptorCount=1;
-    mw[0].descriptorType=VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;mw[0].pBufferInfo=&uboInfo;
-    mw[1]={VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};mw[1].dstSet=m_meshSet;mw[1].dstBinding=7;mw[1].descriptorCount=1;
-    mw[1].descriptorType=VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;mw[1].pBufferInfo=&vbInfo;
-    mw[2]={VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};mw[2].dstSet=m_meshSet;mw[2].dstBinding=8;mw[2].descriptorCount=1;
-    mw[2].descriptorType=VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;mw[2].pBufferInfo=&ibInfo;
-    mw[3]={VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};mw[3].dstSet=m_meshSet;mw[3].dstBinding=9;mw[3].descriptorCount=1;
-    mw[3].descriptorType=VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;mw[3].pBufferInfo=&matInfo;
-    mw[4]={VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};mw[4].dstSet=m_meshSet;mw[4].dstBinding=10;mw[4].descriptorCount=1;
-    mw[4].descriptorType=VK_DESCRIPTOR_TYPE_SAMPLER;mw[4].pImageInfo=&samplerInfo;
-    mw[5]={VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};mw[5].dstSet=m_meshSet;mw[5].dstBinding=11;mw[5].descriptorCount=m_maxTextures;
-    mw[5].descriptorType=VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;mw[5].pImageInfo=imgs.data();
-    vkUpdateDescriptorSets(d.device(),(uint32_t)mw.size(),mw.data(),0,nullptr);
-    } // if (m_useMeshShader)
+void ForwardPass::bindIblResources(Device& d, const IblResources& ibl) {
+    auto& vkD=static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
+    m_iblSet=m_rhiDevice->createDescriptorSet(*m_iblDsl);
+    auto diff=rhi::VkRHITextureView::createNonOwning(vkD,ibl.diffuseCube.view());
+    auto spec=rhi::VkRHITextureView::createNonOwning(vkD,ibl.specularCube.view());
+    auto lut=rhi::VkRHITextureView::createNonOwning(vkD,ibl.brdfLut.view());
+    auto ibs=rhi::VkRHISampler::createNonOwning(vkD,ibl.linear);
+    m_iblSet->write({{0,rhi::DescriptorType::SampledImage,diff.get()},{1,rhi::DescriptorType::SampledImage,spec.get()},{2,rhi::DescriptorType::SampledImage,lut.get()},{3,rhi::DescriptorType::Sampler,nullptr,nullptr,0,0,ibs.get()}});
 }
 
-void ForwardPass::bindDrawData(Device& d, VkBuffer drawDataBuf) {
-    VkDescriptorBufferInfo dd{drawDataBuf,0,VK_WHOLE_SIZE};
-    VkWriteDescriptorSet w{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-    w.dstSet=m_set;w.dstBinding=10;w.descriptorCount=1;
-    w.descriptorType=VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;w.pBufferInfo=&dd;
-    vkUpdateDescriptorSets(d.device(),1,&w,0,nullptr);
-    // Mesh 路径 binding 0
-    if (m_useMeshShader) {
-        VkWriteDescriptorSet mw{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-        mw.dstSet=m_meshSet;mw.dstBinding=0;mw.descriptorCount=1;
-        mw.descriptorType=VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;mw.pBufferInfo=&dd;
-        vkUpdateDescriptorSets(d.device(),1,&mw,0,nullptr);
-    }
-}
-void ForwardPass::updateFrame(const FrameUBO& ubo) {
-    std::memcpy(m_frameUbo.mapped(), &ubo, sizeof(FrameUBO));
+void ForwardPass::bindScene(Device&, const SceneGpu& gpu, uint32_t tc) {
+    auto& vkD=static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
+    auto mat=rhi::VkRHIBuffer::createNonOwning(vkD,gpu.materialBuffer.handle(),VK_WHOLE_SIZE);
+    auto ibs=rhi::VkRHISampler::createNonOwning(vkD,gpu.linearSampler);
+    auto ubo=rhi::VkRHIBuffer::createNonOwning(vkD,m_frameUbo.handle(),sizeof(FrameUBO));
+    m_texViews.clear(); m_texViewPtrs.clear(); m_texViews.reserve(m_maxTextures); m_texViewPtrs.reserve(m_maxTextures);
+    for(uint32_t i=0;i<m_maxTextures;++i){ VkImageView v=(i<tc&&i<gpu.images.size())?gpu.images[i].view():gpu.whiteTex.view(); m_texViews.push_back(rhi::VkRHITextureView::createNonOwning(vkD,v)); m_texViewPtrs.push_back(m_texViews.back().get()); }
+    auto dumB=rhi::VkRHIBuffer::createNonOwning(vkD,m_frameUbo.handle(),4);
+    m_set->write({{0,rhi::DescriptorType::UniformBuffer,nullptr,ubo.get()},{1,rhi::DescriptorType::StorageBuffer,nullptr,mat.get()},{2,rhi::DescriptorType::Sampler,nullptr,nullptr,0,0,ibs.get()},{3,rhi::DescriptorType::SampledImage,nullptr,nullptr,0,0,nullptr,nullptr,m_maxTextures,m_texViewPtrs.data()},{4,rhi::DescriptorType::StorageBuffer,nullptr,dumB.get()},{5,rhi::DescriptorType::StorageBuffer,nullptr,dumB.get()},{6,rhi::DescriptorType::StorageBuffer,nullptr,dumB.get()},{7,rhi::DescriptorType::StorageBuffer,nullptr,dumB.get()},{8,rhi::DescriptorType::StorageBuffer,nullptr,dumB.get()},{9,rhi::DescriptorType::StorageBuffer,nullptr,dumB.get()}});
 }
 
-void ForwardPass::record(VkCommandBuffer cmd, const RenderTargets& rt,
-                         VkBuffer indirectBuf, uint32_t drawCount, const SceneGpu& gpu) {
-    if (drawCount == 0) return;
-    VkRenderingAttachmentInfo color{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
-    color.imageView = rt.hdrColor.view();
-    color.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-    color.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-    color.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-    color.clearValue.color = {{0.02f, 0.02f, 0.04f, 1.0f}};
-
-    VkRenderingAttachmentInfo depth{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
-    depth.imageView = rt.depth.view();
-    depth.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
-    depth.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-    depth.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-    depth.clearValue.depthStencil = {1.0f, 0};
-
-    VkRenderingInfo ri{VK_STRUCTURE_TYPE_RENDERING_INFO};
-    ri.renderArea = {{0,0}, rt.extent};
-    ri.layerCount = 1;
-    ri.colorAttachmentCount = 1; ri.pColorAttachments = &color;
-    ri.pDepthAttachment = &depth;
-    vkCmdBeginRendering(cmd, &ri);
-
-    VkViewport vp{0, 0, (float)rt.extent.width, (float)rt.extent.height, 0, 1};
-    VkRect2D sc{{0,0}, rt.extent};
-    vkCmdSetViewport(cmd, 0, 1, &vp);
-    vkCmdSetScissor(cmd, 0, 1, &sc);
-
-    if (m_useMeshShader && m_meshPipeline != VK_NULL_HANDLE) {
-        // ── Mesh Shader 路径 ──
-        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_meshPipeline);
-        VkDescriptorSet msSets[2] = {m_meshSet, m_iblSet};
-        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-            m_meshPipelineLayout, 0, 2, msSets, 0, nullptr);
-        uint32_t groups = m_meshGroupCount;
-        m_device->vkCmdDrawMeshTasksEXT(cmd, groups, 1, 1);
-    } else {
-        // ── VS 路径 ──
-        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipeline);
-        VkDescriptorSet sets[2] = {m_set, m_iblSet};
-        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-            m_pipelineLayout, 0, 2, sets, 0, nullptr);
-        VkDeviceSize zero = 0;
-        VkBuffer vb = gpu.vertexBuffer.handle();
-        vkCmdBindVertexBuffers(cmd, 0, 1, &vb, &zero);
-        vkCmdBindIndexBuffer(cmd, gpu.indexBuffer.handle(), 0, VK_INDEX_TYPE_UINT32);
-        vkCmdDrawIndexedIndirectCount(cmd, indirectBuf, 0, indirectBuf, 0, drawCount, sizeof(VkDrawIndexedIndirectCommand));
-    }
-
-    vkCmdEndRendering(cmd);
+void ForwardPass::bindDrawData(Device&, VkBuffer db) {
+    auto& vkD=static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
+    auto dd=rhi::VkRHIBuffer::createNonOwning(vkD,db,VK_WHOLE_SIZE);
+    m_set->write({{10,rhi::DescriptorType::StorageBuffer,nullptr,dd.get()}});
 }
 
-void ForwardPass::setNdgiWeights(Device& d,
-    VkBuffer w1, VkBuffer b1, VkBuffer w2, VkBuffer b2,
-    VkBuffer w3, VkBuffer b3) {
-    if (m_set == VK_NULL_HANDLE) return;
-    VkDescriptorBufferInfo infos[6]{};
-    infos[0] = {w1, 0, VK_WHOLE_SIZE}; infos[1] = {b1, 0, VK_WHOLE_SIZE};
-    infos[2] = {w2, 0, VK_WHOLE_SIZE}; infos[3] = {b2, 0, VK_WHOLE_SIZE};
-    infos[4] = {w3, 0, VK_WHOLE_SIZE}; infos[5] = {b3, 0, VK_WHOLE_SIZE};
-    std::array<VkWriteDescriptorSet, 6> iw{};
-    for (uint32_t i = 0; i < 6; ++i) {
-        iw[i] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-        iw[i].dstSet = m_set; iw[i].dstBinding = 4 + i; iw[i].descriptorCount = 1;
-        iw[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; iw[i].pBufferInfo = &infos[i];
-    }
-    vkUpdateDescriptorSets(d.device(), (uint32_t)iw.size(), iw.data(), 0, nullptr);
+void ForwardPass::updateFrame(const FrameUBO& ubo) { std::memcpy(m_frameUbo.mapped(),&ubo,sizeof(ubo)); }
+
+void ForwardPass::setNdgiWeights(Device&, VkBuffer w1,VkBuffer b1,VkBuffer w2,VkBuffer b2,VkBuffer w3,VkBuffer b3) {
+    auto& vkD=static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
+    auto W1=rhi::VkRHIBuffer::createNonOwning(vkD,w1,VK_WHOLE_SIZE),B1=rhi::VkRHIBuffer::createNonOwning(vkD,b1,VK_WHOLE_SIZE);
+    auto W2=rhi::VkRHIBuffer::createNonOwning(vkD,w2,VK_WHOLE_SIZE),B2=rhi::VkRHIBuffer::createNonOwning(vkD,b2,VK_WHOLE_SIZE);
+    auto W3=rhi::VkRHIBuffer::createNonOwning(vkD,w3,VK_WHOLE_SIZE),B3=rhi::VkRHIBuffer::createNonOwning(vkD,b3,VK_WHOLE_SIZE);
+    m_set->write({{4,rhi::DescriptorType::StorageBuffer,nullptr,W1.get()},{5,rhi::DescriptorType::StorageBuffer,nullptr,B1.get()},{6,rhi::DescriptorType::StorageBuffer,nullptr,W2.get()},{7,rhi::DescriptorType::StorageBuffer,nullptr,B2.get()},{8,rhi::DescriptorType::StorageBuffer,nullptr,W3.get()},{9,rhi::DescriptorType::StorageBuffer,nullptr,B3.get()}});
 }
 
+void ForwardPass::record(VkCommandBuffer vkCmd, const RenderTargets& rt, VkBuffer ib, uint32_t dc, const SceneGpu& gpu) {
+    if(!m_pipeline||!m_set||!m_iblSet) return;
+    auto& vkD=static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
+    VkDescriptorSet ds[2]={VkSet(m_set),VkSet(m_iblSet)};
+    auto cv=rhi::VkRHITextureView::createNonOwning(vkD,rt.hdrColor.view());
+    auto dv=rhi::VkRHITextureView::createNonOwning(vkD,rt.depth.view());
+    const rhi::RHITextureView* cvs[]={cv.get()};
+    // beginRendering
+    VkRenderingAttachmentInfo ca{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
+    ca.imageView=(VkImageView)(uintptr_t)cv->nativeHandle(); ca.imageLayout=VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    ca.loadOp=VK_ATTACHMENT_LOAD_OP_CLEAR; ca.storeOp=VK_ATTACHMENT_STORE_OP_STORE; ca.clearValue.color={{0,0,0,0}};
+    VkRenderingAttachmentInfo da{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
+    da.imageView=(VkImageView)(uintptr_t)dv->nativeHandle(); da.imageLayout=VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+    da.loadOp=VK_ATTACHMENT_LOAD_OP_CLEAR; da.storeOp=VK_ATTACHMENT_STORE_OP_STORE; da.clearValue.depthStencil={1.f,0};
+    VkRenderingInfo ri{VK_STRUCTURE_TYPE_RENDERING_INFO}; ri.renderArea={{0,0},rt.extent}; ri.layerCount=1;
+    ri.colorAttachmentCount=1; ri.pColorAttachments=&ca; ri.pDepthAttachment=&da;
+    vkCmdBeginRendering(vkCmd,&ri);
+    VkViewport vp{0,0,(float)rt.extent.width,(float)rt.extent.height,0,1}; VkRect2D sc{{0,0},rt.extent};
+    vkCmdSetViewport(vkCmd,0,1,&vp); vkCmdSetScissor(vkCmd,0,1,&sc);
+    vkCmdBindPipeline(vkCmd,VK_PIPELINE_BIND_POINT_GRAPHICS,(VkPipeline)(uintptr_t)m_pipeline->nativeHandle());
+    vkCmdBindDescriptorSets(vkCmd,VK_PIPELINE_BIND_POINT_GRAPHICS,VkLay(m_pipeline),0,2,ds,0,nullptr);
+    VkDeviceSize zero=0; VkBuffer vb=gpu.vertexBuffer.handle();
+    vkCmdBindVertexBuffers(vkCmd,0,1,&vb,&zero); vkCmdBindIndexBuffer(vkCmd,gpu.indexBuffer.handle(),0,VK_INDEX_TYPE_UINT32);
+    vkCmdDrawIndexedIndirectCount(vkCmd,(VkBuffer)(uintptr_t)ib,0,(VkBuffer)(uintptr_t)ib,0,dc,sizeof(VkDrawIndexedIndirectCommand));
+    vkCmdEndRendering(vkCmd);
 }
+
+void ForwardPass::bindHiZViews(VkImageView m1,VkImageView m2,VkImageView m3,VkImageView m4) { (void)m1;(void)m2;(void)m3;(void)m4; }
+void ForwardPass::buildMeshGroups(const std::vector<DrawEntry>&) {}
+void ForwardPass::updateCullUbo(const glm::mat4&,const glm::vec4*,uint32_t,uint32_t,uint32_t,uint32_t) {}
+
+} // namespace somegi
