@@ -11,6 +11,7 @@
 #include "rhi/vulkan/vk_texture.h"
 #include "rhi/vulkan/vk_buffer.h"
 #include "rhi/vulkan/vk_command.h"
+#include "rhi/base/sampler.h"
 #include "core/shader.h"
 #include <array>
 
@@ -25,7 +26,7 @@ void RsmSamplePass::init(rhi::RHIDevice& d) {
     VkSamplerCreateInfo si{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
     si.magFilter=si.minFilter=VK_FILTER_LINEAR; si.mipmapMode=VK_SAMPLER_MIPMAP_MODE_LINEAR;
     si.addressModeU=si.addressModeV=si.addressModeW=VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE; si.maxLod=0.f;
-    vkCreateSampler(vkD.vkDevice(),&si,nullptr,&m_linearClamp);
+    m_linearClamp = d.createSampler({rhi::Filter::Linear,rhi::Filter::Linear,rhi::SamplerMipmapMode::Linear,rhi::SamplerAddressMode::ClampToEdge,rhi::SamplerAddressMode::ClampToEdge,rhi::SamplerAddressMode::ClampToEdge,0.f});
 
     rhi::DescSetLayoutDesc ld; ld.debugName="RsmSample";
     ld.bindings={{0,rhi::DescriptorType::UniformBuffer,1,rhi::ShaderStage::Compute},{1,rhi::DescriptorType::SampledImage,1,rhi::ShaderStage::Compute},{2,rhi::DescriptorType::SampledImage,1,rhi::ShaderStage::Compute},{3,rhi::DescriptorType::SampledImage,1,rhi::ShaderStage::Compute},{4,rhi::DescriptorType::SampledImage,1,rhi::ShaderStage::Compute},{5,rhi::DescriptorType::SampledImage,1,rhi::ShaderStage::Compute},{6,rhi::DescriptorType::Sampler,1,rhi::ShaderStage::Compute},{7,rhi::DescriptorType::UniformBuffer,1,rhi::ShaderStage::Compute},{8,rhi::DescriptorType::StorageImage,1,rhi::ShaderStage::Compute}};
@@ -38,7 +39,7 @@ void RsmSamplePass::init(rhi::RHIDevice& d) {
 }
 
 void RsmSamplePass::destroy() {
-    if(m_linearClamp){vkDestroySampler(static_cast<rhi::VkRHIDevice&>(*m_rhiDevice).vkDevice(),m_linearClamp,nullptr);m_linearClamp=VK_NULL_HANDLE;}
+    m_linearClamp.reset();
     m_set.reset(); m_pipeline.reset(); m_setLayout.reset(); m_rhiDevice=nullptr;
 }
 
@@ -52,7 +53,7 @@ void RsmSamplePass::bindFrame(const RenderTargets& rt, VkBuffer frameUbo, VkBuff
         {3,rhi::DescriptorType::SampledImage,rhi::VkRHITextureView::createNonOwning(vkD,rsmPos.view()).get()},
         {4,rhi::DescriptorType::SampledImage,rhi::VkRHITextureView::createNonOwning(vkD,rsmN.view()).get()},
         {5,rhi::DescriptorType::SampledImage,rhi::VkRHITextureView::createNonOwning(vkD,rsmFlux.view()).get()},
-        {6,rhi::DescriptorType::Sampler,nullptr,nullptr,0,0,(const void*)(uintptr_t)m_linearClamp},
+        {6,rhi::DescriptorType::Sampler,nullptr,nullptr,0,0,m_linearClamp->nativeHandle()},
         {7,rhi::DescriptorType::UniformBuffer,nullptr,rhi::VkRHIBuffer::createNonOwning(vkD,rsmUbo,VK_WHOLE_SIZE).get()},
         {8,rhi::DescriptorType::StorageImage,rhi::VkRHITextureView::createNonOwning(vkD,rt.rsmGI.view()).get()},
     });

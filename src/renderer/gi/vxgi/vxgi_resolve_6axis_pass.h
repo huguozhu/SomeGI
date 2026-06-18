@@ -1,5 +1,6 @@
 // VxgiResolve6AxisPass — 6-轴卷积 (Compute, sampler), 已迁移到 RHI。
 #pragma once
+#include "rhi/base/sampler.h"
 #include <glm/glm.hpp>
 #include <memory>
 #include <vulkan/vulkan.h>
@@ -18,5 +19,5 @@ private:
     std::unique_ptr<rhi::RHIDescriptorSetLayout> m_setLayout;
     std::unique_ptr<rhi::RHIPipelineState> m_pipeline;
     std::unique_ptr<rhi::RHIDescriptorSet> m_set;
-    VkSampler m_linearClamp = VK_NULL_HANDLE;
+    std::unique_ptr<rhi::RHISampler> m_linearClamp;
 }; } // namespace somegi

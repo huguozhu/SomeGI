@@ -11,6 +11,7 @@
 #include "rhi/vulkan/vk_shader.h"
 #include "rhi/vulkan/vk_texture.h"
 #include "rhi/vulkan/vk_command.h"
+#include "rhi/base/sampler.h"
 #include "core/device.h"
 #include "core/shader.h"
 #include <array>
@@ -20,7 +21,7 @@ static_assert(sizeof(BakePC)==64); }
 PrtBakePass::~PrtBakePass()=default;
 void PrtBakePass::init(rhi::RHIDevice& d){ m_rhiDevice=&d; auto& vkD=static_cast<rhi::VkRHIDevice&>(d);
     VkSamplerCreateInfo si{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO}; si.magFilter=si.minFilter=VK_FILTER_LINEAR; si.mipmapMode=VK_SAMPLER_MIPMAP_MODE_LINEAR; si.addressModeU=si.addressModeV=si.addressModeW=VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE; si.maxLod=0.f;
-    vkCreateSampler(vkD.vkDevice(),&si,nullptr,&m_linearClamp);
+    m_linearClamp = d.createSampler({rhi::Filter::Linear,rhi::Filter::Linear,rhi::SamplerMipmapMode::Linear,rhi::SamplerAddressMode::ClampToEdge,rhi::SamplerAddressMode::ClampToEdge,rhi::SamplerAddressMode::ClampToEdge,0.f});
     rhi::DescSetLayoutDesc ld; ld.debugName="PrtBake"; ld.bindings={{0,rhi::DescriptorType::SampledImage,1,rhi::ShaderStage::Compute},{1,rhi::DescriptorType::Sampler,1,rhi::ShaderStage::Compute},{2,rhi::DescriptorType::StorageImage,1,rhi::ShaderStage::Compute},{3,rhi::DescriptorType::StorageImage,1,rhi::ShaderStage::Compute},{4,rhi::DescriptorType::StorageImage,1,rhi::ShaderStage::Compute},{5,rhi::DescriptorType::StorageImage,1,rhi::ShaderStage::Compute},{6,rhi::DescriptorType::StorageImage,1,rhi::ShaderStage::Compute}};
     m_setLayout=d.createDescriptorSetLayout(ld); m_set=d.createDescriptorSet(*m_setLayout);
     rhi::ShaderDesc sd; sd.stage=rhi::ShaderStage::Compute; sd.entryPoint="cs_main";
@@ -28,9 +29,9 @@ void PrtBakePass::init(rhi::RHIDevice& d){ m_rhiDevice=&d; auto& vkD=static_cast
     rhi::ComputePSODesc pd; pd.debugName="PrtBake"; pd.computeShader=sh.get(); pd.descriptorSetLayouts={m_setLayout.get()}; pd.pushConstants={{rhi::ShaderStage::Compute,0,sizeof(BakePC)}};
     m_pipeline=d.createComputePSO(pd);
 }
-void PrtBakePass::destroy(){ if(m_linearClamp)vkDestroySampler(static_cast<rhi::VkRHIDevice&>(*m_rhiDevice).vkDevice(),m_linearClamp,nullptr); m_set.reset(); m_pipeline.reset(); m_setLayout.reset(); m_rhiDevice=nullptr; }
+void PrtBakePass::destroy(){ m_linearClamp.reset(); m_set.reset(); m_pipeline.reset(); m_setLayout.reset(); m_rhiDevice=nullptr; }
 void PrtBakePass::bindResources(const VxgiResources& vxgi,const PrtResources& prt){ auto& vkD=static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
-    m_set->write({{0,rhi::DescriptorType::SampledImage,rhi::VkRHITextureView::createNonOwning(vkD,vxgi.fullView()).get()},{1,rhi::DescriptorType::Sampler,nullptr,nullptr,0,0,(const void*)(uintptr_t)m_linearClamp},{2,rhi::DescriptorType::StorageImage,rhi::VkRHITextureView::createNonOwning(vkD,prt.view()).get()},{3,rhi::DescriptorType::StorageImage,rhi::VkRHITextureView::createNonOwning(vkD,prt.viewB()).get()},{4,rhi::DescriptorType::StorageImage,rhi::VkRHITextureView::createNonOwning(vkD,prt.viewC()).get()},{5,rhi::DescriptorType::StorageImage,rhi::VkRHITextureView::createNonOwning(vkD,prt.viewD()).get()},{6,rhi::DescriptorType::StorageImage,rhi::VkRHITextureView::createNonOwning(vkD,prt.viewE()).get()}});
+    m_set->write({{0,rhi::DescriptorType::SampledImage,rhi::VkRHITextureView::createNonOwning(vkD,vxgi.fullView()).get()},{1,rhi::DescriptorType::Sampler,nullptr,nullptr,0,0,m_linearClamp->nativeHandle()},{2,rhi::DescriptorType::StorageImage,rhi::VkRHITextureView::createNonOwning(vkD,prt.view()).get()},{3,rhi::DescriptorType::StorageImage,rhi::VkRHITextureView::createNonOwning(vkD,prt.viewB()).get()},{4,rhi::DescriptorType::StorageImage,rhi::VkRHITextureView::createNonOwning(vkD,prt.viewC()).get()},{5,rhi::DescriptorType::StorageImage,rhi::VkRHITextureView::createNonOwning(vkD,prt.viewD()).get()},{6,rhi::DescriptorType::StorageImage,rhi::VkRHITextureView::createNonOwning(vkD,prt.viewE()).get()}});
 }
 void PrtBakePass::record(rhi::RHICommandBuffer& cmd,const glm::vec3& pgm,float pcs,uint32_t pr,const glm::vec3& vgm,float vcs,uint32_t vr,uint32_t ns){ if(!m_pipeline||!m_set)return;
     cmd.bindPipelineState(*m_pipeline); cmd.bindDescriptorSet(0,*m_set);

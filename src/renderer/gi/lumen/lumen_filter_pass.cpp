@@ -12,6 +12,7 @@
 #include "rhi/vulkan/vk_texture.h"
 #include "rhi/vulkan/vk_buffer.h"
 #include "rhi/vulkan/vk_command.h"
+#include "rhi/base/sampler.h"
 #include "core/device.h"
 #include "core/shader.h"
 #include <array>
@@ -21,7 +22,7 @@ static_assert(sizeof(FilterPC)==36); }
 LumenFilterPass::~LumenFilterPass()=default;
 void LumenFilterPass::init(rhi::RHIDevice& d){ m_rhiDevice=&d; auto& vkD=static_cast<rhi::VkRHIDevice&>(d);
     VkSamplerCreateInfo si{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO}; si.magFilter=si.minFilter=VK_FILTER_NEAREST; si.addressModeU=si.addressModeV=VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-    vkCreateSampler(vkD.vkDevice(),&si,nullptr,&m_pointClamp);
+    m_pointClamp = d.createSampler({rhi::Filter::Nearest,rhi::Filter::Nearest,rhi::SamplerMipmapMode::Nearest,rhi::SamplerAddressMode::ClampToEdge,rhi::SamplerAddressMode::ClampToEdge,rhi::SamplerAddressMode::ClampToEdge,0.f});
     rhi::DescSetLayoutDesc ld; ld.debugName="LumenFilter"; ld.bindings={{0,rhi::DescriptorType::UniformBuffer,1,rhi::ShaderStage::Compute},{1,rhi::DescriptorType::SampledImage,1,rhi::ShaderStage::Compute},{2,rhi::DescriptorType::SampledImage,1,rhi::ShaderStage::Compute},{3,rhi::DescriptorType::SampledImage,1,rhi::ShaderStage::Compute},{4,rhi::DescriptorType::StorageImage,1,rhi::ShaderStage::Compute},{5,rhi::DescriptorType::SampledImage,1,rhi::ShaderStage::Compute},{6,rhi::DescriptorType::Sampler,1,rhi::ShaderStage::Compute}};
     m_setLayout=d.createDescriptorSetLayout(ld); m_set=d.createDescriptorSet(*m_setLayout);
     rhi::ShaderDesc sd; sd.stage=rhi::ShaderStage::Compute; sd.entryPoint="cs_spatialFilter";
@@ -29,9 +30,9 @@ void LumenFilterPass::init(rhi::RHIDevice& d){ m_rhiDevice=&d; auto& vkD=static_
     rhi::ComputePSODesc pd; pd.debugName="LumenFilter"; pd.computeShader=sh.get(); pd.descriptorSetLayouts={m_setLayout.get()}; pd.pushConstants={{rhi::ShaderStage::Compute,0,sizeof(FilterPC)}};
     m_pipeline=d.createComputePSO(pd);
 }
-void LumenFilterPass::destroy(){ if(m_pointClamp)vkDestroySampler(static_cast<rhi::VkRHIDevice&>(*m_rhiDevice).vkDevice(),m_pointClamp,nullptr); m_set.reset(); m_pipeline.reset(); m_setLayout.reset(); m_rhiDevice=nullptr; }
+void LumenFilterPass::destroy(){ m_pointClamp.reset(); m_set.reset(); m_pipeline.reset(); m_setLayout.reset(); m_rhiDevice=nullptr; }
 void LumenFilterPass::bindResources(const LumenResources& res,const RenderTargets& rt,VkBuffer frameUbo){ auto& vkD=static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
-    m_set->write({{0,rhi::DescriptorType::UniformBuffer,nullptr,rhi::VkRHIBuffer::createNonOwning(vkD,frameUbo,VK_WHOLE_SIZE).get()},{1,rhi::DescriptorType::SampledImage,rhi::VkRHITextureView::createNonOwning(vkD,rt.gNormalRough.view()).get()},{2,rhi::DescriptorType::SampledImage,rhi::VkRHITextureView::createNonOwning(vkD,rt.depth.view()).get()},{3,rhi::DescriptorType::SampledImage,rhi::VkRHITextureView::createNonOwning(vkD,res.probeAtlas().view()).get()},{4,rhi::DescriptorType::StorageImage,rhi::VkRHITextureView::createNonOwning(vkD,res.filteredAtlas().view()).get()},{5,rhi::DescriptorType::SampledImage,rhi::VkRHITextureView::createNonOwning(vkD,res.prevAtlas().view()).get()},{6,rhi::DescriptorType::Sampler,nullptr,nullptr,0,0,(const void*)(uintptr_t)m_pointClamp}});
+    m_set->write({{0,rhi::DescriptorType::UniformBuffer,nullptr,rhi::VkRHIBuffer::createNonOwning(vkD,frameUbo,VK_WHOLE_SIZE).get()},{1,rhi::DescriptorType::SampledImage,rhi::VkRHITextureView::createNonOwning(vkD,rt.gNormalRough.view()).get()},{2,rhi::DescriptorType::SampledImage,rhi::VkRHITextureView::createNonOwning(vkD,rt.depth.view()).get()},{3,rhi::DescriptorType::SampledImage,rhi::VkRHITextureView::createNonOwning(vkD,res.probeAtlas().view()).get()},{4,rhi::DescriptorType::StorageImage,rhi::VkRHITextureView::createNonOwning(vkD,res.filteredAtlas().view()).get()},{5,rhi::DescriptorType::SampledImage,rhi::VkRHITextureView::createNonOwning(vkD,res.prevAtlas().view()).get()},{6,rhi::DescriptorType::Sampler,nullptr,nullptr,0,0,m_pointClamp->nativeHandle()}});
 }
 void LumenFilterPass::record(rhi::RHICommandBuffer& cmd,const LumenResources& res,const RenderTargets& rt){ if(!m_pipeline||!m_set)return;
     cmd.bindPipelineState(*m_pipeline); cmd.bindDescriptorSet(0,*m_set);

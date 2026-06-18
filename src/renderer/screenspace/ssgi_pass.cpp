@@ -17,6 +17,7 @@
 #include "rhi/vulkan/vk_texture.h"
 #include "rhi/vulkan/vk_buffer.h"
 #include "rhi/vulkan/vk_command.h"
+#include "rhi/base/sampler.h"
 #include "core/device.h"
 #include "core/shader.h"
 #include <array>
@@ -40,7 +41,7 @@ void SsgiPass::init(rhi::RHIDevice& d) {
     si.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
     si.addressModeU = si.addressModeV = si.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
     si.maxLod = 0.0f;
-    vkCreateSampler(vkDevice.vkDevice(), &si, nullptr, &m_linearClamp);
+    m_linearClamp = d.createSampler({rhi::Filter::Linear,rhi::Filter::Linear,rhi::SamplerMipmapMode::Linear,rhi::SamplerAddressMode::ClampToEdge,rhi::SamplerAddressMode::ClampToEdge,rhi::SamplerAddressMode::ClampToEdge,0.f});
 
     rhi::DescSetLayoutDesc layoutDesc; layoutDesc.debugName = "SSGI";
     layoutDesc.bindings = {
@@ -66,10 +67,7 @@ void SsgiPass::init(rhi::RHIDevice& d) {
 }
 
 void SsgiPass::destroy() {
-    if (m_linearClamp) {
-        vkDestroySampler(static_cast<rhi::VkRHIDevice&>(*m_rhiDevice).vkDevice(), m_linearClamp, nullptr);
-        m_linearClamp = VK_NULL_HANDLE;
-    }
+    m_linearClamp.reset();
     m_set.reset(); m_pipeline.reset(); m_setLayout.reset();
     m_rhiDevice = nullptr;
 }
@@ -88,7 +86,7 @@ void SsgiPass::bindFrame(const RenderTargets& rt, VkBuffer frameUbo) {
         {1, rhi::DescriptorType::SampledImage,  nr.get()},
         {2, rhi::DescriptorType::SampledImage,  dp.get()},
         {3, rhi::DescriptorType::SampledImage,  hp.get()},
-        {4, rhi::DescriptorType::Sampler, nullptr, nullptr, 0, 0, (const void*)(uintptr_t)m_linearClamp},
+        {4, rhi::DescriptorType::Sampler, nullptr, nullptr, 0, 0, m_linearClamp->nativeHandle()},
         {5, rhi::DescriptorType::StorageImage,  gi.get()},
         {6, rhi::DescriptorType::SampledImage,  gp.get()},
     });

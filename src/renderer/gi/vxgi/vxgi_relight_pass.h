@@ -1,6 +1,7 @@
 // VxgiRelightPass — 体素 bounce relight (Compute, sampler)，已迁移到 RHI。
 // 保留外部 VkDescriptorSet 接口兼容。
 #pragma once
+#include "rhi/base/sampler.h"
 #include "rhi/base/descriptor.h"
 #include "core/vk_common.h"
 #include "renderer/gi/vxgi/vxgi_resources.h"
@@ -28,6 +29,6 @@ private:
     std::unique_ptr<rhi::RHIDescriptorSetLayout> m_setLayout;
     std::unique_ptr<rhi::RHIPipelineState> m_pipeline;
     std::unique_ptr<rhi::RHIDescriptorSet> m_set, m_setPP0, m_setPP1;
-    VkSampler m_linearClamp = VK_NULL_HANDLE;
+    std::unique_ptr<rhi::RHISampler> m_linearClamp;
 };
 } // namespace somegi

@@ -17,6 +17,7 @@
 #include "rhi/vulkan/vk_texture.h"
 #include "rhi/vulkan/vk_buffer.h"
 #include "rhi/vulkan/vk_command.h"
+#include "rhi/base/sampler.h"
 #include "core/device.h"
 #include "core/shader.h"
 #include <array>
@@ -40,15 +41,13 @@ void SsrPass::init(rhi::RHIDevice& d) {
     m_rhiDevice = &d;
     auto& vkDevice = static_cast<rhi::VkRHIDevice&>(d);
 
-    // Linear-clamp sampler
-    VkSamplerCreateInfo si{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
-    si.magFilter = VK_FILTER_LINEAR; si.minFilter = VK_FILTER_LINEAR;
-    si.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
-    si.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-    si.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-    si.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-    si.maxLod = 0.0f;
-    vkCreateSampler(vkDevice.vkDevice(), &si, nullptr, &m_linearClamp);
+    // Linear-clamp sampler (RHISampler)
+    rhi::SamplerDesc sd;
+    sd.magFilter = rhi::Filter::Linear; sd.minFilter = rhi::Filter::Linear;
+    sd.mipmapMode = rhi::SamplerMipmapMode::Linear;
+    sd.addressU = sd.addressV = sd.addressW = rhi::SamplerAddressMode::ClampToEdge;
+    sd.maxLod = 0.0f;
+    m_linearClamp = d.createSampler(sd);
 
     rhi::DescSetLayoutDesc layoutDesc;
     layoutDesc.debugName = "SSR";
@@ -78,11 +77,7 @@ void SsrPass::init(rhi::RHIDevice& d) {
 }
 
 void SsrPass::destroy() {
-    if (m_linearClamp) {
-        auto& vkDevice = static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
-        vkDestroySampler(vkDevice.vkDevice(), m_linearClamp, nullptr);
-        m_linearClamp = VK_NULL_HANDLE;
-    }
+    m_linearClamp.reset();
     m_set.reset();
     m_pipeline.reset();
     m_setLayout.reset();
@@ -104,7 +99,7 @@ void SsrPass::bindFrame(const RenderTargets& rt, VkBuffer frameUbo) {
         {1, rhi::DescriptorType::SampledImage,  nrView.get()},
         {2, rhi::DescriptorType::SampledImage,  dpView.get()},
         {3, rhi::DescriptorType::SampledImage,  hpView.get()},
-        {4, rhi::DescriptorType::Sampler, nullptr, nullptr, 0, 0, (const void*)(uintptr_t)m_linearClamp},
+        {4, rhi::DescriptorType::Sampler, nullptr, nullptr, 0, 0, m_linearClamp->nativeHandle()},
         {5, rhi::DescriptorType::StorageImage,  srView.get()},
     });
 }

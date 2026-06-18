@@ -1,5 +1,6 @@
 // RsmSamplePass — RSM 采样间接光 (Compute)，9 bindings，已迁移到 RHI。
 #pragma once
+#include "rhi/base/sampler.h"
 #include "renderer/core/render_targets.h"
 #include <memory>
 #include <vulkan/vulkan.h>
@@ -25,7 +26,7 @@ private:
     std::unique_ptr<rhi::RHIDescriptorSetLayout> m_setLayout;
     std::unique_ptr<rhi::RHIPipelineState> m_pipeline;
     std::unique_ptr<rhi::RHIDescriptorSet> m_set;
-    VkSampler m_linearClamp = VK_NULL_HANDLE;
+    std::unique_ptr<rhi::RHISampler> m_linearClamp;
 };
 
 } // namespace somegi

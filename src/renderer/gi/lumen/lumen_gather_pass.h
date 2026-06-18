@@ -1,5 +1,6 @@
 // LumenGatherPass — Final Gather (Compute), 已迁移到 RHI。
 #pragma once
+#include "rhi/base/sampler.h"
 #include <memory>
 #include <vulkan/vulkan.h>
 namespace somegi { class LumenResources; struct RenderTargets;
@@ -17,5 +18,5 @@ private:
     std::unique_ptr<rhi::RHIDescriptorSetLayout> m_setLayout;
     std::unique_ptr<rhi::RHIPipelineState> m_pipeline;
     std::unique_ptr<rhi::RHIDescriptorSet> m_set;
-    VkSampler m_pointClamp = VK_NULL_HANDLE;
+    std::unique_ptr<rhi::RHISampler> m_pointClamp;
 }; } // namespace somegi

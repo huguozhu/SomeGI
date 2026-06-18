@@ -21,7 +21,7 @@ struct ClassifyPC { uint32_t probeCount,raysPerProbe; float closeHitDist,closeHi
 DdgiPass::~DdgiPass()=default;
 void DdgiPass::init(rhi::RHIDevice& d){ m_rhiDevice=&d; auto& vkD=static_cast<rhi::VkRHIDevice&>(d);
     VkSamplerCreateInfo si{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO}; si.magFilter=si.minFilter=VK_FILTER_LINEAR; si.addressModeU=si.addressModeV=si.addressModeW=VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-    vkCreateSampler(vkD.vkDevice(),&si,nullptr,&m_linearClamp);
+    m_linearClamp = d.createSampler({rhi::Filter::Linear,rhi::Filter::Linear,rhi::SamplerMipmapMode::Linear,rhi::SamplerAddressMode::ClampToEdge,rhi::SamplerAddressMode::ClampToEdge,rhi::SamplerAddressMode::ClampToEdge,0.f});
     // Update: 0=voxel, 1=sampler, 2=rayBuf
     rhi::DescSetLayoutDesc uld; uld.debugName="DDGI_Update"; uld.bindings={{0,rhi::DescriptorType::SampledImage,1,rhi::ShaderStage::Compute},{1,rhi::DescriptorType::Sampler,1,rhi::ShaderStage::Compute},{2,rhi::DescriptorType::StorageBuffer,1,rhi::ShaderStage::Compute}};
     m_setLayout=d.createDescriptorSetLayout(uld); m_setUpdate=d.createDescriptorSet(*m_setLayout);
@@ -43,7 +43,7 @@ void DdgiPass::init(rhi::RHIDevice& d){ m_rhiDevice=&d; auto& vkD=static_cast<rh
     m_pipelineBlendIrr=mk("gi/ddgi/ddgi_blend.spv","cs_irradiance",m_setLayoutBlend.get(),sizeof(BlendPC));
     m_pipelineBlendDist=mk("gi/ddgi/ddgi_blend.spv","cs_distance",m_setLayoutBlend.get(),sizeof(BlendPC));
 }
-void DdgiPass::destroy(){ if(m_linearClamp)vkDestroySampler(static_cast<rhi::VkRHIDevice&>(*m_rhiDevice).vkDevice(),m_linearClamp,nullptr);
+void DdgiPass::destroy(){ m_linearClamp.reset();
     m_setClassify.reset(); m_setBlend.reset(); m_setUpdate.reset(); m_pipelineBlendDist.reset(); m_pipelineBlendIrr.reset(); m_pipelineClassify.reset(); m_pipelineUpdate.reset(); m_setLayoutClassify.reset(); m_setLayoutBlend.reset(); m_setLayout.reset(); m_rhiDevice=nullptr; }
 void DdgiPass::bindResources(const DdgiResources& ddgi,const VxgiResources& vxgi){ auto& vkD=static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
     auto vox=rhi::VkRHITextureView::createNonOwning(vkD,vxgi.fullView());
@@ -51,7 +51,7 @@ void DdgiPass::bindResources(const DdgiResources& ddgi,const VxgiResources& vxgi
     auto dist=rhi::VkRHITextureView::createNonOwning(vkD,ddgi.distance().view());
     auto rb=rhi::VkRHIBuffer::createNonOwning(vkD,ddgi.rayBuffer().handle(),VK_WHOLE_SIZE);
     auto ps=rhi::VkRHIBuffer::createNonOwning(vkD,ddgi.probeStates().handle(),VK_WHOLE_SIZE);
-    m_setUpdate->write({{0,rhi::DescriptorType::SampledImage,vox.get()},{1,rhi::DescriptorType::Sampler,nullptr,nullptr,0,0,(const void*)(uintptr_t)m_linearClamp},{2,rhi::DescriptorType::StorageBuffer,nullptr,rb.get()}});
+    m_setUpdate->write({{0,rhi::DescriptorType::SampledImage,vox.get()},{1,rhi::DescriptorType::Sampler,nullptr,nullptr,0,0,m_linearClamp->nativeHandle()},{2,rhi::DescriptorType::StorageBuffer,nullptr,rb.get()}});
     m_setBlend->write({{0,rhi::DescriptorType::StorageBuffer,nullptr,rb.get()},{1,rhi::DescriptorType::StorageImage,irr.get()},{2,rhi::DescriptorType::StorageImage,dist.get()}});
     m_setClassify->write({{0,rhi::DescriptorType::StorageBuffer,nullptr,rb.get()},{1,rhi::DescriptorType::StorageBuffer,nullptr,ps.get()}});
 }

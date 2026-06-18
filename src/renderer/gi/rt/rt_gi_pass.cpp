@@ -12,6 +12,7 @@
 #include "rhi/vulkan/vk_texture.h"
 #include "rhi/vulkan/vk_buffer.h"
 #include "rhi/vulkan/vk_command.h"
+#include "rhi/base/sampler.h"
 #include "core/device.h"
 #include "core/shader.h"
 #include <array>
@@ -22,7 +23,7 @@ static_assert(sizeof(RtPC)==16); }
 RtGiPass::~RtGiPass()=default;
 void RtGiPass::init(rhi::RHIDevice& d){ m_rhiDevice=&d; auto& vkD=static_cast<rhi::VkRHIDevice&>(d);
     VkSamplerCreateInfo si{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO}; si.magFilter=si.minFilter=VK_FILTER_LINEAR; si.mipmapMode=VK_SAMPLER_MIPMAP_MODE_LINEAR; si.addressModeU=si.addressModeV=si.addressModeW=VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE; si.maxLod=0.f;
-    vkCreateSampler(vkD.vkDevice(),&si,nullptr,&m_linearClamp);
+    m_linearClamp = d.createSampler({rhi::Filter::Linear,rhi::Filter::Linear,rhi::SamplerMipmapMode::Linear,rhi::SamplerAddressMode::ClampToEdge,rhi::SamplerAddressMode::ClampToEdge,rhi::SamplerAddressMode::ClampToEdge,0.f});
     rhi::DescSetLayoutDesc ld; ld.debugName="RtGI";
     ld.bindings={{0,rhi::DescriptorType::UniformBuffer,1,rhi::ShaderStage::Compute},{1,rhi::DescriptorType::SampledImage,1,rhi::ShaderStage::Compute},{2,rhi::DescriptorType::SampledImage,1,rhi::ShaderStage::Compute},{3,rhi::DescriptorType::AccelerationStructure,1,rhi::ShaderStage::Compute},{4,rhi::DescriptorType::StorageBuffer,1,rhi::ShaderStage::Compute},{5,rhi::DescriptorType::StorageBuffer,1,rhi::ShaderStage::Compute},{6,rhi::DescriptorType::StorageBuffer,1,rhi::ShaderStage::Compute},{7,rhi::DescriptorType::StorageBuffer,1,rhi::ShaderStage::Compute},{8,rhi::DescriptorType::Sampler,1,rhi::ShaderStage::Compute},{9,rhi::DescriptorType::SampledImage,kMaxTextures,rhi::ShaderStage::Compute},{10,rhi::DescriptorType::StorageImage,1,rhi::ShaderStage::Compute}};
     m_setLayout=d.createDescriptorSetLayout(ld); m_set=d.createDescriptorSet(*m_setLayout);
@@ -32,7 +33,7 @@ void RtGiPass::init(rhi::RHIDevice& d){ m_rhiDevice=&d; auto& vkD=static_cast<rh
     m_pipeline=d.createComputePSO(pd);
     m_texViews.reserve(kMaxTextures); m_texViewPtrs.reserve(kMaxTextures);
 }
-void RtGiPass::destroy(){ if(m_linearClamp)vkDestroySampler(static_cast<rhi::VkRHIDevice&>(*m_rhiDevice).vkDevice(),m_linearClamp,nullptr); m_texViews.clear(); m_texViewPtrs.clear(); m_set.reset(); m_pipeline.reset(); m_setLayout.reset(); m_rhiDevice=nullptr; }
+void RtGiPass::destroy(){ m_linearClamp.reset(); m_texViews.clear(); m_texViewPtrs.clear(); m_set.reset(); m_pipeline.reset(); m_setLayout.reset(); m_rhiDevice=nullptr; }
 void RtGiPass::bindFrame(const RenderTargets& rt,VkBuffer frameUbo,const SceneRtAS& rtAS,const SceneGpu& gpu){ auto& vkD=static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
     auto ubo=rhi::VkRHIBuffer::createNonOwning(vkD,frameUbo,VK_WHOLE_SIZE);
     auto inst=rhi::VkRHIBuffer::createNonOwning(vkD,rtAS.instanceDataBuffer(),VK_WHOLE_SIZE);
@@ -46,7 +47,7 @@ void RtGiPass::bindFrame(const RenderTargets& rt,VkBuffer frameUbo,const SceneRt
     for(uint32_t i=0;i<kMaxTextures;++i){ VkImageView v=(i<gpu.images.size())?gpu.images[i].view():gpu.whiteTex.view(); m_texViews.push_back(rhi::VkRHITextureView::createNonOwning(vkD,v)); m_texViewPtrs.push_back(m_texViews.back().get()); }
     auto tasInfo=rtAS.tlasWriteInfo();
     rhi::DescriptorWrite w[11]={};
-    w[0]={0,rhi::DescriptorType::UniformBuffer,nullptr,ubo.get()}; w[1]={1,rhi::DescriptorType::SampledImage,nr.get()}; w[2]={2,rhi::DescriptorType::SampledImage,dp.get()}; w[3]={3,rhi::DescriptorType::AccelerationStructure,nullptr,nullptr,0,0,nullptr,tasInfo.pAccelerationStructures}; w[4]={4,rhi::DescriptorType::StorageBuffer,nullptr,inst.get()}; w[5]={5,rhi::DescriptorType::StorageBuffer,nullptr,vert.get()}; w[6]={6,rhi::DescriptorType::StorageBuffer,nullptr,idx.get()}; w[7]={7,rhi::DescriptorType::StorageBuffer,nullptr,mat.get()}; w[8]={8,rhi::DescriptorType::Sampler,nullptr,nullptr,0,0,(const void*)(uintptr_t)m_linearClamp}; w[9]={9,rhi::DescriptorType::SampledImage,nullptr,nullptr,0,0,nullptr,nullptr,kMaxTextures,m_texViewPtrs.data()}; w[10]={10,rhi::DescriptorType::StorageImage,ao.get()};
+    w[0]={0,rhi::DescriptorType::UniformBuffer,nullptr,ubo.get()}; w[1]={1,rhi::DescriptorType::SampledImage,nr.get()}; w[2]={2,rhi::DescriptorType::SampledImage,dp.get()}; w[3]={3,rhi::DescriptorType::AccelerationStructure,nullptr,nullptr,0,0,nullptr,tasInfo.pAccelerationStructures}; w[4]={4,rhi::DescriptorType::StorageBuffer,nullptr,inst.get()}; w[5]={5,rhi::DescriptorType::StorageBuffer,nullptr,vert.get()}; w[6]={6,rhi::DescriptorType::StorageBuffer,nullptr,idx.get()}; w[7]={7,rhi::DescriptorType::StorageBuffer,nullptr,mat.get()}; w[8]={8,rhi::DescriptorType::Sampler,nullptr,nullptr,0,0,m_linearClamp->nativeHandle()}; w[9]={9,rhi::DescriptorType::SampledImage,nullptr,nullptr,0,0,nullptr,nullptr,kMaxTextures,m_texViewPtrs.data()}; w[10]={10,rhi::DescriptorType::StorageImage,ao.get()};
     m_set->write({w,w+11});
 }
 void RtGiPass::record(rhi::RHICommandBuffer& cmd,const RenderTargets& rt){ if(!m_pipeline)return;

@@ -1,5 +1,6 @@
 // SsrPass —— 屏幕空间反射（M4.2），已迁移到 RHI。
 #pragma once
+#include "rhi/base/sampler.h"
 #include "renderer/core/render_targets.h"
 #include <memory>
 #include <vulkan/vulkan.h>
@@ -12,10 +13,12 @@ class RHIDescriptorSetLayout;
 class RHIPipelineState;
 class RHIDescriptorSet;
 class RHICommandBuffer;
+class RHISampler;
 }
 
 class SsrPass {
 public:
+    SsrPass() = default;
     ~SsrPass();
     void init(rhi::RHIDevice& d);
     void destroy();
@@ -39,7 +42,7 @@ private:
     std::unique_ptr<rhi::RHIPipelineState>       m_pipeline;
     std::unique_ptr<rhi::RHIDescriptorSet>        m_set;
 
-    VkSampler m_linearClamp = VK_NULL_HANDLE;  // RHI 不管理 Sampler 生命周期
+    std::unique_ptr<rhi::RHISampler> m_linearClamp;
 };
 
 } // namespace somegi

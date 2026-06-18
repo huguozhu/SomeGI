@@ -1,5 +1,6 @@
 // DdgiPass — DDGI 4-pass pipeline (Compute)，已迁移到 RHI。
 #pragma once
+#include "rhi/base/sampler.h"
 #include <glm/glm.hpp>
 #include <memory>
 #include <vulkan/vulkan.h>
@@ -18,5 +19,5 @@ private:
     std::unique_ptr<rhi::RHIDescriptorSetLayout> m_setLayout, m_setLayoutBlend, m_setLayoutClassify;
     std::unique_ptr<rhi::RHIPipelineState> m_pipelineUpdate, m_pipelineClassify, m_pipelineBlendIrr, m_pipelineBlendDist;
     std::unique_ptr<rhi::RHIDescriptorSet> m_setUpdate, m_setBlend, m_setClassify;
-    VkSampler m_linearClamp = VK_NULL_HANDLE;
+    std::unique_ptr<rhi::RHISampler> m_linearClamp;
 }; } // namespace somegi
