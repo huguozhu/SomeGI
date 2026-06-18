@@ -15,7 +15,7 @@
 #include "core/shader.h"
 #include <array>
 namespace somegi {
-namespace { struct SeedPC{uint32_t res,_p0,_p1,_p2;}; struct JfaPC{uint32_t res,step;}; struct FinalizePC{uint32_t res;float maxDistCells;}; struct TracePC{uint32_t outSizeX,outSizeY,numRays,maxSteps;float invOutSizeX,invOutSizeY,rayMaxCells,hitEpsCells;uint32_t frameIndex,_p0,_p1,_p2;}; }
+namespace { struct SeedPC{uint32_t res,_p0,_p1,_p2;}; struct JfaPC{uint32_t res,step,_p0,_p1;}; struct FinalizePC{uint32_t res;float maxDistCells;}; struct TracePC{uint32_t outSizeX,outSizeY,numRays,maxSteps;float invOutSizeX,invOutSizeY,rayMaxCells,hitEpsCells;uint32_t frameIndex,_p0,_p1,_p2;}; }
 SdfgiPass::~SdfgiPass()=default;
 void SdfgiPass::init(rhi::RHIDevice& d){ m_rhiDevice=&d; auto& vkD=static_cast<rhi::VkRHIDevice&>(d);
     VkSamplerCreateInfo si{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};si.magFilter=si.minFilter=VK_FILTER_LINEAR;si.addressModeU=si.addressModeV=si.addressModeW=VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;si.maxLod=16.f;

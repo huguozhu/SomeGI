@@ -127,6 +127,10 @@ void VkRHIDescSet::write(const std::vector<DescriptorWrite>& writes) {
         vw.descriptorCount = 1;
         vw.descriptorType = toVkDescType(w.type);
 
+        // STORAGE_IMAGE 必须用 GENERAL，SAMPLED_IMAGE 用 SHADER_READ_ONLY_OPTIMAL
+        VkImageLayout imgLayout = (w.type == DescriptorType::StorageImage)
+            ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
         if (w.textureArrayCount > 0 && w.textureViewArray) {
             // 纹理数组绑定（如 GBuffer/Voxelize 的 texture array）
             vw.descriptorCount = w.textureArrayCount;
@@ -136,11 +140,11 @@ void VkRHIDescSet::write(const std::vector<DescriptorWrite>& writes) {
                 VkImageView v = w.textureViewArray[ai]
                     ? (VkImageView)(uintptr_t)w.textureViewArray[ai]->nativeHandle()
                     : VK_NULL_HANDLE;
-                imageInfos[baseIdx + ai] = {VK_NULL_HANDLE, v, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+                imageInfos[baseIdx + ai] = {VK_NULL_HANDLE, v, imgLayout};
             }
             vw.pImageInfo = &imageInfos[baseIdx];
         } else if (w.textureView) {
-            imageInfos.push_back({VK_NULL_HANDLE, (VkImageView)(uintptr_t)w.textureView->nativeHandle(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
+            imageInfos.push_back({VK_NULL_HANDLE, (VkImageView)(uintptr_t)w.textureView->nativeHandle(), imgLayout});
             vw.pImageInfo = &imageInfos.back();
         }
         if (w.sampler) {
