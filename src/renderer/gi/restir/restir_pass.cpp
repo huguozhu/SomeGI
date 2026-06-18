@@ -17,8 +17,8 @@ struct SpatialPC{uint32_t outX,outY;float invX,invY;uint32_t numLights,numNeighb
 struct ShadePC{uint32_t outX,outY;float invX,invY;uint32_t numLights,pad0;float shadowSteps,intensityScale;};static_assert(sizeof(ShadePC)==32); }
 RestirPass::~RestirPass()=default;
 void RestirPass::init(rhi::RHIDevice& d,bool hwRt){ m_rhiDevice=&d; auto& vkD=static_cast<rhi::VkRHIDevice&>(d);
-    VkSamplerCreateInfo si{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};si.magFilter=si.minFilter=VK_FILTER_LINEAR;si.mipmapMode=VK_SAMPLER_MIPMAP_MODE_LINEAR;si.addressModeU=si.addressModeV=si.addressModeW=VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;si.maxLod=0.f;
-    vkCreateSampler(vkD.vkDevice(),&si,nullptr,&m_linearClamp); auto sp=shaderDir()/"gi"/"restir";
+    m_linearClamp = d.createSampler({rhi::Filter::Linear,rhi::Filter::Linear,rhi::SamplerMipmapMode::Linear,rhi::SamplerAddressMode::ClampToEdge,rhi::SamplerAddressMode::ClampToEdge,rhi::SamplerAddressMode::ClampToEdge,0.f});
+    auto sp=shaderDir()/"gi"/"restir";
     auto mk=[&](const char* fn,const char* ep,rhi::RHIDescriptorSetLayout* lo,uint32_t pcs){
         auto sh=rhi::VkRHIShader::createFromFile(vkD,{rhi::ShaderStage::Compute,rhi::ShaderFormat::SPIRV,ep},sp/fn);
         rhi::ComputePSODesc pd; pd.debugName=fn; pd.computeShader=sh.get(); pd.descriptorSetLayouts={lo}; if(pcs)pd.pushConstants={{rhi::ShaderStage::Compute,0,pcs}}; return d.createComputePSO(pd); };
@@ -36,14 +36,14 @@ void RestirPass::init(rhi::RHIDevice& d,bool hwRt){ m_rhiDevice=&d; auto& vkD=st
         m_shadeRtDsl=d.createDescriptorSetLayout(rld); m_shadeRtSet=d.createDescriptorSet(*m_shadeRtDsl); m_shadeRtPipe=mk("restir_shade_rt.spv","cs_main",m_shadeRtDsl.get(),sizeof(ShadePC));
     }
 }
-void RestirPass::destroy(){ if(m_linearClamp)vkDestroySampler(static_cast<rhi::VkRHIDevice&>(*m_rhiDevice).vkDevice(),m_linearClamp,nullptr);
+void RestirPass::destroy(){ m_linearClamp.reset();
     m_shadeRtSet.reset();m_shadeRtPipe.reset();m_shadeRtDsl.reset(); m_shadeSet.reset();m_shadePipe.reset();m_shadeDsl.reset(); m_spatialSet.reset();m_spatialPipe.reset();m_spatialDsl.reset(); m_initSet.reset();m_initPipe.reset();m_initDsl.reset(); m_rhiDevice=nullptr; }
 void RestirPass::bindResources(const RestirResources& res,const VxgiResources& vxgi,const RenderTargets& rt,VkBuffer ubo){ auto& vkD=static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
     auto ab=rhi::VkRHITextureView::createNonOwning(vkD,rt.gAlbedoMetal.view()); auto nr=rhi::VkRHITextureView::createNonOwning(vkD,rt.gNormalRough.view()); auto dp=rhi::VkRHITextureView::createNonOwning(vkD,rt.depth.view());
     auto ub=rhi::VkRHIBuffer::createNonOwning(vkD,ubo,VK_WHOLE_SIZE); auto lb=rhi::VkRHIBuffer::createNonOwning(vkD,res.lightBuffer(),VK_WHOLE_SIZE);
     auto ra=rhi::VkRHITextureView::createNonOwning(vkD,res.reservoirA().view()); auto rb=rhi::VkRHITextureView::createNonOwning(vkD,res.reservoirB().view());
     auto out=rhi::VkRHITextureView::createNonOwning(vkD,rt.restir.view()); auto vox=rhi::VkRHITextureView::createNonOwning(vkD,vxgi.fullView());
-    const void* sp=(const void*)(uintptr_t)m_linearClamp;
+    const void* sp=m_linearClamp->nativeHandle();
     m_initSet->write({{0,rhi::DescriptorType::UniformBuffer,nullptr,ub.get()},{1,rhi::DescriptorType::SampledImage,ab.get()},{2,rhi::DescriptorType::SampledImage,nr.get()},{3,rhi::DescriptorType::SampledImage,dp.get()},{4,rhi::DescriptorType::StorageBuffer,nullptr,lb.get()},{5,rhi::DescriptorType::StorageImage,ra.get()}});
     m_spatialSet->write({{0,rhi::DescriptorType::UniformBuffer,nullptr,ub.get()},{1,rhi::DescriptorType::SampledImage,ab.get()},{2,rhi::DescriptorType::SampledImage,nr.get()},{3,rhi::DescriptorType::SampledImage,dp.get()},{4,rhi::DescriptorType::StorageBuffer,nullptr,lb.get()},{5,rhi::DescriptorType::SampledImage,ra.get()},{6,rhi::DescriptorType::StorageImage,rb.get()}});
     m_shadeSet->write({{0,rhi::DescriptorType::UniformBuffer,nullptr,ub.get()},{1,rhi::DescriptorType::SampledImage,ab.get()},{2,rhi::DescriptorType::SampledImage,nr.get()},{3,rhi::DescriptorType::SampledImage,dp.get()},{4,rhi::DescriptorType::StorageBuffer,nullptr,lb.get()},{5,rhi::DescriptorType::SampledImage,rb.get()},{6,rhi::DescriptorType::SampledImage,vox.get()},{7,rhi::DescriptorType::Sampler,nullptr,nullptr,0,0,sp},{8,rhi::DescriptorType::StorageImage,out.get()}});
@@ -52,7 +52,7 @@ void RestirPass::bindResourcesRt(const RestirResources& res,const RenderTargets&
     auto ab=rhi::VkRHITextureView::createNonOwning(vkD,rt.gAlbedoMetal.view()); auto nr=rhi::VkRHITextureView::createNonOwning(vkD,rt.gNormalRough.view()); auto dp=rhi::VkRHITextureView::createNonOwning(vkD,rt.depth.view());
     auto ub=rhi::VkRHIBuffer::createNonOwning(vkD,ubo,VK_WHOLE_SIZE); auto lb=rhi::VkRHIBuffer::createNonOwning(vkD,res.lightBuffer(),VK_WHOLE_SIZE);
     auto rb=rhi::VkRHITextureView::createNonOwning(vkD,res.reservoirB().view()); auto out=rhi::VkRHITextureView::createNonOwning(vkD,rt.restir.view());
-    const void* sp=(const void*)(uintptr_t)m_linearClamp;
+    const void* sp=m_linearClamp->nativeHandle();
     m_shadeRtSet->write({{0,rhi::DescriptorType::UniformBuffer,nullptr,ub.get()},{1,rhi::DescriptorType::SampledImage,ab.get()},{2,rhi::DescriptorType::SampledImage,nr.get()},{3,rhi::DescriptorType::SampledImage,dp.get()},{4,rhi::DescriptorType::StorageBuffer,nullptr,lb.get()},{5,rhi::DescriptorType::SampledImage,rb.get()},{6,rhi::DescriptorType::AccelerationStructure,nullptr,nullptr,0,0,nullptr,&tlas},{7,rhi::DescriptorType::StorageImage,out.get()},{8,rhi::DescriptorType::Sampler,nullptr,nullptr,0,0,sp}});
 }
 void RestirPass::record(VkCommandBuffer vkCmd,const RestirResources&,const RenderTargets& rt,uint32_t nl,uint32_t nc,uint32_t nn,float sr,uint32_t ss,float is,uint32_t fi,bool useRt){

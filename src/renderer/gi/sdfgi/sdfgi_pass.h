@@ -1,5 +1,6 @@
 // SdfgiPass — SDFGI-lite (4管线)，RHI 管理资源，record VkCompat。
 #pragma once
+#include "rhi/base/sampler.h"
 #include <glm/glm.hpp>
 #include <memory>
 #include <vulkan/vulkan.h>
@@ -16,5 +17,5 @@ private:
     std::unique_ptr<rhi::RHIDescriptorSetLayout> m_seedDsl,m_jfaDsl,m_finDsl,m_traceDsl;
     std::unique_ptr<rhi::RHIPipelineState> m_seedPipe,m_jfaPipe,m_finPipe,m_tracePipe;
     std::unique_ptr<rhi::RHIDescriptorSet> m_seedSet,m_jfaAB,m_jfaBA,m_finA,m_finB,m_traceSet;
-    VkSampler m_linearClamp=VK_NULL_HANDLE;
+    std::unique_ptr<rhi::RHISampler> m_linearClamp;
 }; } // namespace somegi

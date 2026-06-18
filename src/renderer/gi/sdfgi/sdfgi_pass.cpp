@@ -18,8 +18,8 @@ namespace somegi {
 namespace { struct SeedPC{uint32_t res,_p0,_p1,_p2;}; struct JfaPC{uint32_t res,step,_p0,_p1;}; struct FinalizePC{uint32_t res;float maxDistCells;uint32_t _p0,_p1;}; struct TracePC{uint32_t outSizeX,outSizeY,numRays,maxSteps;float invOutSizeX,invOutSizeY,rayMaxCells,hitEpsCells;uint32_t frameIndex,_p0,_p1,_p2;}; }
 SdfgiPass::~SdfgiPass()=default;
 void SdfgiPass::init(rhi::RHIDevice& d){ m_rhiDevice=&d; auto& vkD=static_cast<rhi::VkRHIDevice&>(d);
-    VkSamplerCreateInfo si{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};si.magFilter=si.minFilter=VK_FILTER_LINEAR;si.addressModeU=si.addressModeV=si.addressModeW=VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;si.maxLod=16.f;
-    vkCreateSampler(vkD.vkDevice(),&si,nullptr,&m_linearClamp); auto sp=shaderDir()/"gi"/"sdfgi";
+    m_linearClamp = d.createSampler({rhi::Filter::Linear,rhi::Filter::Linear,rhi::SamplerMipmapMode::Linear,rhi::SamplerAddressMode::ClampToEdge,rhi::SamplerAddressMode::ClampToEdge,rhi::SamplerAddressMode::ClampToEdge,16.f});
+    auto sp=shaderDir()/"gi"/"sdfgi";
     rhi::DescSetLayoutDesc sld; sld.debugName="SDFGI_Seed"; sld.bindings={{0,rhi::DescriptorType::SampledImage,1,rhi::ShaderStage::Compute},{1,rhi::DescriptorType::StorageImage,1,rhi::ShaderStage::Compute}};
     m_seedDsl=d.createDescriptorSetLayout(sld); m_seedSet=d.createDescriptorSet(*m_seedDsl);
     auto ms=rhi::VkRHIShader::createFromFile(vkD,{rhi::ShaderStage::Compute,rhi::ShaderFormat::SPIRV,"cs_main"},sp/"sdfgi_seed.spv");
@@ -37,7 +37,7 @@ void SdfgiPass::init(rhi::RHIDevice& d){ m_rhiDevice=&d; auto& vkD=static_cast<r
     auto mt=rhi::VkRHIShader::createFromFile(vkD,{rhi::ShaderStage::Compute,rhi::ShaderFormat::SPIRV,"cs_main"},sp/"sdfgi_trace.spv");
     rhi::ComputePSODesc tpd;tpd.computeShader=mt.get();tpd.descriptorSetLayouts={m_traceDsl.get()};tpd.pushConstants={{rhi::ShaderStage::Compute,0,sizeof(TracePC)}};m_tracePipe=d.createComputePSO(tpd);
 }
-void SdfgiPass::destroy(){ if(m_linearClamp)vkDestroySampler(static_cast<rhi::VkRHIDevice&>(*m_rhiDevice).vkDevice(),m_linearClamp,nullptr);
+void SdfgiPass::destroy(){ m_linearClamp.reset();
     m_traceSet.reset();m_finB.reset();m_finA.reset();m_jfaBA.reset();m_jfaAB.reset();m_seedSet.reset(); m_tracePipe.reset();m_finPipe.reset();m_jfaPipe.reset();m_seedPipe.reset(); m_traceDsl.reset();m_finDsl.reset();m_jfaDsl.reset();m_seedDsl.reset(); m_rhiDevice=nullptr; }
 void SdfgiPass::bindResources(const SdfgiResources& sf,const VxgiResources& vx,const RenderTargets& rt,VkBuffer fb){ auto& vkD=static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
     auto vox=rhi::VkRHITextureView::createNonOwning(vkD,vx.fullView()); auto aniso=rhi::VkRHITextureView::createNonOwning(vkD,vx.anisoFullView());
@@ -49,7 +49,7 @@ void SdfgiPass::bindResources(const SdfgiResources& sf,const VxgiResources& vx,c
     m_jfaAB->write({{0,rhi::DescriptorType::SampledImage,sa.get()},{1,rhi::DescriptorType::StorageImage,sb.get()}});
     m_jfaBA->write({{0,rhi::DescriptorType::SampledImage,sb.get()},{1,rhi::DescriptorType::StorageImage,sa.get()}});
     m_finA->write({{0,rhi::DescriptorType::SampledImage,sa.get()},{1,rhi::DescriptorType::StorageImage,udf.get()}}); m_finB->write({{0,rhi::DescriptorType::SampledImage,sb.get()},{1,rhi::DescriptorType::StorageImage,udf.get()}});
-    m_traceSet->write({{0,rhi::DescriptorType::UniformBuffer,nullptr,ubo.get()},{1,rhi::DescriptorType::SampledImage,nr.get()},{2,rhi::DescriptorType::SampledImage,dp.get()},{3,rhi::DescriptorType::SampledImage,vox.get()},{4,rhi::DescriptorType::SampledImage,aniso.get()},{5,rhi::DescriptorType::Sampler,nullptr,nullptr,0,0,(const void*)(uintptr_t)m_linearClamp},{6,rhi::DescriptorType::StorageImage,out.get()}});
+    m_traceSet->write({{0,rhi::DescriptorType::UniformBuffer,nullptr,ubo.get()},{1,rhi::DescriptorType::SampledImage,nr.get()},{2,rhi::DescriptorType::SampledImage,dp.get()},{3,rhi::DescriptorType::SampledImage,vox.get()},{4,rhi::DescriptorType::SampledImage,aniso.get()},{5,rhi::DescriptorType::Sampler,nullptr,nullptr,0,0,m_linearClamp->nativeHandle()},{6,rhi::DescriptorType::StorageImage,out.get()}});
 }
 void SdfgiPass::record(VkCommandBuffer vkCmd,const SdfgiResources& sf,const RenderTargets& rt,uint32_t fi,float st,float md,uint32_t nr,uint32_t ms,float rm,float he){
     auto h=[&](auto& p){return (VkPipeline)(uintptr_t)p->nativeHandle();}; auto l=[&](auto& p){return static_cast<rhi::VkRHIPipelineState&>(*p).layout();}; auto s=[&](auto& x){return (VkDescriptorSet)(uintptr_t)x->nativeHandle();};
