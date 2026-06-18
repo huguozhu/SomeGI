@@ -10,6 +10,7 @@ class RHIBuffer;
 class RHITexture;
 class RHITextureView;
 class RHIShader;
+class RHISampler;
 class RHISwapchain;
 class RHIPipelineState;
 class RHIDescriptorSetLayout;
@@ -42,6 +43,7 @@ public:
     virtual std::unique_ptr<RHITexture> createTexture(const TextureDesc& desc) = 0;
     virtual std::unique_ptr<RHITextureView> createTextureView(const RHITexture& tex, const TextureViewDesc& desc) = 0;
     virtual std::unique_ptr<RHIShader> createShader(const ShaderDesc& desc, const void* bytecode, size_t size) = 0;
+    virtual std::unique_ptr<RHISampler> createSampler(const SamplerDesc& desc) = 0;
     virtual std::unique_ptr<RHISwapchain> createSwapchain(void* nativeWindow, uint32_t width, uint32_t height) = 0;
     virtual std::unique_ptr<RHIPipelineState> createGraphicsPSO(const GraphicsPSODesc& desc) = 0;
     virtual std::unique_ptr<RHIPipelineState> createComputePSO(const ComputePSODesc& desc) = 0;

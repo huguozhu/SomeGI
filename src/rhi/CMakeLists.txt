@@ -5,6 +5,7 @@ add_library(somegi_rhi OBJECT
     vulkan/vk_buffer.cpp
     vulkan/vk_texture.cpp
     vulkan/vk_shader.cpp
+    vulkan/vk_sampler.cpp
     vulkan/vk_swapchain.cpp
     # Phase 2: PSO + Descriptor
     vulkan/vk_pso.cpp

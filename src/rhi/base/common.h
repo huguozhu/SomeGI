@@ -123,6 +123,26 @@ enum class PrimitiveTopology { TriangleList, TriangleStrip, LineList, PointList 
 enum class FillMode { Solid, Wireframe };
 enum class CullMode { None, Front, Back };
 enum class CompareFunc { Never, Less, Equal, LessEqual, Greater, NotEqual, GreaterEqual, Always };
+
+// ════════════════════════════════════════════════════════════════
+// Sampler
+// ════════════════════════════════════════════════════════════════
+enum class Filter { Nearest, Linear };
+enum class SamplerAddressMode { ClampToEdge, Repeat, MirroredRepeat, ClampToBorder };
+enum class SamplerMipmapMode { Nearest, Linear };
+
+struct SamplerDesc {
+    Filter magFilter = Filter::Linear;
+    Filter minFilter = Filter::Linear;
+    SamplerMipmapMode mipmapMode = SamplerMipmapMode::Linear;
+    SamplerAddressMode addressU = SamplerAddressMode::ClampToEdge;
+    SamplerAddressMode addressV = SamplerAddressMode::ClampToEdge;
+    SamplerAddressMode addressW = SamplerAddressMode::ClampToEdge;
+    float maxLod = 0.0f;
+    bool compareEnable = false;
+    CompareFunc compareOp = CompareFunc::LessEqual;
+    const char* debugName = nullptr;
+};
 enum class BlendFactor { Zero, One, SrcColor, InvSrcColor, SrcAlpha, InvSrcAlpha, DstColor, InvDstColor };
 enum class BlendOp { Add, Subtract, ReverseSubtract, Min, Max };
 

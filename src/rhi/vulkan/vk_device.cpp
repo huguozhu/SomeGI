@@ -3,6 +3,7 @@
 #include "vk_buffer.h"
 #include "vk_texture.h"
 #include "vk_shader.h"
+#include "vk_sampler.h"
 #include "vk_swapchain.h"
 #include "vk_pso.h"
 #include "vk_descriptor.h"
@@ -272,6 +273,9 @@ std::unique_ptr<RHITextureView> VkRHIDevice::createTextureView(const RHITexture&
 }
 std::unique_ptr<RHIShader> VkRHIDevice::createShader(const ShaderDesc& desc, const void* bytecode, size_t size) {
     return VkRHIShader::create(*this, desc, bytecode, size);
+}
+std::unique_ptr<RHISampler> VkRHIDevice::createSampler(const SamplerDesc& desc) {
+    return VkRHISampler::create(*this, desc);
 }
 std::unique_ptr<RHISwapchain> VkRHIDevice::createSwapchain(void* nativeWindow, uint32_t width, uint32_t height) {
     return VkRHISwapchain::create(*this, nativeWindow, width, height);

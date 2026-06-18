@@ -29,6 +29,7 @@ public:
     std::unique_ptr<RHITexture> createTexture(const TextureDesc& desc) override;
     std::unique_ptr<RHITextureView> createTextureView(const RHITexture& tex, const TextureViewDesc& desc) override;
     std::unique_ptr<RHIShader> createShader(const ShaderDesc& desc, const void* bytecode, size_t size) override;
+    std::unique_ptr<RHISampler> createSampler(const SamplerDesc& desc) override;
     std::unique_ptr<RHISwapchain> createSwapchain(void* nativeWindow, uint32_t width, uint32_t height) override;
     std::unique_ptr<RHIPipelineState> createGraphicsPSO(const GraphicsPSODesc& desc) override;
     std::unique_ptr<RHIPipelineState> createComputePSO(const ComputePSODesc& desc) override;
