@@ -116,8 +116,15 @@ void VkRHICommandBuffer::bindDescriptorSets(uint32_t firstSlot, uint32_t count,
                             firstSlot, count, vkSets.data(), 0, nullptr);
 }
 void VkRHICommandBuffer::pushConstants(ShaderStage stage, const void* data, uint32_t size, uint32_t offset) {
-    (void)stage;
-    vkCmdPushConstants(m_cmd, m_boundLayout, VK_SHADER_STAGE_ALL, offset, size, data);
+    // 映射 RHI ShaderStage → Vulkan stage flags（必须匹配 pipeline layout 的 push constant range）
+    VkShaderStageFlags vkStage = 0;
+    if ((uint32_t)stage & (uint32_t)ShaderStage::Vertex)   vkStage |= VK_SHADER_STAGE_VERTEX_BIT;
+    if ((uint32_t)stage & (uint32_t)ShaderStage::Fragment) vkStage |= VK_SHADER_STAGE_FRAGMENT_BIT;
+    if ((uint32_t)stage & (uint32_t)ShaderStage::Compute)  vkStage |= VK_SHADER_STAGE_COMPUTE_BIT;
+    if ((uint32_t)stage & (uint32_t)ShaderStage::Mesh)     vkStage |= VK_SHADER_STAGE_MESH_BIT_EXT;
+    if ((uint32_t)stage & (uint32_t)ShaderStage::Task)     vkStage |= VK_SHADER_STAGE_TASK_BIT_EXT;
+    if (!vkStage) vkStage = VK_SHADER_STAGE_COMPUTE_BIT; // fallback
+    vkCmdPushConstants(m_cmd, m_boundLayout, vkStage, offset, size, data);
 }
 
 void VkRHICommandBuffer::bindVertexBuffer(uint32_t binding, const RHIBuffer& buffer,
