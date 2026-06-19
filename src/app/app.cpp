@@ -802,7 +802,7 @@ void App::onSwapchainResized() {
         m_renderer.lumenAtlasInited() = false;
         m_renderer.lumenOutInited()  = false;
         if (m_renderer.lumenProbeInited()) {
-            m_renderer.lumenProbe().bindResources(*m_device, m_renderer.lumen(), m_renderer.rtAS(), m_sceneGpu,
+            m_renderer.lumenProbe().bindResources(m_renderer.lumen(), m_renderer.rtAS(), m_sceneGpu,
                                             m_renderer.vxgi(), m_renderer.rt(), m_renderer.gbuffer().frameUboHandle(),
                                             m_renderer.vxgiSixAxisInited());
         }
@@ -2763,8 +2763,8 @@ void App::registerPipelineSteps() {
         .enabled = false,
         .record = [this](VkCommandBuffer cmd) {
             if (!m_renderer.lumenProbeInited()) {
-                m_renderer.lumenProbe().init(*m_device);
-                m_renderer.lumenProbe().bindResources(*m_device, m_renderer.lumen(), m_renderer.rtAS(), m_sceneGpu,
+                m_renderer.lumenProbe().init(*m_renderer.rhiDevice());
+                m_renderer.lumenProbe().bindResources(m_renderer.lumen(), m_renderer.rtAS(), m_sceneGpu,
                                                 m_renderer.vxgi(), m_renderer.rt(), m_renderer.gbuffer().frameUboHandle(),
                                                 m_renderer.vxgiSixAxisInited());
                 m_renderer.lumenProbeInited() = true;
@@ -4607,8 +4607,8 @@ void App::setupFrameGraph() {
             b.setManualBarriers();  // 复杂 Pass：bootstrap + 多 image 过渡 + dispatch
             b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
                 if (!m_renderer.lumenProbeInited()) {
-                    m_renderer.lumenProbe().init(*m_device);
-                    m_renderer.lumenProbe().bindResources(*m_device, m_renderer.lumen(), m_renderer.rtAS(), m_sceneGpu,
+                    m_renderer.lumenProbe().init(*m_renderer.rhiDevice());
+                    m_renderer.lumenProbe().bindResources(m_renderer.lumen(), m_renderer.rtAS(), m_sceneGpu,
                                                     m_renderer.vxgi(), m_renderer.rt(), m_renderer.gbuffer().frameUboHandle(),
                                                     m_renderer.vxgiSixAxisInited());
                     m_renderer.lumenProbeInited() = true;
