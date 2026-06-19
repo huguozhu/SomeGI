@@ -1,5 +1,9 @@
+// ShadowPass — 多种阴影算法的统一录制入口。已迁移到 RHI（resources），record 保留 VkCompat。
 #pragma once
 #include "rhi/base/device.h"
+#include "rhi/base/descriptor.h"
+#include "rhi/base/pipeline_state.h"
+#include "rhi/base/sampler.h"
 #include "core/image.h"
 #include "core/buffer.h"
 #include <glm/glm.hpp>
@@ -18,8 +22,8 @@ enum class ShadowMethod : int {
     PCF = 2,
     PCSS = 3,
     VSM = 4,
-    RTHard = 5,    // Phase 2
-    RTSoft = 6,    // Phase 2
+    RTHard = 5,
+    RTSoft = 6,
     Count
 };
 
@@ -29,7 +33,6 @@ struct ShadowEntry {
     bool requiresRt;
 };
 
-// Phase 1 available algorithms (RT deferred to Phase 2)
 constexpr ShadowEntry kShadows[] = {
     {"None",               true,  false},
     {"Hard Shadow Map",    true,  false},
@@ -46,45 +49,28 @@ public:
     void init(Device& d, rhi::RHIDevice& rhiDevice, VkExtent2D shadowMapSize, VkExtent2D outputSize);
     void destroy();
 
-    // Per-frame record: dispatches based on m_method
     void record(VkCommandBuffer cmd, const RenderTargets& rt,
                 VkBuffer frameUbo, const SceneGpu& sceneGpu,
                 VkBuffer indirectBuf, uint32_t drawCount,
                 uint32_t frameIndex = 0);
 
-    // Algorithm selection
     ShadowMethod method() const { return m_method; }
     void setMethod(ShadowMethod m) { m_method = m; }
 
-    // Scene AABB for sun-view projection computation
     void setSceneAabb(const glm::vec3& mn, const glm::vec3& mx) {
         m_sceneAabbMin = mn; m_sceneAabbMax = mx;
     }
-
-    // Sun direction（lightDir = from sun to surface，与 FrameUBO::sunDir 一致）
     void setSunDir(const glm::vec3& dir) { m_sunDir = dir; }
-
-    // 绑定场景 GPU 资源到 SM render descriptor set（场景加载后、record 前调用）
     void bindScene(Device& d, const SceneGpu& gpu);
-
-    // 绑定每帧资源（FrameUniforms + GBuffer depth + normal）到 resolve set
     void bindFrameResources(Device& d, VkBuffer frameUbo, VkImageView depthView, VkImageView normalView);
-
-    // 绑定 TLAS（RT shadow 用，场景加载后调用）
     void bindTLAS(Device& d, VkAccelerationStructureKHR tlas);
 
-    // Shadow output (R8_UNORM) — LightingPass reads from here
     const Image& shadowMask() const { return m_shadowMask; }
+    VkSampler shadowSampler() const { return (VkSampler)(uintptr_t)m_shadowSampler->nativeHandle(); }
 
-    // Sampler used for shadow map sampling (exposed for LightingPass)
-    VkSampler shadowSampler() const { return m_shadowSampler; }
-
-    // FrameGraph auto-barrier 模式：跳过内部 shadowMask 的 UNDEFINED→GENERAL 和
-    // GENERAL→SR_O 过渡，由 FrameGraph 统一管理
     void setFgAutoBarrier(bool v) { m_fgAutoBarrier = v; }
     bool fgAutoBarrier() const { return m_fgAutoBarrier; }
 
-    // RT shadow 可调参数
     float& rtSunRadius()  { return m_rtSunRadius; }
     int&   rtRayCount()   { return m_rtRayCount; }
 
@@ -104,8 +90,6 @@ private:
                    VkBuffer indirectBuf, uint32_t drawCount);
     void recordRTHard(VkCommandBuffer cmd);
     void recordRTSoft(VkCommandBuffer cmd);
-
-    // Shared shadow map render (sun-view depth-only)
     void renderShadowMap(VkCommandBuffer cmd, VkBuffer frameUbo,
                          const SceneGpu& sceneGpu,
                          VkBuffer indirectBuf, uint32_t drawCount);
@@ -113,95 +97,65 @@ private:
     void buildPipeline_HardSM();
     void buildPipeline_VSMGen();
     void buildPipeline_VSMBlur();
-    void buildPipeline_RTHard();
     void buildResolvePipeline();
+    void buildPipeline_RTHard();
     void destroyPipelines();
 
     Device* m_device = nullptr;
     rhi::RHIDevice* m_rhiDevice = nullptr;
     ShadowMethod m_method = ShadowMethod::HardShadowMap;
-    uint32_t m_currentFrameIndex = 0;  // 用于 RT soft shadow 随机种子
+    uint32_t m_currentFrameIndex = 0;
 
-    // Shadow map target (D32_SFLOAT, 2048x2048)
+    // ── Images（保留 VK，未迁移到 RHITexture）──
     Image m_shadowMap;
     VkExtent2D m_shadowMapSize{2048, 2048};
-
-    // Output shadowMask (R8_UNORM, full resolution)
     Image m_shadowMask;
     VkExtent2D m_outputSize{};
-
-    // VSM-specific: depth + depth^2 (R32G32_SFLOAT)
     Image m_vsmMap;
-    Image m_vsmBlur;     // 2×2 box blur 中间结果
+    Image m_vsmBlur;
 
-    // Shadow map render pipelines
-    VkPipelineLayout m_smPipelineLayout = VK_NULL_HANDLE;
-    VkPipeline m_smPipeline = VK_NULL_HANDLE;          // Hard SM: depth-only
-    VkPipeline m_vsmGenPipeline = VK_NULL_HANDLE;      // VSM: depth+depth^2
+    // ── Samplers（RHI）──
+    std::unique_ptr<rhi::RHISampler> m_shadowSampler;  // depth compare
+    std::unique_ptr<rhi::RHISampler> m_vsmSampler;     // 线性
 
-    // shadowMask resolve pipelines
-    VkPipelineLayout m_resolveLayout = VK_NULL_HANDLE;
-    VkPipeline m_resolveHard = VK_NULL_HANDLE;
-    VkPipeline m_resolvePCF = VK_NULL_HANDLE;
-    VkPipeline m_resolveVSM = VK_NULL_HANDLE;
+    // ── Descriptor Set Layouts（RHI）──
+    std::unique_ptr<rhi::RHIDescriptorSetLayout> m_setLayout;        // Resolve compute
+    std::unique_ptr<rhi::RHIDescriptorSetLayout> m_smSetLayout;      // SM graphics
+    std::unique_ptr<rhi::RHIDescriptorSetLayout> m_frameSetLayout;   // Frame UBO+depth
+    std::unique_ptr<rhi::RHIDescriptorSetLayout> m_vsmBlurSetLayout; // VSM blur
+    std::unique_ptr<rhi::RHIDescriptorSetLayout> m_rtSetLayout;      // RT shadow
 
-    // PCSS resolve（独立 pipeline layout，push constant 含 lightSize）
-    VkPipelineLayout m_pcssResolveLayout = VK_NULL_HANDLE;
-    VkPipeline m_resolvePCSS = VK_NULL_HANDLE;
+    // ── Descriptor Sets（RHI）──
+    std::unique_ptr<rhi::RHIDescriptorSet> m_set;        // Resolve
+    std::unique_ptr<rhi::RHIDescriptorSet> m_smSet;      // SM
+    std::unique_ptr<rhi::RHIDescriptorSet> m_frameSet;   // Frame
+    std::unique_ptr<rhi::RHIDescriptorSet> m_vsmBlurSet; // VSM blur
+    std::unique_ptr<rhi::RHIDescriptorSet> m_rtSet;      // RT
 
-    // Descriptors（resolve compute：UBO + COMBINED_IMAGE_SAMPLER + STORAGE_IMAGE）
-    VkDescriptorSetLayout m_setLayout = VK_NULL_HANDLE;
-    VkDescriptorPool m_pool = VK_NULL_HANDLE;
-    VkDescriptorSet m_set = VK_NULL_HANDLE;
+    // ── Pipelines（RHI）──
+    std::unique_ptr<rhi::RHIPipelineState> m_smPipeline;      // Hard SM (graphics)
+    std::unique_ptr<rhi::RHIPipelineState> m_vsmGenPipeline;  // VSM gen (graphics)
+    std::unique_ptr<rhi::RHIPipelineState> m_vsmBlurPipeline; // VSM blur (compute)
+    std::unique_ptr<rhi::RHIPipelineState> m_resolveHard;     // Hard resolve
+    std::unique_ptr<rhi::RHIPipelineState> m_resolvePCF;      // PCF resolve
+    std::unique_ptr<rhi::RHIPipelineState> m_resolveVSM;      // VSM resolve
+    std::unique_ptr<rhi::RHIPipelineState> m_resolvePCSS;     // PCSS resolve
+    std::unique_ptr<rhi::RHIPipelineState> m_rtHardPipeline;  // RT hard
+    std::unique_ptr<rhi::RHIPipelineState> m_rtSoftPipeline;  // RT soft
 
-    // 每帧资源 descriptor set（set=1：FrameUniforms UBO + GBuffer depth）
-    VkDescriptorSetLayout m_frameSetLayout = VK_NULL_HANDLE;
-    VkDescriptorPool m_framePool = VK_NULL_HANDLE;
-    VkDescriptorSet m_frameSet = VK_NULL_HANDLE;
-
-    // SM graphics pipeline descriptors（UBO + SSBO vertices/indices/drawData）
-    VkDescriptorSetLayout m_smSetLayout = VK_NULL_HANDLE;
-    VkDescriptorPool m_smPool = VK_NULL_HANDLE;
-    VkDescriptorSet m_smSet = VK_NULL_HANDLE;
-
-    // VSM blur pipeline（compute：vsmMap → vsmBlur）
-    VkPipelineLayout m_vsmBlurLayout = VK_NULL_HANDLE;
-    VkPipeline m_vsmBlurPipeline = VK_NULL_HANDLE;
-    VkDescriptorSetLayout m_vsmBlurSetLayout = VK_NULL_HANDLE;
-    VkDescriptorPool m_vsmBlurPool = VK_NULL_HANDLE;
-    VkDescriptorSet m_vsmBlurSet = VK_NULL_HANDLE;
-
-    // RT shadow（仅 HW 支持时创建）
-    VkPipelineLayout m_rtHardLayout = VK_NULL_HANDLE;
-    VkPipeline m_rtHardPipeline = VK_NULL_HANDLE;
-    VkPipelineLayout m_rtSoftLayout = VK_NULL_HANDLE;
-    VkPipeline m_rtSoftPipeline = VK_NULL_HANDLE;
-    VkDescriptorSetLayout m_rtSetLayout = VK_NULL_HANDLE;
-    VkDescriptorPool m_rtPool = VK_NULL_HANDLE;
-    VkDescriptorSet m_rtSet = VK_NULL_HANDLE;
+    // ── RT（保留 VK，未迁移到 RHIAccelerationStructure）──
     VkAccelerationStructureKHR m_tlas = VK_NULL_HANDLE;
 
-    // RT soft 可调参数
+    // ── RT 可调参数
     float m_rtSunRadius = 0.03f;
     int   m_rtRayCount  = 8;
 
-    VkSampler m_shadowSampler = VK_NULL_HANDLE;   // depth compare (PCF 用)
-    VkSampler m_vsmSampler    = VK_NULL_HANDLE;   // 线性、无 compare（VSM 用）
-
-    // Shadow view/proj UBO (sun-space)
+    // ── UBO + index buffer ──
     Buffer m_shadowUbo;
-
-    // Index buffer saved from bindScene for vkCmdBindIndexBuffer
     VkBuffer m_indexBuffer = VK_NULL_HANDLE;
-
-    // Sun direction（lightDir，setSunDir 或 record 时从调用方更新）
     glm::vec3 m_sunDir{0.0f, -1.0f, 0.0f};
-
-    // Scene bounds for sun-view projection
     glm::vec3 m_sceneAabbMin{0};
     glm::vec3 m_sceneAabbMax{0};
-
-    // FrameGraph auto-barrier：跳过内部 shadowMask UNDEFINED→GENERAL 过渡
     bool m_fgAutoBarrier = false;
 };
 
