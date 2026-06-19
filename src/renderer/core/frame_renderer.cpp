@@ -356,57 +356,27 @@ void FrameRenderer::setupGiGrids(const glm::vec3& aabbMin, const glm::vec3& aabb
 
 void FrameRenderer::bootstrapHdrPrev() {
     oneShotSubmit(*m_device, m_pool, [&](VkCommandBuffer cmd) {
-        auto ti = [](VkCommandBuffer c, VkImage img, VkImageAspectFlags a,
-                     VkImageLayout oldL, VkImageLayout newL,
-                     VkPipelineStageFlags2 srcS, VkAccessFlags2 srcA,
-                     VkPipelineStageFlags2 dstS, VkAccessFlags2 dstA) {
-            VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
-            b.srcStageMask=srcS;b.srcAccessMask=srcA;b.dstStageMask=dstS;b.dstAccessMask=dstA;
-            b.oldLayout=oldL;b.newLayout=newL;b.image=img;
-            b.subresourceRange={a,0,1,0,1};
-            VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-            di.imageMemoryBarrierCount=1;di.pImageMemoryBarriers=&b;
-            vkCmdPipelineBarrier2(c,&di);
-        };
-        VkImage img=m_rt.hdrPrev.image();
-        ti(cmd,img,VK_IMAGE_ASPECT_COLOR_BIT,
-           VK_IMAGE_LAYOUT_UNDEFINED,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-           VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT,0,
-           VK_PIPELINE_STAGE_2_CLEAR_BIT,VK_ACCESS_2_TRANSFER_WRITE_BIT);
-        VkClearColorValue z{};
-        VkImageSubresourceRange r{VK_IMAGE_ASPECT_COLOR_BIT,0,1,0,1};
-        vkCmdClearColorImage(cmd,img,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,&z,1,&r);
-        ti(cmd,img,VK_IMAGE_ASPECT_COLOR_BIT,
-           VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-           VK_PIPELINE_STAGE_2_CLEAR_BIT,VK_ACCESS_2_TRANSFER_WRITE_BIT,
-           VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+        VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+        b.srcStageMask=VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT; b.srcAccessMask=0;
+        b.dstStageMask=VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT; b.dstAccessMask=VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+        b.oldLayout=VK_IMAGE_LAYOUT_UNDEFINED; b.newLayout=VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        b.image=m_rt.hdrPrev.image(); b.subresourceRange={VK_IMAGE_ASPECT_COLOR_BIT,0,1,0,1};
+        VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO}; di.imageMemoryBarrierCount=1; di.pImageMemoryBarriers=&b;
+        vkCmdPipelineBarrier2(cmd,&di);
     });
 }
 
 void FrameRenderer::bootstrapSsgiTemporal() {
     oneShotSubmit(*m_device, m_pool, [&](VkCommandBuffer cmd) {
-        auto ti = [&](VkImage img,VkImageLayout oldL,VkImageLayout newL,
-                      VkPipelineStageFlags2 srcS,VkAccessFlags2 srcA,
-                      VkPipelineStageFlags2 dstS,VkAccessFlags2 dstA) {
-            VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
-            b.srcStageMask=srcS;b.srcAccessMask=srcA;b.dstStageMask=dstS;b.dstAccessMask=dstA;
-            b.oldLayout=oldL;b.newLayout=newL;b.image=img;
-            b.subresourceRange={VK_IMAGE_ASPECT_COLOR_BIT,0,1,0,1};
-            VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-            di.imageMemoryBarrierCount=1;di.pImageMemoryBarriers=&b;
-            vkCmdPipelineBarrier2(cmd,&di);
-        };
         VkImage imgs[2]={m_rt.ssgi.image(),m_rt.ssgiPrev.image()};
         for(auto img:imgs){
-            ti(img,VK_IMAGE_LAYOUT_UNDEFINED,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-               VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT,0,
-               VK_PIPELINE_STAGE_2_CLEAR_BIT,VK_ACCESS_2_TRANSFER_WRITE_BIT);
-            VkClearColorValue z{};
-            VkImageSubresourceRange r{VK_IMAGE_ASPECT_COLOR_BIT,0,1,0,1};
-            vkCmdClearColorImage(cmd,img,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,&z,1,&r);
-            ti(img,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-               VK_PIPELINE_STAGE_2_CLEAR_BIT,VK_ACCESS_2_TRANSFER_WRITE_BIT,
-               VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+            VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+            b.srcStageMask=VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT; b.srcAccessMask=0;
+            b.dstStageMask=VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT; b.dstAccessMask=VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+            b.oldLayout=VK_IMAGE_LAYOUT_UNDEFINED; b.newLayout=VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            b.image=img; b.subresourceRange={VK_IMAGE_ASPECT_COLOR_BIT,0,1,0,1};
+            VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO}; di.imageMemoryBarrierCount=1; di.pImageMemoryBarriers=&b;
+            vkCmdPipelineBarrier2(cmd,&di);
         }
     });
 }
@@ -416,8 +386,8 @@ void FrameRenderer::bootstrapSsgiTemporal() {
 // 各 Pass 首次写入时会自行转换到正确的可写布局。
 void FrameRenderer::bootstrapAllTargets() {
     oneShotSubmit(*m_device, m_pool, [&](VkCommandBuffer cmd) {
-        // 辅助：单个图像的 UNDEFINED → SHADER_READ_ONLY 布局转换
-        auto transitionFromUndefined = [&](VkImage img, VkImageAspectFlags aspect) {
+        // 辅助：UNDEFINED → SHADER_READ_ONLY 布局转换（支持多 mip）
+        auto transitionFromUndefined = [&](VkImage img, VkImageAspectFlags aspect, uint32_t mips=1) {
             if (!img) return;
             VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
             b.srcStageMask  = VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
@@ -427,24 +397,23 @@ void FrameRenderer::bootstrapAllTargets() {
             b.oldLayout     = VK_IMAGE_LAYOUT_UNDEFINED;
             b.newLayout     = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
             b.image         = img;
-            b.subresourceRange = {aspect, 0, 1, 0, 1};
+            b.subresourceRange = {aspect, 0, mips, 0, 1};
             VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
             di.imageMemoryBarrierCount = 1; di.pImageMemoryBarriers = &b;
             vkCmdPipelineBarrier2(cmd, &di);
         };
         auto& rt = m_rt;
-        // 渲染目标纹理
         transitionFromUndefined(rt.ssr.image(),    VK_IMAGE_ASPECT_COLOR_BIT);
         transitionFromUndefined(rt.rsmGI.image(),  VK_IMAGE_ASPECT_COLOR_BIT);
         transitionFromUndefined(rt.restir.image(), VK_IMAGE_ASPECT_COLOR_BIT);
         transitionFromUndefined(rt.rtGI.image(),   VK_IMAGE_ASPECT_COLOR_BIT);
         transitionFromUndefined(rt.lumenGI.image(),VK_IMAGE_ASPECT_COLOR_BIT);
         transitionFromUndefined(rt.ssao.image(),   VK_IMAGE_ASPECT_COLOR_BIT);
-        // SDFGI（seedA/B + udf）
+        // SDFGI
         transitionFromUndefined(m_sdfgi.seedA().image(), VK_IMAGE_ASPECT_COLOR_BIT);
         transitionFromUndefined(m_sdfgi.seedB().image(), VK_IMAGE_ASPECT_COLOR_BIT);
         transitionFromUndefined(m_sdfgi.udf().image(),   VK_IMAGE_ASPECT_COLOR_BIT);
-        // LPV 体素网格（2 组 ping-pong × 3 通道 + gv = 7 张 3D 纹理）
+        // LPV 体素网格（2 组 ping-pong × 3 通道 + gv）
         for (int g = 0; g < 2; ++g) {
             auto& gr = g ? m_lpv.next() : m_lpv.current();
             transitionFromUndefined(gr.lpvR.image(), VK_IMAGE_ASPECT_COLOR_BIT);
@@ -452,6 +421,23 @@ void FrameRenderer::bootstrapAllTargets() {
             transitionFromUndefined(gr.lpvB.image(), VK_IMAGE_ASPECT_COLOR_BIT);
         }
         transitionFromUndefined(m_lpv.gv().image(), VK_IMAGE_ASPECT_COLOR_BIT);
+        // VXGI 纹理（voxelGrid 有 mip 链，使用 image 的实际 mip 数）
+        uint32_t vxMips = m_vxgi.image().image() ? m_vxgi.image().mipLevels() : 1u;
+        transitionFromUndefined(m_vxgi.image().image(),  VK_IMAGE_ASPECT_COLOR_BIT, vxMips);
+        transitionFromUndefined(m_vxgi.aniso().image(),  VK_IMAGE_ASPECT_COLOR_BIT);
+        transitionFromUndefined(m_vxgi.relightScratch().image(),  VK_IMAGE_ASPECT_COLOR_BIT);
+        transitionFromUndefined(m_vxgi.relightScratch2().image(), VK_IMAGE_ASPECT_COLOR_BIT);
+        transitionFromUndefined(m_vxgi.sixAxisX().image(), VK_IMAGE_ASPECT_COLOR_BIT);
+        transitionFromUndefined(m_vxgi.sixAxisY().image(), VK_IMAGE_ASPECT_COLOR_BIT);
+        transitionFromUndefined(m_vxgi.sixAxisZ().image(), VK_IMAGE_ASPECT_COLOR_BIT);
+        // PRT（5 张 SH 纹理）+ DDGI（2 张 probe atlas）
+        transitionFromUndefined(m_prt.image().image(),  VK_IMAGE_ASPECT_COLOR_BIT);
+        transitionFromUndefined(m_prt.imageB().image(), VK_IMAGE_ASPECT_COLOR_BIT);
+        transitionFromUndefined(m_prt.imageC().image(), VK_IMAGE_ASPECT_COLOR_BIT);
+        transitionFromUndefined(m_prt.imageD().image(), VK_IMAGE_ASPECT_COLOR_BIT);
+        transitionFromUndefined(m_prt.imageE().image(), VK_IMAGE_ASPECT_COLOR_BIT);
+        transitionFromUndefined(m_ddgi.irradiance().image(), VK_IMAGE_ASPECT_COLOR_BIT);
+        transitionFromUndefined(m_ddgi.distance().image(),   VK_IMAGE_ASPECT_COLOR_BIT);
     });
 }
 
