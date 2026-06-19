@@ -13,7 +13,9 @@
 #include "gi/ibl_baker.h"
 
 namespace somegi {
+
 class Device;
+namespace rhi { class RHICommandBuffer; }
 
 class LightingPass {
 public:
@@ -30,6 +32,7 @@ public:
     void setNdgiWeights(Device& d,
         VkBuffer w1, VkBuffer b1, VkBuffer w2, VkBuffer b2,
         VkBuffer w3, VkBuffer b3);
+    void record(rhi::RHICommandBuffer& cmd, const RenderTargets& rt);
     void record(VkCommandBuffer cmd, const RenderTargets& rt);
     float iblIntensity() const { return m_iblIntensity; }
     void setIblIntensity(float v);

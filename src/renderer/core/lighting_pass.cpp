@@ -8,6 +8,7 @@
 #include "rhi/vulkan/vk_buffer.h"
 #include "rhi/vulkan/vk_sampler.h"
 #include "rhi/vulkan/vk_pso.h"
+#include "rhi/base/command_buffer.h"
 #include <array>
 #include <cstring>
 
@@ -275,6 +276,23 @@ void LightingPass::setNdgiWeights(Device&, VkBuffer w1,VkBuffer b1,
 // ════════════════════════════════════════════════════════════════
 // record
 // ════════════════════════════════════════════════════════════════
+void LightingPass::record(rhi::RHICommandBuffer& cmd, const RenderTargets& rt) {
+    if (!m_pipeline || !m_set || !m_iblSet) return;
+
+    // 绑定 PSO + 描述符集（set=0 + IBL set=1）
+    cmd.bindPipelineState(*m_pipeline);
+    const rhi::RHIDescriptorSet* dsets[2] = {m_set.get(), m_iblSet.get()};
+    cmd.bindDescriptorSets(0, 2, dsets);
+
+    // push constant
+    LightingPC pc{rt.extent.width, rt.extent.height, 1.f/rt.extent.width, 1.f/rt.extent.height};
+    cmd.pushConstants(rhi::ShaderStage::Compute, &pc, sizeof(pc));
+
+    // dispatch
+    uint32_t gx = (rt.extent.width + 7) / 8, gy = (rt.extent.height + 7) / 8;
+    cmd.dispatch(gx, gy, 1);
+}
+
 void LightingPass::record(VkCommandBuffer vkCmd, const RenderTargets& rt) {
     if (!m_pipeline || !m_set || !m_iblSet) return;
     VkDescriptorSet ds[2] = {VkSet(m_set), VkSet(m_iblSet)};

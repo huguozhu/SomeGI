@@ -7,14 +7,16 @@
 #include "rhi/vulkan/vk_buffer.h"
 #include "rhi/vulkan/vk_sampler.h"
 #include "rhi/vulkan/vk_pso.h"
+#include "rhi/vulkan/vk_command.h"
+#include "rhi/base/command_buffer.h"
 #include <array>
 #include <cstring>
 
 namespace somegi {
 
-// Bridge helpers（与 ForwardPass 一致）
-static VkDescriptorSet VkSet(auto& p) { return (VkDescriptorSet)(uintptr_t)p->nativeHandle(); }
-static VkPipelineLayout VkLay(auto& p) { return static_cast<rhi::VkRHIPipelineState&>(*p).layout(); }
+namespace { struct PC { glm::mat4 model; int materialIndex; int p0,p1,p2; };
+static_assert(sizeof(PC)==80); }
+
 static rhi::Format toRF(VkFormat f) {
     switch (f) {
         case VK_FORMAT_R16G16B16A16_SFLOAT: return rhi::Format::R16G16B16A16_SFLOAT;
@@ -23,9 +25,6 @@ static rhi::Format toRF(VkFormat f) {
         default: return rhi::Format::Unknown;
     }
 }
-
-namespace { struct PC { glm::mat4 model; int materialIndex; int p0,p1,p2; };
-static_assert(sizeof(PC)==80); }
 
 void GBufferPass::init(Device& d, rhi::RHIDevice& rhiDevice,
                        VkFormat rt0Fmt, VkFormat rt1Fmt, VkFormat rt2Fmt,
@@ -421,9 +420,17 @@ void GBufferPass::updateFrame(const FrameUBO& ubo) {
 }
 
 // ──────────────────────────────────────────────────────────────────
-// record（VkCommandBuffer + RHI bridge）
+// record（VK 原生 + RHI 重载委托）
+// 注：RHI 路径通过 VkRHICommandBuffer::vkCmd() 获取原生句柄后使用 VK API，
+// 因直接使用 RHICommandBuffer 方法存在 segfault（待查）。
 // ──────────────────────────────────────────────────────────────────
-void GBufferPass::record(VkCommandBuffer cmd, const RenderTargets& rt,
+void GBufferPass::record(rhi::RHICommandBuffer& rhiCmd, const RenderTargets& rt,
+                         VkBuffer indirectBuf, uint32_t drawCount, const SceneGpu& gpu) {
+    auto vkCmd = static_cast<rhi::VkRHICommandBuffer&>(rhiCmd).vkCmd();
+    record(vkCmd, rt, indirectBuf, drawCount, gpu);
+}
+
+void GBufferPass::record(VkCommandBuffer vkCmd, const RenderTargets& rt,
                          VkBuffer indirectBuf, uint32_t drawCount, const SceneGpu& gpu) {
     if (drawCount == 0) return;
     bool useMsaa = m_msaaSamples != VK_SAMPLE_COUNT_1_BIT;
@@ -465,42 +472,34 @@ void GBufferPass::record(VkCommandBuffer cmd, const RenderTargets& rt,
     }
 
     VkRenderingInfo ri{VK_STRUCTURE_TYPE_RENDERING_INFO};
-    ri.renderArea = {{0, 0}, rt.extent};
-    ri.layerCount = 1;
-    ri.colorAttachmentCount = (uint32_t)color.size();
-    ri.pColorAttachments    = color.data();
-    ri.pDepthAttachment     = &depth;
-    vkCmdBeginRendering(cmd, &ri);
+    ri.renderArea = {{0, 0}, rt.extent}; ri.layerCount = 1;
+    ri.colorAttachmentCount = (uint32_t)color.size(); ri.pColorAttachments = color.data();
+    ri.pDepthAttachment = &depth;
+    vkCmdBeginRendering(vkCmd, &ri);
 
     VkViewport vp{0, 0, (float)rt.extent.width, (float)rt.extent.height, 0, 1};
     VkRect2D sc{{0, 0}, rt.extent};
-    vkCmdSetViewport(cmd, 0, 1, &vp);
-    vkCmdSetScissor(cmd, 0, 1, &sc);
+    vkCmdSetViewport(vkCmd, 0, 1, &vp); vkCmdSetScissor(vkCmd, 0, 1, &sc);
 
     if (m_useMeshShader && m_meshPipeline != VK_NULL_HANDLE) {
-        // ── Mesh Shader 路径（VK 原生）──
-        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_meshPipeline);
-        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+        vkCmdBindPipeline(vkCmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_meshPipeline);
+        vkCmdBindDescriptorSets(vkCmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
             m_meshPipelineLayout, 0, 1, &m_meshSet, 0, nullptr);
-        uint32_t groups = m_meshGroupCount;
-        m_device->vkCmdDrawMeshTasksEXT(cmd, groups, 1, 1);
+        m_device->vkCmdDrawMeshTasksEXT(vkCmd, m_meshGroupCount, 1, 1);
     } else {
-        // ── VS 路径（RHI bridge）──
-        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+        vkCmdBindPipeline(vkCmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
             (VkPipeline)(uintptr_t)m_pipeline->nativeHandle());
-        VkDescriptorSet ds = VkSet(m_set);
-        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-            VkLay(m_pipeline), 0, 1, &ds, 0, nullptr);
-
+        VkDescriptorSet ds = (VkDescriptorSet)(uintptr_t)m_set->nativeHandle();
+        vkCmdBindDescriptorSets(vkCmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+            static_cast<rhi::VkRHIPipelineState&>(*m_pipeline).layout(), 0, 1, &ds, 0, nullptr);
         VkDeviceSize zero = 0;
         VkBuffer vb = gpu.vertexBuffer.handle();
-        vkCmdBindVertexBuffers(cmd, 0, 1, &vb, &zero);
-        vkCmdBindIndexBuffer(cmd, gpu.indexBuffer.handle(), 0, VK_INDEX_TYPE_UINT32);
-        vkCmdDrawIndexedIndirectCount(cmd, indirectBuf, 0, indirectBuf, 0,
+        vkCmdBindVertexBuffers(vkCmd, 0, 1, &vb, &zero);
+        vkCmdBindIndexBuffer(vkCmd, gpu.indexBuffer.handle(), 0, VK_INDEX_TYPE_UINT32);
+        vkCmdDrawIndexedIndirectCount(vkCmd, indirectBuf, 0, indirectBuf, 0,
                                        drawCount, sizeof(VkDrawIndexedIndirectCommand));
     }
-
-    vkCmdEndRendering(cmd);
+    vkCmdEndRendering(vkCmd);
 }
 
 } // namespace somegi

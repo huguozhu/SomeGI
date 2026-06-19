@@ -12,7 +12,9 @@
 #include "scene/draw_list.h"
 
 namespace somegi {
+
 class Device;
+namespace rhi { class RHICommandBuffer; }
 
 class GBufferPass {
 public:
@@ -34,6 +36,10 @@ public:
 
     VkBuffer frameUboHandle() const { return m_frameUbo.handle(); }
 
+    // RHI 路径
+    void record(rhi::RHICommandBuffer& cmd, const RenderTargets& rt,
+                VkBuffer indirectBuf, uint32_t drawCount, const SceneGpu& gpu);
+    // 兼容 VkCommandBuffer（委托到 RHI 路径）
     void record(VkCommandBuffer cmd, const RenderTargets& rt,
                 VkBuffer indirectBuf, uint32_t drawCount, const SceneGpu& gpu);
 
