@@ -102,14 +102,13 @@ void SkyboxPass::destroy() {
 
 void SkyboxPass::bindEnv(VkImageView envCubeView, VkSampler linearSampler) {
     if (!m_set) return;
-    m_sampler = linearSampler;
     auto& vkDevice = static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
+    m_sampler = rhi::VkRHISampler::createNonOwning(vkDevice, linearSampler);
 
     auto cubeView = rhi::VkRHITextureView::createNonOwning(vkDevice, envCubeView);
-    auto skySampler = rhi::VkRHISampler::createNonOwning(vkDevice, linearSampler);
     m_set->write({
         {1, rhi::DescriptorType::SampledImage, cubeView.get()},
-        {2, rhi::DescriptorType::Sampler, nullptr, nullptr, 0, 0, skySampler.get()},
+        {2, rhi::DescriptorType::Sampler, nullptr, nullptr, 0, 0, m_sampler.get()},
     });
 }
 

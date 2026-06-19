@@ -1,6 +1,7 @@
 // SkyboxPass —— Graphics PSO 天空盒，已迁移到 RHI（首个 Graphics PSO 验证）。
 #pragma once
 #include "core/buffer.h"
+#include "rhi/base/sampler.h"
 #include "renderer/core/render_targets.h"
 #include <glm/glm.hpp>
 #include <memory>
@@ -41,7 +42,7 @@ private:
     std::unique_ptr<rhi::RHIDescriptorSet>        m_set;
 
     Buffer m_ubo;
-    VkSampler m_sampler = VK_NULL_HANDLE;  // 外部传入，RHI 不管理生命周期
+    std::unique_ptr<rhi::RHISampler> m_sampler;
     VkFormat m_colorFmt = VK_FORMAT_UNDEFINED;
     VkFormat m_depthFmt = VK_FORMAT_UNDEFINED;
 };

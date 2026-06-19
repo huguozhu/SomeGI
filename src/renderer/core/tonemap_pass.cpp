@@ -26,8 +26,8 @@ TonemapPass::~TonemapPass() = default;
 
 void TonemapPass::init(rhi::RHIDevice& d, VkSampler linearSampler) {
     m_rhiDevice = &d;
-    m_sampler = linearSampler;
     auto& vkDevice = static_cast<rhi::VkRHIDevice&>(d);
+    m_sampler = rhi::VkRHISampler::createNonOwning(vkDevice, linearSampler);
 
     rhi::DescSetLayoutDesc layoutDesc; layoutDesc.debugName = "Tonemap";
     layoutDesc.bindings = {
@@ -64,11 +64,10 @@ void TonemapPass::bindTargets(const RenderTargets& rt) {
     auto& vkD = static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
     auto hdrView = rhi::VkRHITextureView::createNonOwning(vkD, rt.hdrColor.view());
     auto ldrView = rhi::VkRHITextureView::createNonOwning(vkD, rt.ldrTonemap.view());
-    auto tmSampler = rhi::VkRHISampler::createNonOwning(vkD, m_sampler);
     for (uint32_t fi = 0; fi < 2; ++fi)
         m_sets[fi]->write({
             {0, rhi::DescriptorType::SampledImage, hdrView.get()},
-            {1, rhi::DescriptorType::Sampler, nullptr, nullptr, 0, 0, tmSampler.get()},
+            {1, rhi::DescriptorType::Sampler, nullptr, nullptr, 0, 0, m_sampler.get()},
             {2, rhi::DescriptorType::StorageImage, ldrView.get()},
         });
 }
