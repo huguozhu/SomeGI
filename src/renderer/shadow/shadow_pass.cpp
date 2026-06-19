@@ -8,6 +8,8 @@
 #include "rhi/vulkan/vk_buffer.h"
 #include "rhi/vulkan/vk_sampler.h"
 #include "rhi/vulkan/vk_pso.h"
+#include "rhi/vulkan/vk_command.h"
+#include "rhi/base/command_buffer.h"
 #include "rhi/vulkan/vk_acceleration_structure.h"
 #include "renderer/core/frame_ubo.h"
 #include "scene/scene_gpu.h"
@@ -369,6 +371,12 @@ static void restoreResolveDesc(rhi::RHIDescriptorSet& set, rhi::RHIDevice& rhiDe
 // ════════════════════════════════════════════════════════════════
 // Record
 // ════════════════════════════════════════════════════════════════
+
+void ShadowPass::record(rhi::RHICommandBuffer& rhiCmd, const RenderTargets& rt,
+                         VkBuffer frameUbo, const SceneGpu& sceneGpu,
+                         VkBuffer indirectBuf, uint32_t drawCount, uint32_t frameIndex) {
+    auto vkCmd = static_cast<rhi::VkRHICommandBuffer&>(rhiCmd).vkCmd();
+    record(vkCmd, rt, frameUbo, sceneGpu, indirectBuf, drawCount, frameIndex);}
 
 void ShadowPass::record(VkCommandBuffer cmd, const RenderTargets& rt,
                          VkBuffer frameUbo, const SceneGpu& sceneGpu,

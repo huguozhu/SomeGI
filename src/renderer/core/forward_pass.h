@@ -14,6 +14,7 @@
 
 namespace somegi {
 class Device;
+namespace rhi { class RHICommandBuffer; }
 
 class ForwardPass {
 public:
@@ -24,6 +25,8 @@ public:
     void bindScene(Device& d, const SceneGpu& gpu, uint32_t textureCount);
     void bindDrawData(Device& d, VkBuffer drawDataBuf);
     void updateFrame(const FrameUBO& ubo);
+    void record(rhi::RHICommandBuffer& cmd, const RenderTargets& rt,
+                VkBuffer indirectBuf, uint32_t drawCount, const SceneGpu& gpu);
     void record(VkCommandBuffer cmd, const RenderTargets& rt,
                 VkBuffer indirectBuf, uint32_t drawCount, const SceneGpu& gpu);
     void setNdgiWeights(Device& d,

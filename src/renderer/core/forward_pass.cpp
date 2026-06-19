@@ -8,6 +8,8 @@
 #include "rhi/vulkan/vk_buffer.h"
 #include "rhi/vulkan/vk_sampler.h"
 #include "rhi/vulkan/vk_pso.h"
+#include "rhi/vulkan/vk_command.h"
+#include "rhi/base/command_buffer.h"
 #include <array>
 #include <cstring>
 
@@ -178,6 +180,10 @@ void ForwardPass::setNdgiWeights(Device&, VkBuffer w1,VkBuffer b1,VkBuffer w2,Vk
     auto W3=rhi::VkRHIBuffer::createNonOwning(vkD,w3,VK_WHOLE_SIZE),B3=rhi::VkRHIBuffer::createNonOwning(vkD,b3,VK_WHOLE_SIZE);
     m_set->write({{4,rhi::DescriptorType::StorageBuffer,nullptr,W1.get()},{5,rhi::DescriptorType::StorageBuffer,nullptr,B1.get()},{6,rhi::DescriptorType::StorageBuffer,nullptr,W2.get()},{7,rhi::DescriptorType::StorageBuffer,nullptr,B2.get()},{8,rhi::DescriptorType::StorageBuffer,nullptr,W3.get()},{9,rhi::DescriptorType::StorageBuffer,nullptr,B3.get()}});
 }
+
+void ForwardPass::record(rhi::RHICommandBuffer& cmd, const RenderTargets& rt, VkBuffer ib, uint32_t dc, const SceneGpu& gpu) {
+    auto vkCmd = static_cast<rhi::VkRHICommandBuffer&>(cmd).vkCmd();
+    record(vkCmd, rt, ib, dc, gpu);}
 
 void ForwardPass::record(VkCommandBuffer vkCmd, const RenderTargets& rt, VkBuffer ib, uint32_t dc, const SceneGpu& gpu) {
     if(!m_pipeline||!m_set||!m_iblSet) return;
