@@ -7,6 +7,7 @@
 #include "rhi/vulkan/vk_sampler.h"
 #include "rhi/vulkan/vk_acceleration_structure.h"
 #include "rhi/vulkan/vk_pso.h"
+#include "rhi/base/command_buffer.h"
 #include "core/device.h"
 #include "core/shader.h"
 #include "scene/scene_gpu.h"
@@ -116,6 +117,35 @@ void LumenProbePass::bindResources(const LumenResources& res, const SceneRtAS& r
         {9,  DS::SampledImage,         ay.get()},
         {10, DS::SampledImage,         az.get()},
     });
+}
+
+void LumenProbePass::record(rhi::RHICommandBuffer& cmd, const LumenResources& res,
+                             uint32_t, bool useSixAxis) {
+    uint32_t pw = res.probeGridW(), ph = res.probeGridH(), pc = res.probeCount();
+
+    // 1. cs_generateRays
+    cmd.bindPipelineState(*m_pipelineRays);
+    cmd.bindDescriptorSet(0, *m_set);
+    ProbePC upc{};
+    upc.screenSizeX    = (float)(pw * LumenResources::kProbeTileSize);
+    upc.screenSizeY    = (float)(ph * LumenResources::kProbeTileSize);
+    upc.invScreenSizeX = 1.0f / upc.screenSizeX;
+    upc.invScreenSizeY = 1.0f / upc.screenSizeY;
+    upc.probeGridW     = pw; upc.probeGridH = ph;
+    upc.probeTileSize  = LumenResources::kProbeTileSize;
+    upc.raysPerProbe   = LumenResources::kRaysPerProbe;
+    upc.totalProbes    = pc; upc.randomSeed = 0.0f;
+    upc.useSixAxis     = useSixAxis ? 1u : 0u;
+    cmd.pushConstants(rhi::ShaderStage::Compute, &upc, sizeof(upc));
+    cmd.dispatch((pc * LumenResources::kRaysPerProbe + 63) / 64, 1, 1);
+
+    // 内存屏障（RHI 无独立 memory barrier API，用 globalBarrier 替代）
+    cmd.globalBarrier();
+
+    // 2. cs_projectSH
+    cmd.bindPipelineState(*m_pipelineSH);
+    cmd.pushConstants(rhi::ShaderStage::Compute, &upc, sizeof(upc));
+    cmd.dispatch((pc + 63) / 64, 1, 1);
 }
 
 void LumenProbePass::record(VkCommandBuffer cmd, const LumenResources& res,

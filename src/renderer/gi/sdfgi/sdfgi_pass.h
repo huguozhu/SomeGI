@@ -5,11 +5,12 @@
 #include <memory>
 #include <vulkan/vulkan.h>
 namespace somegi { class SdfgiResources; class VxgiResources; struct RenderTargets;
-namespace rhi { class RHIDevice; class RHIDescriptorSetLayout; class RHIPipelineState; class RHIDescriptorSet; }
+namespace rhi { class RHIDevice; class RHIDescriptorSetLayout; class RHIPipelineState; class RHIDescriptorSet; class RHICommandBuffer; }
 class SdfgiPass {
 public:
     ~SdfgiPass(); void init(rhi::RHIDevice& d); void destroy();
     void bindResources(const SdfgiResources& sf,const VxgiResources& vx,const RenderTargets& rt,VkBuffer fb);
+    void record(rhi::RHICommandBuffer& cmd,const SdfgiResources& sf,const RenderTargets& rt,uint32_t fi,float st,float md,uint32_t nr,uint32_t ms,float rm,float he);
     void record(VkCommandBuffer cmd,const SdfgiResources& sf,const RenderTargets& rt,uint32_t fi,float st,float md,uint32_t nr,uint32_t ms,float rm,float he);
     bool enabled=false; float seedThreshold=0.05f,maxDistCells=240.f; int numRays=4,maxSteps=48; float rayMaxCells=96.f,hitEpsCells=0.6f;
 private:

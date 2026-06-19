@@ -12,6 +12,7 @@
 namespace somegi {
 class Device;
 class SceneRtAS;
+namespace rhi { class RHICommandBuffer; }
 struct SceneGpu;
 class VxgiResources;
 
@@ -24,6 +25,8 @@ public:
                        const SceneGpu& sceneGpu, const VxgiResources& vxgi,
                        const RenderTargets& rt, VkBuffer frameUbo, bool hasSixAxis);
 
+    void record(rhi::RHICommandBuffer& cmd, const LumenResources& res,
+                uint32_t frameIndex, bool useSixAxis);
     void record(VkCommandBuffer cmd, const LumenResources& res,
                 uint32_t frameIndex, bool useSixAxis);
 

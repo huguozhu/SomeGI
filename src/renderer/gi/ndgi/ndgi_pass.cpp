@@ -11,6 +11,7 @@
 #include "rhi/vulkan/vk_device.h"
 #include "rhi/vulkan/vk_shader.h"
 #include "rhi/vulkan/vk_acceleration_structure.h"
+#include "rhi/vulkan/vk_command.h"
 #include "rhi/vulkan/vk_texture.h"
 #include "rhi/vulkan/vk_buffer.h"
 #include "rhi/vulkan/vk_pso.h"
@@ -68,6 +69,8 @@ void NdgiPass::initWeights(VkCommandBuffer vkCmd){ if(!m_rtSupported||!m_initPip
     vkCmdBindPipeline(vkCmd,VK_PIPELINE_BIND_POINT_COMPUTE,(VkPipeline)(uintptr_t)p.nativeHandle()); vkCmdBindDescriptorSets(vkCmd,VK_PIPELINE_BIND_POINT_COMPUTE,p.layout(),0,1,&ds,0,nullptr);
     struct{uint32_t seed;float scale;uint32_t p0,p1;}pc{42,1.f,0,0}; vkCmdPushConstants(vkCmd,p.layout(),VK_SHADER_STAGE_COMPUTE_BIT,0,16,&pc); vkCmdDispatch(vkCmd,1,1,1);
 }
+void NdgiPass::record(rhi::RHICommandBuffer& cmd,NdgiResources& res,uint32_t fi,glm::vec3 o,glm::vec3 s){
+    record(static_cast<rhi::VkRHICommandBuffer&>(cmd).vkCmd(),res,fi,o,s);}
 void NdgiPass::record(VkCommandBuffer vkCmd,NdgiResources& res,uint32_t fi,glm::vec3 o,glm::vec3 s){ if(!m_rtSupported||!m_tracePipeline)return;
     auto& p=static_cast<rhi::VkRHIPipelineState&>(*m_tracePipeline); VkDescriptorSet ds=(VkDescriptorSet)(uintptr_t)m_traceSet->nativeHandle();
     vkCmdFillBuffer(vkCmd,res.sampleCount().handle(),0,4,0);
@@ -77,6 +80,8 @@ void NdgiPass::record(VkCommandBuffer vkCmd,NdgiResources& res,uint32_t fi,glm::
     pc.px=NdgiResources::kProbesX;pc.py=NdgiResources::kProbesY;pc.pz=NdgiResources::kProbesZ;pc.rpp=NdgiResources::kRaysPerProbe;pc.rotation=float((fi%360)*0.0174532925);
     vkCmdPushConstants(vkCmd,p.layout(),VK_SHADER_STAGE_COMPUTE_BIT,0,sizeof(pc),&pc); vkCmdDispatch(vkCmd,(pc.px*pc.py*pc.pz*pc.rpp+63)/64,1,1);
 }
+void NdgiPass::recordTraining(rhi::RHICommandBuffer& cmd,NdgiResources& res,uint32_t fi){
+    recordTraining(static_cast<rhi::VkRHICommandBuffer&>(cmd).vkCmd(),res,fi);}
 void NdgiPass::recordTraining(VkCommandBuffer vkCmd,NdgiResources& res,uint32_t){ if(!m_rtSupported||!m_trainPipeline||!m_initSet)return;
     auto* cnt=static_cast<uint32_t*>(res.sampleCount().mapped()); uint32_t total=cnt?*cnt:0; if(!total)return;
     auto& p=static_cast<rhi::VkRHIPipelineState&>(*m_trainPipeline); VkDescriptorSet ds=(VkDescriptorSet)(uintptr_t)m_initSet->nativeHandle();
