@@ -35,6 +35,8 @@ void VxgiRelightPass::bindResourcesPingPong(const VxgiResources& vxgi,bool sw){ 
     auto& target=sw?*m_setPP1:*m_setPP0;
     target.write({{0,rhi::DescriptorType::SampledImage,rhi::VkRHITextureView::createNonOwning(vkD,sw?vxgi.relightScratch2View():vxgi.relightScratchView()).get()},{1,rhi::DescriptorType::SampledImage,rhi::VkRHITextureView::createNonOwning(vkD,vxgi.anisoFullView()).get()},{2,rhi::DescriptorType::Sampler,nullptr,nullptr,0,0,m_linearClamp.get()},{3,rhi::DescriptorType::StorageImage,rhi::VkRHITextureView::createNonOwning(vkD,sw?vxgi.relightScratchView():vxgi.relightScratch2View()).get()}});
 }
+void VxgiRelightPass::record(rhi::RHICommandBuffer& cmd,VkDescriptorSet set,uint32_t gr,uint32_t ml,float cs,const glm::vec3& gm,float bs){
+    record(static_cast<rhi::VkRHICommandBuffer&>(cmd).vkCmd(),set,gr,ml,cs,gm,bs);}
 void VxgiRelightPass::record(VkCommandBuffer vkCmd,VkDescriptorSet set,uint32_t gr,uint32_t ml,float cs,const glm::vec3& gm,float bs){
     auto& vkPso=static_cast<rhi::VkRHIPipelineState&>(*m_pipeline);
     vkCmdBindPipeline(vkCmd,VK_PIPELINE_BIND_POINT_COMPUTE,(VkPipeline)(uintptr_t)vkPso.nativeHandle());

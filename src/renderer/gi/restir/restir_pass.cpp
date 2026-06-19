@@ -8,6 +8,7 @@
 #include "rhi/vulkan/vk_shader.h"
 #include "rhi/vulkan/vk_texture.h"
 #include "rhi/vulkan/vk_buffer.h"
+#include "rhi/vulkan/vk_command.h"
 #include "rhi/vulkan/vk_pso.h"
 #include "core/device.h"
 #include "core/shader.h"
@@ -56,6 +57,8 @@ void RestirPass::bindResourcesRt(const RestirResources& res,const RenderTargets&
     const rhi::RHISampler* sp=m_linearClamp.get(); auto tlasRHI=rhi::VkRHIAccelerationStructure::createNonOwning(vkD,tlas);
     m_shadeRtSet->write({{0,rhi::DescriptorType::UniformBuffer,nullptr,ub.get()},{1,rhi::DescriptorType::SampledImage,ab.get()},{2,rhi::DescriptorType::SampledImage,nr.get()},{3,rhi::DescriptorType::SampledImage,dp.get()},{4,rhi::DescriptorType::StorageBuffer,nullptr,lb.get()},{5,rhi::DescriptorType::SampledImage,rb.get()},{6,rhi::DescriptorType::AccelerationStructure,nullptr,nullptr,0,0,nullptr,tlasRHI.get()},{7,rhi::DescriptorType::StorageImage,out.get()},{8,rhi::DescriptorType::Sampler,nullptr,nullptr,0,0,sp}});
 }
+void RestirPass::record(rhi::RHICommandBuffer& cmd,const RestirResources& res,const RenderTargets& rt,uint32_t nl,uint32_t nc,uint32_t nn,float sr,uint32_t ss,float is,uint32_t fi,bool useRt){
+    record(static_cast<rhi::VkRHICommandBuffer&>(cmd).vkCmd(),res,rt,nl,nc,nn,sr,ss,is,fi,useRt);}
 void RestirPass::record(VkCommandBuffer vkCmd,const RestirResources&,const RenderTargets& rt,uint32_t nl,uint32_t nc,uint32_t nn,float sr,uint32_t ss,float is,uint32_t fi,bool useRt){
     auto h=[&](auto& p){return (VkPipeline)(uintptr_t)p->nativeHandle();}; auto l=[&](auto& p){return static_cast<rhi::VkRHIPipelineState&>(*p).layout();}; auto s=[&](auto& x){return (VkDescriptorSet)(uintptr_t)x->nativeHandle();};
     auto b=[&](VkPipelineStageFlags2 s1,VkAccessFlags2 a1,VkPipelineStageFlags2 s2,VkAccessFlags2 a2){VkMemoryBarrier2 mb{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};mb.srcStageMask=s1;mb.srcAccessMask=a1;mb.dstStageMask=s2;mb.dstAccessMask=a2;VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};di.memoryBarrierCount=1;di.pMemoryBarriers=&mb;vkCmdPipelineBarrier2(vkCmd,&di);};

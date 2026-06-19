@@ -7,12 +7,13 @@
 #include <memory>
 #include <vulkan/vulkan.h>
 namespace somegi {
-namespace rhi { class RHIDevice; class RHIDescriptorSetLayout; class RHIPipelineState; class RHIDescriptorSet; }
+namespace rhi { class RHIDevice; class RHIDescriptorSetLayout; class RHIPipelineState; class RHIDescriptorSet; class RHICommandBuffer; }
 class RestirPass {
 public:
     ~RestirPass(); void init(rhi::RHIDevice& d,bool hwRt=false); void destroy();
     void bindResources(const RestirResources& res,const VxgiResources& vxgi,const RenderTargets& rt,VkBuffer frameUbo);
     void bindResourcesRt(const RestirResources& res,const RenderTargets& rt,VkBuffer frameUbo,VkAccelerationStructureKHR tlas);
+    void record(rhi::RHICommandBuffer& cmd,const RestirResources& res,const RenderTargets& rt,uint32_t nl,uint32_t nc,uint32_t nn,float sr,uint32_t ss,float is,uint32_t fi,bool useRt=false);
     void record(VkCommandBuffer cmd,const RestirResources& res,const RenderTargets& rt,uint32_t nl,uint32_t nc,uint32_t nn,float sr,uint32_t ss,float is,uint32_t fi,bool useRt=false);
     bool enabled=false; int numCandidates=8,numNeighbors=4,shadowSteps=6; float spatialRadius=24.f,intensityScale=1.f;
 private:

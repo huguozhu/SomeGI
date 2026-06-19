@@ -9,7 +9,7 @@
 #include <memory>
 #include <vulkan/vulkan.h>
 namespace somegi {
-namespace rhi { class RHIDevice; class RHIDescriptorSetLayout; class RHIPipelineState; class RHIDescriptorSet; }
+namespace rhi { class RHIDevice; class RHIDescriptorSetLayout; class RHIPipelineState; class RHIDescriptorSet; class RHICommandBuffer; }
 
 class VxgiRelightPass {
 public:
@@ -18,6 +18,7 @@ public:
     void destroy();
     void bindResources(const VxgiResources& vxgi, VkImageView dstMip0View);
     void bindResourcesPingPong(const VxgiResources& vxgi, bool swap);
+    void record(rhi::RHICommandBuffer& cmd, VkDescriptorSet set, uint32_t gr, uint32_t ml, float cs, const glm::vec3& gm, float bs);
     void record(VkCommandBuffer cmd, VkDescriptorSet set, uint32_t gr, uint32_t ml, float cs, const glm::vec3& gm, float bs);
 
     VkDescriptorSet voxelSet() const { return (VkDescriptorSet)(uintptr_t)m_set->nativeHandle(); }
