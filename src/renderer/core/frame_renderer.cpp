@@ -411,34 +411,47 @@ void FrameRenderer::bootstrapSsgiTemporal() {
     });
 }
 
-// ── 通用引导：清空所有未初始化的渲染目标纹理 ──
+// ── 通用引导：将所有未初始化的纹理从 UNDEFINED 转到 SHADER_READ_ONLY ──
+// 只做布局转换，不清除内容（避免要求 TRANSFER_DST usage）。
+// 各 Pass 首次写入时会自行转换到正确的可写布局。
 void FrameRenderer::bootstrapAllTargets() {
     oneShotSubmit(*m_device, m_pool, [&](VkCommandBuffer cmd) {
-        auto initImg = [&](VkImage img, VkImageAspectFlags aspect) {
+        // 辅助：单个图像的 UNDEFINED → SHADER_READ_ONLY 布局转换
+        auto transitionFromUndefined = [&](VkImage img, VkImageAspectFlags aspect) {
             if (!img) return;
             VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
-            b.srcStageMask=VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT; b.srcAccessMask=0;
-            b.dstStageMask=VK_PIPELINE_STAGE_2_CLEAR_BIT; b.dstAccessMask=VK_ACCESS_2_TRANSFER_WRITE_BIT;
-            b.oldLayout=VK_IMAGE_LAYOUT_UNDEFINED; b.newLayout=VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-            b.image=img; b.subresourceRange={aspect,0,1,0,1};
-            VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO}; di.imageMemoryBarrierCount=1; di.pImageMemoryBarriers=&b;
-            vkCmdPipelineBarrier2(cmd,&di);
-            if(aspect==VK_IMAGE_ASPECT_COLOR_BIT) {
-                VkClearColorValue z{}; VkImageSubresourceRange r{VK_IMAGE_ASPECT_COLOR_BIT,0,1,0,1};
-                vkCmdClearColorImage(cmd,img,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,&z,1,&r);
-            }
-            b.srcStageMask=VK_PIPELINE_STAGE_2_CLEAR_BIT; b.srcAccessMask=VK_ACCESS_2_TRANSFER_WRITE_BIT;
-            b.dstStageMask=VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT; b.dstAccessMask=VK_ACCESS_2_MEMORY_READ_BIT|VK_ACCESS_2_MEMORY_WRITE_BIT;
-            b.oldLayout=VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL; b.newLayout=VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-            vkCmdPipelineBarrier2(cmd,&di);
+            b.srcStageMask  = VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
+            b.srcAccessMask = 0;
+            b.dstStageMask  = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+            b.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+            b.oldLayout     = VK_IMAGE_LAYOUT_UNDEFINED;
+            b.newLayout     = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            b.image         = img;
+            b.subresourceRange = {aspect, 0, 1, 0, 1};
+            VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+            di.imageMemoryBarrierCount = 1; di.pImageMemoryBarriers = &b;
+            vkCmdPipelineBarrier2(cmd, &di);
         };
-        auto& rt=m_rt;
-        initImg(rt.ssr.image(), VK_IMAGE_ASPECT_COLOR_BIT);
-        initImg(rt.rsmGI.image(), VK_IMAGE_ASPECT_COLOR_BIT);
-        initImg(rt.restir.image(), VK_IMAGE_ASPECT_COLOR_BIT);
-        initImg(rt.rtGI.image(), VK_IMAGE_ASPECT_COLOR_BIT);
-        initImg(rt.lumenGI.image(), VK_IMAGE_ASPECT_COLOR_BIT);
-        initImg(rt.ssao.image(), VK_IMAGE_ASPECT_COLOR_BIT);
+        auto& rt = m_rt;
+        // 渲染目标纹理
+        transitionFromUndefined(rt.ssr.image(),    VK_IMAGE_ASPECT_COLOR_BIT);
+        transitionFromUndefined(rt.rsmGI.image(),  VK_IMAGE_ASPECT_COLOR_BIT);
+        transitionFromUndefined(rt.restir.image(), VK_IMAGE_ASPECT_COLOR_BIT);
+        transitionFromUndefined(rt.rtGI.image(),   VK_IMAGE_ASPECT_COLOR_BIT);
+        transitionFromUndefined(rt.lumenGI.image(),VK_IMAGE_ASPECT_COLOR_BIT);
+        transitionFromUndefined(rt.ssao.image(),   VK_IMAGE_ASPECT_COLOR_BIT);
+        // SDFGI（seedA/B + udf）
+        transitionFromUndefined(m_sdfgi.seedA().image(), VK_IMAGE_ASPECT_COLOR_BIT);
+        transitionFromUndefined(m_sdfgi.seedB().image(), VK_IMAGE_ASPECT_COLOR_BIT);
+        transitionFromUndefined(m_sdfgi.udf().image(),   VK_IMAGE_ASPECT_COLOR_BIT);
+        // LPV 体素网格（2 组 ping-pong × 3 通道 + gv = 7 张 3D 纹理）
+        for (int g = 0; g < 2; ++g) {
+            auto& gr = g ? m_lpv.next() : m_lpv.current();
+            transitionFromUndefined(gr.lpvR.image(), VK_IMAGE_ASPECT_COLOR_BIT);
+            transitionFromUndefined(gr.lpvG.image(), VK_IMAGE_ASPECT_COLOR_BIT);
+            transitionFromUndefined(gr.lpvB.image(), VK_IMAGE_ASPECT_COLOR_BIT);
+        }
+        transitionFromUndefined(m_lpv.gv().image(), VK_IMAGE_ASPECT_COLOR_BIT);
     });
 }
 

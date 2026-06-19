@@ -284,14 +284,8 @@ void FGExecutor::emitBarriers(VkCommandBuffer cmd,
             // - 非 manual→auto：使用 tracked currentLayout（精确，数据保留）
             // - manual→auto + exitLayout 已知：使用 tracked layout（manual pass 声明了退出布局）
             // - manual→auto + exitLayout 未知：回退 UNDEFINED（布局安全，但可能丢数据）
-            VkImageLayout oldLayout;
-            if (!prevManual) {
-                oldLayout = currentLayout;        // 精确 oldLayout，数据保留
-            } else if (currentLayout != VK_IMAGE_LAYOUT_UNDEFINED) {
-                oldLayout = currentLayout;        // exitLayout 已声明，数据保留
-            } else {
-                oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;  // 回退：布局合法，数据可能丢失
-            }
+            // 使用 UNDEFINED 确保与外部布局变更兼容（引导、手动 barrier 等）
+            VkImageLayout oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
             VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
             b.srcStageMask  = res->state.stage;
             b.srcAccessMask = res->state.access;
@@ -350,8 +344,9 @@ void FGExecutor::emitBarriers(VkCommandBuffer cmd,
                 VkImageLayout currentLayout = res->state.layout;
                 bool prevManual = res->state.lastWriter && res->state.lastWriter->usesManualBarriers;
                 if (currentLayout != targetLayout || res->state.access != access || prevManual) {
-                    VkImageLayout oldLayout = (!prevManual || currentLayout != VK_IMAGE_LAYOUT_UNDEFINED)
-                        ? currentLayout : VK_IMAGE_LAYOUT_UNDEFINED;
+                    // 使用 UNDEFINED 作为 oldLayout 以避免与实际布局不匹配
+                    // （FG 状态追踪可能与外部引导或手动 barrier 不同步）
+                    VkImageLayout oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
                     VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
                     b.srcStageMask = res->state.stage; b.srcAccessMask = res->state.access;
                     b.dstStageMask = stages; b.dstAccessMask = access;
