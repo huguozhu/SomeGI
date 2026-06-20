@@ -1,6 +1,8 @@
 #include "renderer/core/frame_renderer.h"
 #include "core/device.h"
 #include "rhi/vulkan/vk_device.h"  // VkRHIDevice shared-handle constructor
+#include "rhi/vulkan/vk_command.h" // VkRHICommandBuffer for recordRHI callbacks
+#include "rhi/vulkan/vk_buffer.h"  // VkRHIBuffer for non-owning buffer wrappers
 #include "core/debug_dump.h"
 #include "scene/upload.h"
 #include <cstdio>
@@ -521,8 +523,10 @@ void FrameRenderer::registerPipelineSteps() {
     pipeline().addStep({
         .name = "RSM-Geometry",
         .phase = "PrePass",
-        .record = [this](VkCommandBuffer cmd) {
-            rsmGeom().record(cmd, m_boundScene.indirectBufSun, m_boundScene.drawCount, *m_boundScene.gpu);
+        .recordRHI = [this](rhi::RHICommandBuffer& cmd) {
+            auto& vkDev = static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
+            auto rhiIb = rhi::VkRHIBuffer::createNonOwning(vkDev, m_boundScene.indirectBufSun, VK_WHOLE_SIZE);
+            rsmGeom().record(cmd, *rhiIb, m_boundScene.drawCount, *m_boundScene.gpu);
         }
     });
 
@@ -1792,7 +1796,7 @@ void FrameRenderer::registerPipelineSteps() {
         .name = "NDGI",
         .phase = "GI",
         .enabled = false,
-        .record = [this](VkCommandBuffer cmd) {
+        .recordRHI = [this](rhi::RHICommandBuffer& cmd) {
             // 延迟到第一帧：此时 bindResources 已执行，descriptor 已就绪
             if (!ndgiInited()) {
                 ndgiPass().initWeights(cmd);

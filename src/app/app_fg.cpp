@@ -6,6 +6,8 @@
 #include "renderer/fg/fg_pass_node.h"
 #include "renderer/fg/fg_builder.h"
 #include "renderer/fg/fg_resources.h"
+#include "rhi/vulkan/vk_command.h"
+#include "rhi/vulkan/vk_buffer.h"
 
 namespace somegi {
 
@@ -73,8 +75,11 @@ void App::setupFrameGraph() {
     m_fg.addPass("RSM-Geometry", [&](FGBuilder& b) {
         b.setPassType(FGPassType::Graphics);
         b.setManualBarriers();  // 复杂 Pass：内部自行管理 layout
-        b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
-            m_renderer.rsmGeom().record(cmd, m_indirectBufSun.handle(), m_drawCount, m_sceneGpu);
+        b.setExecute([this](VkCommandBuffer vkCmd, const FGResources&) {
+            auto& vkDev = static_cast<rhi::VkRHIDevice&>(*m_renderer.rhiDevice());
+            rhi::VkRHICommandBuffer rhiCmd(vkDev, vkCmd);
+            auto rhiIb = rhi::VkRHIBuffer::createNonOwning(vkDev, m_indirectBufSun.handle(), VK_WHOLE_SIZE);
+            m_renderer.rsmGeom().record(rhiCmd, *rhiIb, m_drawCount, m_sceneGpu);
         });
     });
 

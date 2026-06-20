@@ -153,10 +153,4 @@ void RsmGeometryPass::record(rhi::RHICommandBuffer& cmd, const rhi::RHIBuffer& i
     t(m_depth.image(),VK_IMAGE_ASPECT_DEPTH_BIT,VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
 }
 
-void RsmGeometryPass::record(VkCommandBuffer vkCmd, VkBuffer ib, uint32_t dc, const SceneGpu& gpu) {
-    rhi::VkRHICommandBuffer rhiCmd(static_cast<rhi::VkRHIDevice&>(*m_rhiDevice),vkCmd);
-    auto rhiIb = rhi::VkRHIBuffer::createNonOwning(static_cast<rhi::VkRHIDevice&>(*m_rhiDevice), ib, VK_WHOLE_SIZE);
-    record(rhiCmd, *rhiIb, dc, gpu);
-}
-
 } // namespace somegi

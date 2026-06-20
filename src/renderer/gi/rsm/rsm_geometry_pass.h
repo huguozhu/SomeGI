@@ -23,7 +23,6 @@ public:
                      const glm::vec3& sunDir, const glm::vec3& sunColor, float sunIntensity);
 
     void record(rhi::RHICommandBuffer& cmd, const rhi::RHIBuffer& indirectBuf, uint32_t drawCount, const SceneGpu& gpu);
-    void record(VkCommandBuffer cmd, VkBuffer indirectBuf, uint32_t drawCount, const SceneGpu& gpu);
 
     const Image& position() const { return m_position; }
     const Image& normal()   const { return m_normal; }
