@@ -96,10 +96,46 @@ D3D12RHIDevice::D3D12RHIDevice() {
     m_limits.rayTracingSupported  = false;
 
     std::printf("[d3d12] device created successfully\n");
+
+    // ── 创建 GPU 可见描述符堆 ──
+    createDescriptorHeap();
+}
+
+void D3D12RHIDevice::createDescriptorHeap() {
+    D3D12_DESCRIPTOR_HEAP_DESC hd{};
+    hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+    hd.NumDescriptors = kGpuDescHeapSize;
+    hd.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+    if (FAILED(m_device->CreateDescriptorHeap(&hd, IID_PPV_ARGS(&m_gpuDescHeap)))) {
+        throw std::runtime_error("[d3d12] CreateDescriptorHeap(CBV_SRV_UAV) failed");
+    }
+    m_gpuDescIncrement = m_device->GetDescriptorHandleIncrementSize(
+        D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+    m_gpuDescStartCPU = m_gpuDescHeap->GetCPUDescriptorHandleForHeapStart();
+    m_gpuDescStartGPU = m_gpuDescHeap->GetGPUDescriptorHandleForHeapStart();
+    std::printf("[d3d12] GPU descriptor heap: %u slots\n", kGpuDescHeapSize);
+}
+
+D3D12RHIDevice::DescAlloc D3D12RHIDevice::allocDescriptors(uint32_t count) {
+    uint32_t offset = m_gpuDescOffset;
+    m_gpuDescOffset += count;
+
+    DescAlloc a;
+    a.offset = offset;
+    a.cpu = m_gpuDescStartCPU;
+    a.cpu.ptr += static_cast<SIZE_T>(offset) * m_gpuDescIncrement;
+    a.gpu = m_gpuDescStartGPU;
+    a.gpu.ptr += static_cast<SIZE_T>(offset) * m_gpuDescIncrement;
+    return a;
+}
+
+void D3D12RHIDevice::resetDescriptorHeap() {
+    m_gpuDescOffset = 0;
 }
 
 D3D12RHIDevice::~D3D12RHIDevice() {
     waitIdle();
+    if (m_gpuDescHeap) { m_gpuDescHeap->Release(); }
     if (m_queue)   { m_queue->Release(); }
     if (m_device)  { m_device->Release(); }
     if (m_factory) { m_factory->Release(); }

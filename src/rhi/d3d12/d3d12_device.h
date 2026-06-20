@@ -1,11 +1,10 @@
-// rhi/d3d12/d3d12_device.h — D3D12 后端设备（骨架）
+// rhi/d3d12/d3d12_device.h — D3D12 后端设备
 #pragma once
 #include "../base/device.h"
+#include <d3d12.h>
+#include <dxgi1_6.h>
 #include <memory>
 
-struct ID3D12Device5;
-struct ID3D12CommandQueue;
-struct IDXGIFactory6;
 struct HWND__;
 typedef HWND__* HWND;
 
@@ -65,6 +64,30 @@ private:
     ID3D12CommandQueue* m_queue   = nullptr;
     IDXGIFactory6*      m_factory = nullptr;
     DeviceLimits m_limits{};
+
+public:
+    // GPU 可见描述符堆（每帧开始前调用 resetHeap）
+    ID3D12DescriptorHeap* gpuDescriptorHeap() { return m_gpuDescHeap; }
+    uint32_t gpuDescHeapIncrement() const { return m_gpuDescIncrement; }
+
+    // 从 GPU 可见堆分配 count 个描述符，返回分配起始处的 CPU + GPU handle
+    struct DescAlloc {
+        D3D12_CPU_DESCRIPTOR_HANDLE cpu;
+        D3D12_GPU_DESCRIPTOR_HANDLE gpu;
+        uint32_t offset;
+    };
+    DescAlloc allocDescriptors(uint32_t count);
+    void resetDescriptorHeap();
+
+private:
+    void createDescriptorHeap();
+
+    ID3D12DescriptorHeap* m_gpuDescHeap = nullptr;
+    uint32_t m_gpuDescIncrement = 0;
+    D3D12_CPU_DESCRIPTOR_HANDLE m_gpuDescStartCPU{};
+    D3D12_GPU_DESCRIPTOR_HANDLE m_gpuDescStartGPU{};
+    uint32_t m_gpuDescOffset = 0;
+    static constexpr uint32_t kGpuDescHeapSize = 65536;
 };
 
 } // namespace rhi

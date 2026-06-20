@@ -280,23 +280,35 @@ D3D12RHIDescriptorSetLayout::D3D12RHIDescriptorSetLayout(const DescSetLayoutDesc
 D3D12RHIDescriptorSet::D3D12RHIDescriptorSet(D3D12RHIDevice& device,
                                                D3D12RHIDescriptorSetLayout& layout)
     : m_device(device) {
-    // 计算总 descriptor 数
     for (auto& b : layout.bindings()) {
         m_count += b.count;
+    }
+    // 从 GPU 可见堆分配空间
+    if (m_count > 0) {
+        auto alloc = device.allocDescriptors(m_count);
+        m_gpuStart = alloc.gpu;
     }
 }
 
 D3D12RHIDescriptorSet::~D3D12RHIDescriptorSet() = default;
 
 void D3D12RHIDescriptorSet::write(const std::vector<DescriptorWrite>& writes) {
+    // 向 GPU 可见堆拷贝描述符
+    // 简化：仅处理 textureView 类型（SRV）
     for (auto& w : writes) {
-        m_pendingWrites.push_back({
-            w.binding, w.type,
-            w.textureView ? D3D12_CPU_DESCRIPTOR_HANDLE{
-                (SIZE_T)(uintptr_t)w.textureView->nativeHandle()} : D3D12_CPU_DESCRIPTOR_HANDLE{}
-        });
+        if (w.textureView) {
+            auto* view = static_cast<const D3D12RHITextureView*>(w.textureView);
+            D3D12_CPU_DESCRIPTOR_HANDLE src = view->srvCpuHandle();
+            // 计算目标位置
+            D3D12_CPU_DESCRIPTOR_HANDLE dst = m_device.gpuDescriptorHeap()->GetCPUDescriptorHandleForHeapStart();
+            dst.ptr += static_cast<SIZE_T>(m_gpuStart.ptr -
+                m_device.gpuDescriptorHeap()->GetGPUDescriptorHandleForHeapStart().ptr);
+            // 偏移到 binding 对应的槽位
+            // Phase 5 完整实现 binding→槽位映射
+            m_device.device()->CopyDescriptorsSimple(1, dst, src,
+                D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+        }
     }
-    m_dirty = true;
 }
 
 } // namespace rhi
