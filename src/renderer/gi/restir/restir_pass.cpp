@@ -57,25 +57,31 @@ void RestirPass::bindResourcesRt(const RestirResources& res,const RenderTargets&
     const rhi::RHISampler* sp=m_linearClamp.get(); auto tlasRHI=rhi::VkRHIAccelerationStructure::createNonOwning(vkD,tlas);
     m_shadeRtSet->write({{0,rhi::DescriptorType::UniformBuffer,nullptr,ub.get()},{1,rhi::DescriptorType::SampledImage,ab.get()},{2,rhi::DescriptorType::SampledImage,nr.get()},{3,rhi::DescriptorType::SampledImage,dp.get()},{4,rhi::DescriptorType::StorageBuffer,nullptr,lb.get()},{5,rhi::DescriptorType::SampledImage,rb.get()},{6,rhi::DescriptorType::AccelerationStructure,nullptr,nullptr,0,0,nullptr,tlasRHI.get()},{7,rhi::DescriptorType::StorageImage,out.get()},{8,rhi::DescriptorType::Sampler,nullptr,nullptr,0,0,sp}});
 }
-void RestirPass::record(rhi::RHICommandBuffer& cmd,const RestirResources& res,const RenderTargets& rt,uint32_t nl,uint32_t nc,uint32_t nn,float sr,uint32_t ss,float is,uint32_t fi,bool useRt){
-    record(static_cast<rhi::VkRHICommandBuffer&>(cmd).vkCmd(),res,rt,nl,nc,nn,sr,ss,is,fi,useRt);}
-void RestirPass::record(VkCommandBuffer vkCmd,const RestirResources&,const RenderTargets& rt,uint32_t nl,uint32_t nc,uint32_t nn,float sr,uint32_t ss,float is,uint32_t fi,bool useRt){
-    auto h=[&](auto& p){return (VkPipeline)(uintptr_t)p->nativeHandle();}; auto l=[&](auto& p){return static_cast<rhi::VkRHIPipelineState&>(*p).layout();}; auto s=[&](auto& x){return (VkDescriptorSet)(uintptr_t)x->nativeHandle();};
-    auto b=[&](VkPipelineStageFlags2 s1,VkAccessFlags2 a1,VkPipelineStageFlags2 s2,VkAccessFlags2 a2){VkMemoryBarrier2 mb{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};mb.srcStageMask=s1;mb.srcAccessMask=a1;mb.dstStageMask=s2;mb.dstAccessMask=a2;VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};di.memoryBarrierCount=1;di.pMemoryBarriers=&mb;vkCmdPipelineBarrier2(vkCmd,&di);};
+// RHI 路径：ReSTIR init + spatial + shade
+void RestirPass::record(rhi::RHICommandBuffer& cmd,const RestirResources&,const RenderTargets& rt,uint32_t nl,uint32_t nc,uint32_t nn,float sr,uint32_t ss,float is,uint32_t fi,bool useRt){
     uint32_t gx=(rt.extent.width+7)/8,gy=(rt.extent.height+7)/8; float ix=1.f/rt.extent.width,iy=1.f/rt.extent.height;
-    VkDescriptorSet iset=s(m_initSet),sset=s(m_spatialSet),hset=s(m_shadeSet),rset=m_rtShadeReady?s(m_shadeRtSet):VK_NULL_HANDLE;
     // Init
-    vkCmdBindPipeline(vkCmd,VK_PIPELINE_BIND_POINT_COMPUTE,h(m_initPipe));vkCmdBindDescriptorSets(vkCmd,VK_PIPELINE_BIND_POINT_COMPUTE,l(m_initPipe),0,1,&iset,0,nullptr);
-    InitPC ipc{gx*8u,gy*8u,ix,iy,nl,(uint32_t)nc,fi};vkCmdPushConstants(vkCmd,l(m_initPipe),VK_SHADER_STAGE_COMPUTE_BIT,0,sizeof(ipc),&ipc);vkCmdDispatch(vkCmd,gx,gy,1);
-    b(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,VK_ACCESS_2_SHADER_STORAGE_READ_BIT);
+    cmd.bindPipelineState(*m_initPipe); cmd.bindDescriptorSet(0, *m_initSet);
+    InitPC ipc{gx*8u,gy*8u,ix,iy,nl,(uint32_t)nc,fi}; cmd.pushConstants(rhi::ShaderStage::Compute, &ipc, sizeof(ipc));
+    cmd.dispatch(gx, gy, 1);
+    cmd.globalBarrier();
     // Spatial
-    vkCmdBindPipeline(vkCmd,VK_PIPELINE_BIND_POINT_COMPUTE,h(m_spatialPipe));vkCmdBindDescriptorSets(vkCmd,VK_PIPELINE_BIND_POINT_COMPUTE,l(m_spatialPipe),0,1,&sset,0,nullptr);
-    SpatialPC spc{gx*8u,gy*8u,ix,iy,nl,(uint32_t)nn,sr,fi};vkCmdPushConstants(vkCmd,l(m_spatialPipe),VK_SHADER_STAGE_COMPUTE_BIT,0,sizeof(spc),&spc);vkCmdDispatch(vkCmd,gx,gy,1);
-    b(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,VK_ACCESS_2_SHADER_STORAGE_READ_BIT|VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+    cmd.bindPipelineState(*m_spatialPipe); cmd.bindDescriptorSet(0, *m_spatialSet);
+    SpatialPC spc{gx*8u,gy*8u,ix,iy,nl,(uint32_t)nn,sr,fi}; cmd.pushConstants(rhi::ShaderStage::Compute, &spc, sizeof(spc));
+    cmd.dispatch(gx, gy, 1);
+    cmd.globalBarrier();
     // Shade
-    if(useRt&&m_rtShadeReady){ vkCmdBindPipeline(vkCmd,VK_PIPELINE_BIND_POINT_COMPUTE,h(m_shadeRtPipe));vkCmdBindDescriptorSets(vkCmd,VK_PIPELINE_BIND_POINT_COMPUTE,l(m_shadeRtPipe),0,1,&rset,0,nullptr); }
-    else{ vkCmdBindPipeline(vkCmd,VK_PIPELINE_BIND_POINT_COMPUTE,h(m_shadePipe));vkCmdBindDescriptorSets(vkCmd,VK_PIPELINE_BIND_POINT_COMPUTE,l(m_shadePipe),0,1,&hset,0,nullptr); }
-    auto& spso=useRt&&m_rtShadeReady?m_shadeRtPipe:m_shadePipe; ShadePC hpc{gx*8u,gy*8u,ix,iy,nl,0,(float)ss,is};
-    vkCmdPushConstants(vkCmd,l(spso),VK_SHADER_STAGE_COMPUTE_BIT,0,sizeof(hpc),&hpc);vkCmdDispatch(vkCmd,gx,gy,1);
+    bool rtShade=useRt&&m_rtShadeReady;
+    cmd.bindPipelineState(rtShade?*m_shadeRtPipe:*m_shadePipe);
+    cmd.bindDescriptorSet(0, rtShade?*m_shadeRtSet:*m_shadeSet);
+    ShadePC hpc{gx*8u,gy*8u,ix,iy,nl,0,(float)ss,is};
+    cmd.pushConstants(rhi::ShaderStage::Compute, &hpc, sizeof(hpc));
+    cmd.dispatch(gx, gy, 1);
+}
+// Vk 兼容路径
+void RestirPass::record(VkCommandBuffer vkCmd,const RestirResources& res,const RenderTargets& rt,uint32_t nl,uint32_t nc,uint32_t nn,float sr,uint32_t ss,float is,uint32_t fi,bool useRt){
+    auto& vkDev = static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
+    rhi::VkRHICommandBuffer rhiCmd(vkDev, vkCmd);
+    record(rhiCmd, res, rt, nl, nc, nn, sr, ss, is, fi, useRt);
 }
 } // namespace somegi

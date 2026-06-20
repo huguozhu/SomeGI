@@ -35,10 +35,15 @@ void VxgiRelightPass::bindResourcesPingPong(const VxgiResources& vxgi,bool sw){ 
     auto& target=sw?*m_setPP1:*m_setPP0;
     target.write({{0,rhi::DescriptorType::SampledImage,rhi::VkRHITextureView::createNonOwning(vkD,sw?vxgi.relightScratch2View():vxgi.relightScratchView()).get()},{1,rhi::DescriptorType::SampledImage,rhi::VkRHITextureView::createNonOwning(vkD,vxgi.anisoFullView()).get()},{2,rhi::DescriptorType::Sampler,nullptr,nullptr,0,0,m_linearClamp.get()},{3,rhi::DescriptorType::StorageImage,rhi::VkRHITextureView::createNonOwning(vkD,sw?vxgi.relightScratchView():vxgi.relightScratch2View()).get()}});
 }
+// RHI 路径：体素 relight compute dispatch
 void VxgiRelightPass::record(rhi::RHICommandBuffer& cmd,const rhi::RHIDescriptorSet& set,uint32_t gr,uint32_t ml,float cs,const glm::vec3& gm,float bs){
-    // 从 RHI 描述符集提取 Vulkan 原生句柄，委托到兼容路径
-    auto vkSet = static_cast<VkDescriptorSet>(set.nativeHandle());
-    record(static_cast<rhi::VkRHICommandBuffer&>(cmd).vkCmd(),vkSet,gr,ml,cs,gm,bs);}
+    cmd.bindPipelineState(*m_pipeline);
+    cmd.bindDescriptorSet(0, set);
+    RelightPC pc{gr,ml,cs,bs,gm.x,gm.y,gm.z};
+    cmd.pushConstants(rhi::ShaderStage::Compute, &pc, sizeof(pc));
+    cmd.dispatch((gr+3)/4, (gr+3)/4, (gr+3)/4);
+}
+// Vk 兼容路径（因 VkDescriptorSet 无法转换为 RHIDescriptorSet&，保留原生实现）
 void VxgiRelightPass::record(VkCommandBuffer vkCmd,VkDescriptorSet set,uint32_t gr,uint32_t ml,float cs,const glm::vec3& gm,float bs){
     auto& vkPso=static_cast<rhi::VkRHIPipelineState&>(*m_pipeline);
     vkCmdBindPipeline(vkCmd,VK_PIPELINE_BIND_POINT_COMPUTE,(VkPipeline)(uintptr_t)vkPso.nativeHandle());

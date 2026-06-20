@@ -78,24 +78,39 @@ void NdgiPass::initWeights(VkCommandBuffer vkCmd){
     rhi::VkRHICommandBuffer rhiCmd(vkDev, vkCmd);
     initWeights(rhiCmd);
 }
-void NdgiPass::record(rhi::RHICommandBuffer& cmd,NdgiResources& res,uint32_t fi,glm::vec3 o,glm::vec3 s){
-    record(static_cast<rhi::VkRHICommandBuffer&>(cmd).vkCmd(),res,fi,o,s);}
-void NdgiPass::record(VkCommandBuffer vkCmd,NdgiResources& res,uint32_t fi,glm::vec3 o,glm::vec3 s){ if(!m_rtSupported||!m_tracePipeline)return;
-    auto& p=static_cast<rhi::VkRHIPipelineState&>(*m_tracePipeline); VkDescriptorSet ds=(VkDescriptorSet)(uintptr_t)m_traceSet->nativeHandle();
-    vkCmdFillBuffer(vkCmd,res.sampleCount().handle(),0,4,0);
-    vkCmdBindPipeline(vkCmd,VK_PIPELINE_BIND_POINT_COMPUTE,(VkPipeline)(uintptr_t)p.nativeHandle()); vkCmdBindDescriptorSets(vkCmd,VK_PIPELINE_BIND_POINT_COMPUTE,p.layout(),0,1,&ds,0,nullptr);
+// RHI 路径：NDGI 光线追踪 probe
+void NdgiPass::record(rhi::RHICommandBuffer& cmd,NdgiResources& res,uint32_t fi,glm::vec3 o,glm::vec3 s){ if(!m_rtSupported||!m_tracePipeline)return;
+    // 清零采样计数缓冲
+    auto& vkDev = static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
+    auto cntBuf = rhi::VkRHIBuffer::createNonOwning(vkDev, res.sampleCount().handle(), VK_WHOLE_SIZE);
+    cmd.fillBuffer(*cntBuf, 0, sizeof(uint32_t), 0);
+
+    cmd.bindPipelineState(*m_tracePipeline);
+    cmd.bindDescriptorSet(0, *m_traceSet);
     struct{float origin[3],pad0,spacing[3],pad1; uint32_t px,py,pz,rpp; float rotation,_pad2; uint32_t _pad3;}pc;
     pc.origin[0]=o.x;pc.origin[1]=o.y;pc.origin[2]=o.z;pc.spacing[0]=s.x;pc.spacing[1]=s.y;pc.spacing[2]=s.z;
     pc.px=NdgiResources::kProbesX;pc.py=NdgiResources::kProbesY;pc.pz=NdgiResources::kProbesZ;pc.rpp=NdgiResources::kRaysPerProbe;pc.rotation=float((fi%360)*0.0174532925);
-    vkCmdPushConstants(vkCmd,p.layout(),VK_SHADER_STAGE_COMPUTE_BIT,0,sizeof(pc),&pc); vkCmdDispatch(vkCmd,(pc.px*pc.py*pc.pz*pc.rpp+63)/64,1,1);
+    cmd.pushConstants(rhi::ShaderStage::Compute, &pc, sizeof(pc));
+    cmd.dispatch((pc.px*pc.py*pc.pz*pc.rpp+63)/64, 1, 1);
 }
-void NdgiPass::recordTraining(rhi::RHICommandBuffer& cmd,NdgiResources& res,uint32_t fi){
-    recordTraining(static_cast<rhi::VkRHICommandBuffer&>(cmd).vkCmd(),res,fi);}
-void NdgiPass::recordTraining(VkCommandBuffer vkCmd,NdgiResources& res,uint32_t){ if(!m_rtSupported||!m_trainPipeline||!m_initSet)return;
+// Vk 兼容路径
+void NdgiPass::record(VkCommandBuffer vkCmd,NdgiResources& res,uint32_t fi,glm::vec3 o,glm::vec3 s){
+    auto& vkDev = static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
+    rhi::VkRHICommandBuffer rhiCmd(vkDev, vkCmd);
+    record(rhiCmd, res, fi, o, s);
+}
+// RHI 路径：NDGI 神经网络训练
+void NdgiPass::recordTraining(rhi::RHICommandBuffer& cmd,NdgiResources& res,uint32_t){ if(!m_rtSupported||!m_trainPipeline||!m_initSet)return;
     auto* cnt=static_cast<uint32_t*>(res.sampleCount().mapped()); uint32_t total=cnt?*cnt:0; if(!total)return;
-    auto& p=static_cast<rhi::VkRHIPipelineState&>(*m_trainPipeline); VkDescriptorSet ds=(VkDescriptorSet)(uintptr_t)m_initSet->nativeHandle();
-    vkCmdBindPipeline(vkCmd,VK_PIPELINE_BIND_POINT_COMPUTE,(VkPipeline)(uintptr_t)p.nativeHandle()); vkCmdBindDescriptorSets(vkCmd,VK_PIPELINE_BIND_POINT_COMPUTE,p.layout(),0,1,&ds,0,nullptr);
+    cmd.bindPipelineState(*m_trainPipeline);
+    cmd.bindDescriptorSet(0, *m_initSet);
     struct{float lr,ema;uint32_t batch,iters,samples,p0,p1,p2;}pc{0.01f,0.95f,256,4,total};
-    vkCmdPushConstants(vkCmd,p.layout(),VK_SHADER_STAGE_COMPUTE_BIT,0,32,&pc); vkCmdDispatch(vkCmd,1,1,1);
+    cmd.pushConstants(rhi::ShaderStage::Compute, &pc, 32);
+    cmd.dispatch(1, 1, 1);
+}
+void NdgiPass::recordTraining(VkCommandBuffer vkCmd,NdgiResources& res,uint32_t fi){
+    auto& vkDev = static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
+    rhi::VkRHICommandBuffer rhiCmd(vkDev, vkCmd);
+    recordTraining(rhiCmd, res, fi);
 }
 } // namespace somegi

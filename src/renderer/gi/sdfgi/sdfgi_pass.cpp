@@ -52,24 +52,38 @@ void SdfgiPass::bindResources(const SdfgiResources& sf,const VxgiResources& vx,c
     m_finA->write({{0,rhi::DescriptorType::SampledImage,sa.get()},{1,rhi::DescriptorType::StorageImage,udf.get()}}); m_finB->write({{0,rhi::DescriptorType::SampledImage,sb.get()},{1,rhi::DescriptorType::StorageImage,udf.get()}});
     m_traceSet->write({{0,rhi::DescriptorType::UniformBuffer,nullptr,ubo.get()},{1,rhi::DescriptorType::SampledImage,nr.get()},{2,rhi::DescriptorType::SampledImage,dp.get()},{3,rhi::DescriptorType::SampledImage,vox.get()},{4,rhi::DescriptorType::SampledImage,aniso.get()},{5,rhi::DescriptorType::Sampler,nullptr,nullptr,0,0,m_linearClamp.get()},{6,rhi::DescriptorType::StorageImage,out.get()}});
 }
+// RHI 路径：SDFGI seed + JFA + finalize + trace
 void SdfgiPass::record(rhi::RHICommandBuffer& cmd,const SdfgiResources& sf,const RenderTargets& rt,uint32_t fi,float st,float md,uint32_t nr,uint32_t ms,float rm,float he){
-    record(static_cast<rhi::VkRHICommandBuffer&>(cmd).vkCmd(),sf,rt,fi,st,md,nr,ms,rm,he);}
+    uint32_t res=sf.resolution();
+    // Seed
+    cmd.bindPipelineState(*m_seedPipe); cmd.bindDescriptorSet(0, *m_seedSet);
+    SeedPC spc{res}; cmd.pushConstants(rhi::ShaderStage::Compute, &spc, sizeof(spc));
+    cmd.dispatch((res+3)/4, (res+3)/4, (res+3)/4);
+    cmd.globalBarrier();
+    // JFA loop
+    cmd.bindPipelineState(*m_jfaPipe);
+    for(int k=64;k>=1;k>>=1){
+        cmd.bindDescriptorSet(0, (k&1)?*m_jfaBA:*m_jfaAB);
+        JfaPC jpc{res,(uint32_t)k}; cmd.pushConstants(rhi::ShaderStage::Compute, &jpc, sizeof(jpc));
+        cmd.dispatch((res+3)/4, (res+3)/4, (res+3)/4);
+        cmd.globalBarrier();
+    }
+    // Finalize
+    cmd.bindPipelineState(*m_finPipe);
+    cmd.bindDescriptorSet(0, (sf.resolution()%2==0)?*m_finA:*m_finB);
+    FinalizePC fpc{res,md}; cmd.pushConstants(rhi::ShaderStage::Compute, &fpc, sizeof(fpc));
+    cmd.dispatch((res+3)/4, (res+3)/4, (res+3)/4);
+    cmd.globalBarrier();
+    // Trace
+    cmd.bindPipelineState(*m_tracePipe); cmd.bindDescriptorSet(0, *m_traceSet);
+    TracePC tpc{(uint32_t)rt.extent.width,(uint32_t)rt.extent.height,nr,ms,1.f/rt.extent.width,1.f/rt.extent.height,rm,he,fi};
+    cmd.pushConstants(rhi::ShaderStage::Compute, &tpc, sizeof(tpc));
+    cmd.dispatch((rt.extent.width+7)/8, (rt.extent.height+7)/8, 1);
+}
+// Vk 兼容路径
 void SdfgiPass::record(VkCommandBuffer vkCmd,const SdfgiResources& sf,const RenderTargets& rt,uint32_t fi,float st,float md,uint32_t nr,uint32_t ms,float rm,float he){
-    auto h=[&](auto& p){return (VkPipeline)(uintptr_t)p->nativeHandle();}; auto l=[&](auto& p){return static_cast<rhi::VkRHIPipelineState&>(*p).layout();}; auto s=[&](auto& x){return (VkDescriptorSet)(uintptr_t)x->nativeHandle();};
-    auto b=[&](VkPipelineStageFlags2 ss,VkAccessFlags2 sa,VkPipelineStageFlags2 ds,VkAccessFlags2 da){VkMemoryBarrier2 mb{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};mb.srcStageMask=ss;mb.srcAccessMask=sa;mb.dstStageMask=ds;mb.dstAccessMask=da;VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};di.memoryBarrierCount=1;di.pMemoryBarriers=&mb;vkCmdPipelineBarrier2(vkCmd,&di);};
-    uint32_t res=sf.resolution(); VkDescriptorSet sds=s(m_seedSet),jab=s(m_jfaAB),jba=s(m_jfaBA),fas=s(m_finA),fbs=s(m_finB),tcs=s(m_traceSet);
-    vkCmdBindPipeline(vkCmd,VK_PIPELINE_BIND_POINT_COMPUTE,h(m_seedPipe));vkCmdBindDescriptorSets(vkCmd,VK_PIPELINE_BIND_POINT_COMPUTE,l(m_seedPipe),0,1,&sds,0,nullptr);
-    SeedPC spc{res};vkCmdPushConstants(vkCmd,l(m_seedPipe),VK_SHADER_STAGE_COMPUTE_BIT,0,sizeof(spc),&spc);vkCmdDispatch(vkCmd,(res+3)/4,(res+3)/4,(res+3)/4);
-    b(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,VK_ACCESS_2_SHADER_STORAGE_READ_BIT|VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
-    vkCmdBindPipeline(vkCmd,VK_PIPELINE_BIND_POINT_COMPUTE,h(m_jfaPipe));
-    for(int k=64;k>=1;k>>=1){VkDescriptorSet sj=(k&1)?jba:jab;vkCmdBindDescriptorSets(vkCmd,VK_PIPELINE_BIND_POINT_COMPUTE,l(m_jfaPipe),0,1,&sj,0,nullptr);
-        JfaPC jpc{res,(uint32_t)k};vkCmdPushConstants(vkCmd,l(m_jfaPipe),VK_SHADER_STAGE_COMPUTE_BIT,0,sizeof(jpc),&jpc);vkCmdDispatch(vkCmd,(res+3)/4,(res+3)/4,(res+3)/4);
-        b(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,VK_ACCESS_2_SHADER_STORAGE_READ_BIT|VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);}
-    VkDescriptorSet fs=(sf.resolution()%2==0)?fas:fbs;vkCmdBindPipeline(vkCmd,VK_PIPELINE_BIND_POINT_COMPUTE,h(m_finPipe));vkCmdBindDescriptorSets(vkCmd,VK_PIPELINE_BIND_POINT_COMPUTE,l(m_finPipe),0,1,&fs,0,nullptr);
-    FinalizePC fpc{res,md};vkCmdPushConstants(vkCmd,l(m_finPipe),VK_SHADER_STAGE_COMPUTE_BIT,0,sizeof(fpc),&fpc);vkCmdDispatch(vkCmd,(res+3)/4,(res+3)/4,(res+3)/4);
-    b(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
-    vkCmdBindPipeline(vkCmd,VK_PIPELINE_BIND_POINT_COMPUTE,h(m_tracePipe));vkCmdBindDescriptorSets(vkCmd,VK_PIPELINE_BIND_POINT_COMPUTE,l(m_tracePipe),0,1,&tcs,0,nullptr);
-    TracePC tpc{(uint32_t)rt.extent.width,(uint32_t)rt.extent.height,nr,ms,1.f/rt.extent.width,1.f/rt.extent.height,rm,he,fi};vkCmdPushConstants(vkCmd,l(m_tracePipe),VK_SHADER_STAGE_COMPUTE_BIT,0,sizeof(tpc),&tpc);
-    vkCmdDispatch(vkCmd,(rt.extent.width+7)/8,(rt.extent.height+7)/8,1);
+    auto& vkDev = static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
+    rhi::VkRHICommandBuffer rhiCmd(vkDev, vkCmd);
+    record(rhiCmd, sf, rt, fi, st, md, nr, ms, rm, he);
 }
 } // namespace somegi
