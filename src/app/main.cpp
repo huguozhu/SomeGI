@@ -7,6 +7,7 @@
 #include "rhi/base/shader.h"
 #include "rhi/base/pipeline_state.h"
 #include "rhi/base/fence.h"
+#include "rhi/base/descriptor.h"
 #define GLFW_EXPOSE_NATIVE_WIN32
 #include <GLFW/glfw3.h>
 #include <GLFW/glfw3native.h>
@@ -124,10 +125,11 @@ int main(int argc, char** argv) {
             if (!csBytecode.empty()) {
                 somegi::rhi::ShaderDesc sd;
                 sd.stage = somegi::rhi::ShaderStage::Compute;
-                sd.entryPoint = "main";
+                sd.entryPoint = "comp_main";
                 auto csShader = d3d12Device->createShader(sd, csBytecode.data(), csBytecode.size());
-                std::printf("[d3d12] shader compiled: %zu bytes DXIL\n", csBytecode.size());
-                // PSO 创建需要 root signature 匹配 shader 资源 — Phase 5
+                std::printf("[d3d12] DXIL loaded: %zu bytes\n", csBytecode.size());
+                // PSO 创建需要 D3D12 调试工具精确定位 root signature 匹配问题
+                // 当前已验证：设备/交换链/DXIL 加载/命令缓冲 全链路工作
             }
 
             // 创建 fence 用于提交同步
