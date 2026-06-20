@@ -22,6 +22,7 @@ if(WIN32)
     target_sources(somegi_rhi PRIVATE
         d3d12/d3d12_device.cpp
         d3d12/d3d12_swapchain.cpp
+        d3d12/d3d12_command.cpp
     )
     # 启用 D3D12 Agility SDK（支持最新 D3D12 特性）
     target_compile_definitions(somegi_rhi PUBLIC D3D12_SUPPORTED)

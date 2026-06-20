@@ -1,6 +1,7 @@
 // rhi/d3d12/d3d12_device.cpp — D3D12 设备实现（骨架）
 #include "d3d12_device.h"
 #include "d3d12_swapchain.h"
+#include "d3d12_command.h"
 #include <d3d12.h>
 #include <dxgi1_6.h>
 #include <stdexcept>
@@ -120,18 +121,44 @@ std::unique_ptr<RHIPipelineState> D3D12RHIDevice::createComputePSO(const Compute
 std::unique_ptr<RHIPipelineState> D3D12RHIDevice::createRayTracingPSO(const RayTracingPSODesc&) { NOT_IMPL("createRayTracingPSO"); }
 std::unique_ptr<RHIDescriptorSetLayout> D3D12RHIDevice::createDescriptorSetLayout(const DescSetLayoutDesc&) { NOT_IMPL("createDescriptorSetLayout"); }
 std::unique_ptr<RHIDescriptorSet> D3D12RHIDevice::createDescriptorSet(const RHIDescriptorSetLayout&) { NOT_IMPL("createDescriptorSet"); }
-std::unique_ptr<RHICommandPool> D3D12RHIDevice::createCommandPool() { NOT_IMPL("createCommandPool"); }
-std::unique_ptr<RHIFence> D3D12RHIDevice::createFence(bool) { NOT_IMPL("createFence"); }
-std::unique_ptr<RHISemaphore> D3D12RHIDevice::createSemaphore() { NOT_IMPL("createSemaphore"); }
+std::unique_ptr<RHICommandPool> D3D12RHIDevice::createCommandPool() {
+    return std::unique_ptr<RHICommandPool>(new D3D12RHICommandPool(*this));
+}
+std::unique_ptr<RHIFence> D3D12RHIDevice::createFence(bool signaled) {
+    return std::unique_ptr<RHIFence>(new D3D12RHIFence(*this, signaled));
+}
+std::unique_ptr<RHISemaphore> D3D12RHIDevice::createSemaphore() {
+    return std::unique_ptr<RHISemaphore>(new D3D12RHISemaphore());
+}
 std::unique_ptr<RHIQueryPool> D3D12RHIDevice::createQueryPool(uint32_t) { NOT_IMPL("createQueryPool"); }
 
 // ════════════════════════════════════════════════════════════════
 // 提交 / 呈现 / 同步
 // ════════════════════════════════════════════════════════════════
 
-void D3D12RHIDevice::submit(const SubmitDesc&) { NOT_IMPL("submit"); }
-void D3D12RHIDevice::present(const RHISwapchain&, const RHISemaphore*) { NOT_IMPL("present"); }
-void D3D12RHIDevice::waitForFence(const RHIFence&, uint64_t) { NOT_IMPL("waitForFence"); }
+void D3D12RHIDevice::submit(const SubmitDesc& desc) {
+    ID3D12CommandList* lists[] = {
+        static_cast<D3D12RHICommandBuffer*>(
+            const_cast<RHICommandBuffer*>(desc.commandBuffer))->cmdList()
+    };
+    m_queue->ExecuteCommandLists(1, lists);
+    if (desc.signalFence) {
+        auto* fence = static_cast<D3D12RHIFence*>(
+            const_cast<RHIFence*>(desc.signalFence));
+        m_queue->Signal(fence->fence(), ++fence->value());
+    }
+}
+
+void D3D12RHIDevice::present(const RHISwapchain& swapchain, const RHISemaphore*) {
+    // D3D12 swapchain::present 在 swapchain 类中处理
+    // 这里仅作为接口占位
+    (void)swapchain;
+}
+
+void D3D12RHIDevice::waitForFence(const RHIFence& fence, uint64_t timeoutNs) {
+    auto& d3d12Fence = static_cast<const D3D12RHIFence&>(fence);
+    const_cast<D3D12RHIFence&>(d3d12Fence).wait(timeoutNs);
+}
 
 void D3D12RHIDevice::waitIdle() {
     if (m_queue && m_device) {

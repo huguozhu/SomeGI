@@ -1,0 +1,142 @@
+// rhi/d3d12/d3d12_command.h — D3D12 命令缓冲和命令池
+#pragma once
+#include "../base/command_buffer.h"
+#include "../base/fence.h"
+#include <d3d12.h>
+#include <stdexcept>
+#include <vector>
+
+namespace somegi {
+namespace rhi {
+
+class D3D12RHIDevice;
+
+// ════════════════════════════════════════════════════════════════
+// D3D12RHICommandPool
+// ════════════════════════════════════════════════════════════════
+class D3D12RHICommandPool : public RHICommandPool {
+public:
+    D3D12RHICommandPool(D3D12RHIDevice& device);
+    ~D3D12RHICommandPool() override;
+
+    RHICommandBuffer* allocateRaw() override;
+    void reset() override;
+
+private:
+    friend class D3D12RHICommandBuffer;
+    D3D12RHIDevice& m_device;
+    ID3D12CommandAllocator* m_allocator = nullptr;
+};
+
+// ════════════════════════════════════════════════════════════════
+// D3D12RHICommandBuffer
+// ════════════════════════════════════════════════════════════════
+class D3D12RHICommandBuffer : public RHICommandBuffer {
+public:
+    D3D12RHICommandBuffer(D3D12RHIDevice& device, D3D12RHICommandPool& pool);
+    ~D3D12RHICommandBuffer() override;
+
+    // ── 生命周期 ──
+    void begin() override;
+    void end() override;
+    void reset() override;
+
+    // ── 动态状态 ──
+    void setViewport(float x, float y, float w, float h, float minD, float maxD) override;
+    void setScissor(int32_t x, int32_t y, uint32_t w, uint32_t h) override;
+
+    // ── PSO / Descriptor / PushConstants ──
+    void bindPipelineState(const RHIPipelineState& pso) override        { throw std::runtime_error("[d3d12] not implemented"); }
+    void bindDescriptorSet(uint32_t slot, const RHIDescriptorSet& set) override { throw std::runtime_error("[d3d12] not implemented"); }
+    void bindDescriptorSets(uint32_t firstSlot, uint32_t count,
+                            const RHIDescriptorSet* const* sets) override { throw std::runtime_error("[d3d12] not implemented"); }
+    void pushConstants(ShaderStage stage, const void* data,
+                       uint32_t size, uint32_t offset) override         { throw std::runtime_error("[d3d12] not implemented"); }
+
+    // ── 顶点/索引 ──
+    void bindVertexBuffer(uint32_t binding, const RHIBuffer& buffer,
+                          uint64_t offset, uint64_t stride) override    { throw std::runtime_error("[d3d12] not implemented"); }
+    void bindIndexBuffer(const RHIBuffer& buffer, uint64_t offset,
+                         bool uint16) override                          { throw std::runtime_error("[d3d12] not implemented"); }
+
+    // ── Draw ──
+    void draw(uint32_t vc, uint32_t fv, uint32_t fi) override          { throw std::runtime_error("[d3d12] not implemented"); }
+    void drawIndexed(uint32_t ic, uint32_t fi, int32_t vo) override    { throw std::runtime_error("[d3d12] not implemented"); }
+    void drawIndirect(const RHIBuffer&, uint64_t, uint32_t, uint32_t) override { throw std::runtime_error("[d3d12] not implemented"); }
+    void drawIndexedIndirect(const RHIBuffer&, uint64_t, uint32_t, uint32_t) override { throw std::runtime_error("[d3d12] not implemented"); }
+    void drawIndexedIndirectCount(const RHIBuffer&, uint64_t,
+                                   const RHIBuffer&, uint64_t,
+                                   uint32_t, uint32_t) override        { throw std::runtime_error("[d3d12] not implemented"); }
+    void drawMeshTasks(uint32_t, uint32_t, uint32_t) override          { throw std::runtime_error("[d3d12] not implemented"); }
+    void drawMeshTasksIndirect(const RHIBuffer&, uint64_t, uint32_t, uint32_t) override { throw std::runtime_error("[d3d12] not implemented"); }
+
+    // ── Dispatch ──
+    void dispatch(uint32_t, uint32_t, uint32_t) override               { throw std::runtime_error("[d3d12] not implemented"); }
+    void dispatchIndirect(const RHIBuffer&, uint64_t) override         { throw std::runtime_error("[d3d12] not implemented"); }
+
+    // ── 复制/清除 ──
+    void copyBuffer(const RHIBuffer&, const RHIBuffer&, uint64_t,
+                    uint64_t, uint64_t) override                       { throw std::runtime_error("[d3d12] not implemented"); }
+    void copyTexture(const RHITexture&, const RHITexture&) override    { throw std::runtime_error("[d3d12] not implemented"); }
+    void fillBuffer(const RHIBuffer&, uint64_t, uint64_t, uint32_t) override { throw std::runtime_error("[d3d12] not implemented"); }
+    void clearColor(const RHITexture&, float, float, float, float) override { throw std::runtime_error("[d3d12] not implemented"); }
+    void clearDepth(const RHITexture&, float, uint32_t) override       { throw std::runtime_error("[d3d12] not implemented"); }
+
+    // ── Barrier ──
+    void textureBarrier(const RHITexture&, TextureLayout, TextureLayout) override { throw std::runtime_error("[d3d12] not implemented"); }
+    void bufferBarrier(const RHIBuffer&, PipelineStage, PipelineStage,
+                       BufferAccess, BufferAccess) override            { throw std::runtime_error("[d3d12] not implemented"); }
+    void globalBarrier() override                                      { throw std::runtime_error("[d3d12] not implemented"); }
+
+    // ── 渲染通道 ──
+    void beginRendering(const RenderingAttachmentInfo*, uint32_t,
+                        const RenderingAttachmentInfo*,
+                        uint32_t, uint32_t) override                   { throw std::runtime_error("[d3d12] not implemented"); }
+    void endRendering() override                                       { throw std::runtime_error("[d3d12] not implemented"); }
+
+    // ── 时间戳 ──
+    void writeTimestamp(const RHIQueryPool&, uint32_t) override        { throw std::runtime_error("[d3d12] not implemented"); }
+    void resetQueryPool(const RHIQueryPool&, uint32_t, uint32_t) override { throw std::runtime_error("[d3d12] not implemented"); }
+
+    void* nativeHandle() const override { return (void*)m_cmdList; }
+
+    // ── D3D12 特定 ──
+    ID3D12GraphicsCommandList* cmdList() { return m_cmdList; }
+
+private:
+    D3D12RHIDevice& m_device;
+    D3D12RHICommandPool& m_pool;
+    ID3D12GraphicsCommandList* m_cmdList = nullptr;
+    bool m_recording = false;
+};
+
+// ════════════════════════════════════════════════════════════════
+// D3D12RHIFence + D3D12RHISemaphore
+// ════════════════════════════════════════════════════════════════
+class D3D12RHIFence : public RHIFence {
+public:
+    D3D12RHIFence(D3D12RHIDevice& device, bool signaled);
+    ~D3D12RHIFence() override;
+    void wait(uint64_t timeoutNs) override;
+    void reset() override;
+    void* nativeHandle() const override { return (void*)m_fence; }
+
+    ID3D12Fence* fence() { return m_fence; }
+    uint64_t& value() { return m_value; }
+    HANDLE event() { return m_event; }
+
+private:
+    ID3D12Fence* m_fence = nullptr;
+    HANDLE m_event = nullptr;
+    uint64_t m_value = 0;
+};
+
+class D3D12RHISemaphore : public RHISemaphore {
+public:
+    D3D12RHISemaphore();
+    ~D3D12RHISemaphore() override;
+    void* nativeHandle() const override { return nullptr; } // D3D12 用 fence，非 semaphore
+};
+
+} // namespace rhi
+} // namespace somegi
