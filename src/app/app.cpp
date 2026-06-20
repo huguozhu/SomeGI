@@ -9,6 +9,7 @@
 #include "rhi/base/descriptor.h"
 #include "rhi/base/buffer.h"
 #include "renderer/core/render_targets.h"
+#include "renderer/core/tonemap_pass.h"
 #define GLFW_EXPOSE_NATIVE_WIN32
 #include <GLFW/glfw3.h>
 #include <GLFW/glfw3native.h>
@@ -1646,6 +1647,19 @@ void App::runD3D12() {
     gpsd.renderTargets.sampleCount = 1;
     auto pso = d3dDevice->createGraphicsPSO(gpsd);
     std::printf("[d3d12] graphics PSO created — triangle pipeline\n");
+
+    // 创建 RHI 线性采样器
+    rhi::SamplerDesc sampDesc;
+    sampDesc.magFilter = rhi::Filter::Linear;
+    sampDesc.minFilter = rhi::Filter::Linear;
+    sampDesc.mipmapMode = rhi::SamplerMipmapMode::Linear;
+    auto linearSampler = d3dDevice->createSampler(sampDesc);
+    std::printf("[d3d12] linear sampler created\n");
+
+    // 初始化 TonemapPass（D3D12 路径）
+    TonemapPass tonemap;
+    tonemap.init(*d3dDevice, *linearSampler);
+    std::printf("[d3d12] TonemapPass initialized\n");
 
     // 创建三角形顶点缓冲
     struct Vertex { float x, y; float r, g, b; };
