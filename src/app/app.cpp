@@ -1702,6 +1702,48 @@ void App::runD3D12() {
         }
     }
 
+    // Fullscreen quad PSO（采样 LDR 纹理显示 tonemap 结果）
+    auto fsqVS = loadShader("build/shaders_dxil/fsq_vs.dxil", rhi::ShaderStage::Vertex, "main");
+    auto fsqPS = loadShader("build/shaders_dxil/fsq_ps.dxil", rhi::ShaderStage::Fragment, "main");
+    std::unique_ptr<rhi::RHIPipelineState> fsqPSO;
+    std::unique_ptr<rhi::RHIDescriptorSetLayout> fsqDSL;
+    std::unique_ptr<rhi::RHIDescriptorSet> fsqSet;
+    if (fsqVS && fsqPS) {
+        rhi::DescSetLayoutDesc fsqDesc;
+        auto ab = [&](uint32_t vk, rhi::DescriptorType t, uint32_t hlsl) {
+            rhi::DescriptorBinding b; b.binding = vk; b.type = t; b.hlslRegister = hlsl;
+            fsqDesc.bindings.push_back(b);
+        };
+        ab(0, rhi::DescriptorType::SampledImage, 0); // t0: LDR texture
+        ab(1, rhi::DescriptorType::Sampler, 0);      // s0: sampler
+        fsqDSL = d3dDevice->createDescriptorSetLayout(fsqDesc);
+
+        rhi::GraphicsPSODesc gd;
+        gd.vertexShader = fsqVS.get(); gd.fragmentShader = fsqPS.get();
+        gd.topology = rhi::PrimitiveTopology::TriangleList;
+        rhi::VertexInputState vis;
+        vis.bindings = {{0, 20, false}};
+        vis.attributes = {{0, rhi::VertexFormat::Float2, 0, 0}, {1, rhi::VertexFormat::Float2, 8, 0}};
+        gd.vertexInput = vis;
+        gd.renderTargets.colorFormats = {rhi::Format::B8G8R8A8_UNORM};
+        gd.renderTargets.sampleCount = 1;
+        gd.descriptorSetLayouts.push_back(fsqDSL.get());
+        fsqPSO = d3dDevice->createGraphicsPSO(gd);
+        fsqSet = d3dDevice->createDescriptorSet(*fsqDSL);
+        std::printf("[d3d12] fullscreen quad PSO created\n");
+    }
+
+    // Fullscreen quad vertex buffer (NDC quad)
+    struct FSQVertex { float x, y; float u, v; };
+    FSQVertex fsqVerts[] = {
+        {-1,-1, 0,1}, {3,-1, 2,1}, {-1,3, 0,-1},
+    };
+    rhi::BufferDesc fsqVbDesc{}; fsqVbDesc.size = sizeof(fsqVerts);
+    fsqVbDesc.usage = rhi::BufferUsage::Vertex; fsqVbDesc.memory = rhi::MemoryType::HostVisible;
+    auto fsqVB = d3dDevice->createBuffer(fsqVbDesc);
+    std::memcpy(fsqVB->map(), fsqVerts, sizeof(fsqVerts));
+    fsqVB->unmap();
+
     // 创建渲染目标 + push constant buffer
     rhi::TextureDesc hdrDesc; hdrDesc.format = rhi::Format::R16G16B16A16_SFLOAT;
     hdrDesc.width = 800; hdrDesc.height = 450;
@@ -1752,30 +1794,37 @@ void App::runD3D12() {
         colorAttach.storeOp = rhi::AttachmentStoreOp::Store;
         colorAttach.clearColor[0] = 0.1f; colorAttach.clearColor[1] = 0.2f;
         colorAttach.clearColor[2] = 0.4f; colorAttach.clearColor[3] = 1.0f;
-        cmdBuf->beginRendering(&colorAttach, 1, nullptr, frame.width, frame.height);
-
-        // Graphics pipeline: draw triangle
-        cmdBuf->bindPipelineState(*pso);
-        cmdBuf->setViewport(0, 0, (float)frame.width, (float)frame.height);
-        cmdBuf->setScissor(0, 0, frame.width, frame.height);
-        cmdBuf->bindVertexBuffer(0, *vb);
-        cmdBuf->draw(3);
-        cmdBuf->endRendering();
-
-        // Compute pipeline: tonemap dispatch (HDR→LDR)
+        // 先跑 compute passes（写入离屏纹理）
         if (auto* tPSO = tonemap.pipeline()) {
             cmdBuf->bindPipelineState(*tPSO);
             cmdBuf->bindDescriptorSet(0, *tonemap.sets()[0]);
-            uint32_t pc[4] = {0}; // hdrMode=0, exposure=1.0
+            uint32_t pc[4] = {0};
             std::memcpy(pcBuf->map(), pc, sizeof(pc));
             pcBuf->unmap();
             cmdBuf->pushConstants(rhi::ShaderStage::Compute, pc, sizeof(pc));
             cmdBuf->dispatch((800 + 7) / 8, (450 + 7) / 8);
         }
-        // SSAO compute dispatch（第二个 compute pass 同帧运行）
         if (ssaoPSO) {
             cmdBuf->bindPipelineState(*ssaoPSO);
             cmdBuf->dispatch((800 + 7) / 8, (450 + 7) / 8);
+        }
+
+        // 渲染全屏 quad（采样 tonemap LDR 输出）到 swapchain
+        if (fsqPSO && fsqSet) {
+            // 绑定 LDR 纹理 + sampler
+            fsqSet->write({
+                {0, rhi::DescriptorType::SampledImage, ldrView.get()},
+                {1, rhi::DescriptorType::Sampler, nullptr, nullptr, 0, 0, linearSampler.get()},
+            });
+
+            cmdBuf->beginRendering(&colorAttach, 1, nullptr, frame.width, frame.height);
+            cmdBuf->bindPipelineState(*fsqPSO);
+            cmdBuf->bindDescriptorSet(0, *fsqSet);
+            cmdBuf->setViewport(0, 0, (float)frame.width, (float)frame.height);
+            cmdBuf->setScissor(0, 0, frame.width, frame.height);
+            cmdBuf->bindVertexBuffer(0, *fsqVB);
+            cmdBuf->draw(3);
+            cmdBuf->endRendering();
         }
 
         cmdBuf->end();
