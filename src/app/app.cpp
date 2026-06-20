@@ -8,6 +8,7 @@
 #include "rhi/base/pipeline_state.h"
 #include "rhi/base/descriptor.h"
 #include "rhi/base/buffer.h"
+#include "renderer/core/render_targets.h"
 #define GLFW_EXPOSE_NATIVE_WIN32
 #include <GLFW/glfw3.h>
 #include <GLFW/glfw3native.h>
@@ -1647,9 +1648,19 @@ void App::runD3D12() {
     rhi::ComputePSODesc psd; psd.computeShader = csShader.get();
     psd.descriptorSetLayouts.push_back(dsl.get());
     auto pso = d3dDevice->createComputePSO(psd);
-    std::printf("[d3d12] SSAO PSO created — D3D12 pipeline verified\n");
+    std::printf("[d3d12] SSAO PSO created\n");
 
-    std::printf("[d3d12] clear+present loop: press ESC to exit\n");
+    // 创建 D3D12 渲染目标纹理（模拟离屏渲染）
+    RenderTargets rt;
+    rt.createRHI(*d3dDevice, {800, 450}, (VkSampleCountFlagBits)1);
+
+    // 创建 descriptor set 并绑定渲染目标
+    auto descSet = d3dDevice->createDescriptorSet(*dsl);
+    // 绑定 UAV: gOutAO → ldrTonemap（用于输出到 swapchain）
+    descSet->write({{2, rhi::DescriptorType::StorageImage, rt.rhi.ldrTonemapView.get()}});
+
+    std::printf("[d3d12] render targets + descriptor set ready\n");
+    std::printf("[d3d12] compute+present loop: press ESC to exit\n");
     while (!m_window->shouldClose()) {
         m_window->pollEvents();
         if (glfwGetKey(m_window->handle(), GLFW_KEY_ESCAPE) == GLFW_PRESS)
@@ -1659,6 +1670,19 @@ void App::runD3D12() {
         if (frame.needsResize) continue;
 
         cmdBuf->begin();
+
+        // 1. Dispatch SSAO compute shader 到 ldrTonemap 纹理
+        cmdBuf->bindPipelineState(*pso);
+        cmdBuf->bindDescriptorSet(0, *descSet);
+        struct { float pad[32]; } pc{}; // 简化 push constants
+        cmdBuf->pushConstants(rhi::ShaderStage::Compute, &pc, 16);
+        cmdBuf->dispatch((800 + 7) / 8, (450 + 7) / 8);
+
+        // 2. Barrier: UAV → ShaderReadOnly（后续 tonemap 读取）
+        cmdBuf->textureBarrier(*rt.rhi.ldrTonemap,
+            rhi::TextureLayout::General, rhi::TextureLayout::ShaderReadOnly);
+
+        // 3. 清除 swapchain back buffer 并呈现
         rhi::RenderingAttachmentInfo colorAttach{};
         colorAttach.view = frame.view.get();
         colorAttach.loadOp = rhi::AttachmentLoadOp::Clear;
