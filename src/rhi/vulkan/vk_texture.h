@@ -6,6 +6,9 @@
 namespace somegi {
 namespace rhi {
 
+// VkFormat → RHI Format 反向映射（用于非拥有型纹理包装）
+Format toRhiFormat(VkFormat vkFmt);
+
 // 根据 RHI Format 推断 Vulkan image aspect（用于 barrier / view creation）
 inline VkImageAspectFlags toVkAspect(Format f) {
     switch (f) {
@@ -20,6 +23,10 @@ inline VkImageAspectFlags toVkAspect(Format f) {
 class VkRHITexture : public RHITexture {
 public:
     static std::unique_ptr<RHITexture> create(VkRHIDevice& device, const TextureDesc& desc);
+    // 非拥有型包装：不销毁 VkImage，用于临时包装已有 Vulkan 纹理
+    static std::unique_ptr<RHITexture> createNonOwning(VkRHIDevice& device, VkImage image,
+                                                        Format format, uint32_t width, uint32_t height,
+                                                        uint32_t mipLevels = 1);
     ~VkRHITexture() override;
     std::unique_ptr<RHITextureView> createView(const TextureViewDesc& desc) override;
     Format format() const override { return m_desc.format; }
@@ -32,7 +39,10 @@ private:
     VkImage m_image = VK_NULL_HANDLE;
     VmaAllocation m_allocation = VK_NULL_HANDLE;
     TextureDesc m_desc{};
+    bool m_ownsImage = true;
     VkRHITexture(VkRHIDevice& d, const TextureDesc& desc);
+    VkRHITexture(VkRHIDevice& d, VkImage image, Format format,
+                 uint32_t width, uint32_t height, uint32_t mipLevels);
 };
 
 class VkRHITextureView : public RHITextureView {

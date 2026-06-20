@@ -372,303 +372,401 @@ static void restoreResolveDesc(rhi::RHIDescriptorSet& set, rhi::RHIDevice& rhiDe
 // Record
 // ════════════════════════════════════════════════════════════════
 
-void ShadowPass::record(rhi::RHICommandBuffer& rhiCmd, const RenderTargets& rt,
-                         const rhi::RHIBuffer& frameUbo, const SceneGpu& sceneGpu,
+// RHI 路径：直接分发到 RHI 子方法
+void ShadowPass::record(rhi::RHICommandBuffer& cmd, const RenderTargets&,
+                         const rhi::RHIBuffer&, const SceneGpu&,
                          const rhi::RHIBuffer& indirectBuf, uint32_t drawCount, uint32_t frameIndex) {
-    auto vkCmd = static_cast<rhi::VkRHICommandBuffer&>(rhiCmd).vkCmd();
-    // 从 RHI 抽象提取 Vulkan 原生句柄，委托到兼容 VkCommandBuffer 路径
-    auto vkFrameUbo = static_cast<VkBuffer>(frameUbo.nativeHandle());
-    auto vkIndirectBuf = static_cast<VkBuffer>(indirectBuf.nativeHandle());
-    record(vkCmd, rt, vkFrameUbo, sceneGpu, vkIndirectBuf, drawCount, frameIndex);}
-
-void ShadowPass::record(VkCommandBuffer cmd, const RenderTargets& rt,
-                         VkBuffer frameUbo, const SceneGpu& sceneGpu,
-                         VkBuffer indirectBuf, uint32_t drawCount, uint32_t frameIndex) {
     m_currentFrameIndex = frameIndex;
     switch (m_method) {
     case ShadowMethod::None:          recordNone(cmd); break;
-    case ShadowMethod::HardShadowMap: recordHardSM(cmd, rt, frameUbo, sceneGpu, indirectBuf, drawCount); break;
-    case ShadowMethod::PCF:           recordPCF(cmd, rt, frameUbo, sceneGpu, indirectBuf, drawCount); break;
-    case ShadowMethod::PCSS:          recordPCSS(cmd, rt, frameUbo, sceneGpu, indirectBuf, drawCount); break;
-    case ShadowMethod::VSM:           recordVSM(cmd, rt, frameUbo, sceneGpu, indirectBuf, drawCount); break;
+    case ShadowMethod::HardShadowMap: recordHardSM(cmd, indirectBuf, drawCount); break;
+    case ShadowMethod::PCF:           recordPCF(cmd, indirectBuf, drawCount); break;
+    case ShadowMethod::PCSS:          recordPCSS(cmd, indirectBuf, drawCount); break;
+    case ShadowMethod::VSM:           recordVSM(cmd, indirectBuf, drawCount); break;
     case ShadowMethod::RTHard:        recordRTHard(cmd); break;
     case ShadowMethod::RTSoft:        recordRTSoft(cmd); break;
     default:                          recordNone(cmd); break;
     }
 }
 
-void ShadowPass::recordNone(VkCommandBuffer cmd) {
-    transitionImage(cmd, m_shadowMask.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-        VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
-        VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
-        VK_PIPELINE_STAGE_2_CLEAR_BIT, 0);
-    VkClearColorValue clearVal{};
-    clearVal.float32[0] = 1.0f; clearVal.float32[1] = 1.0f; clearVal.float32[2] = 1.0f; clearVal.float32[3] = 1.0f;
-    VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-    vkCmdClearColorImage(cmd, m_shadowMask.image(), VK_IMAGE_LAYOUT_GENERAL, &clearVal, 1, &range);
-    transitionImage(cmd, m_shadowMask.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-        VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-        VK_PIPELINE_STAGE_2_CLEAR_BIT, 0,
-        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+// Vk 兼容路径：委托到 RHI 记录
+void ShadowPass::record(VkCommandBuffer cmd, const RenderTargets& rt,
+                         VkBuffer frameUbo, const SceneGpu& sceneGpu,
+                         VkBuffer indirectBuf, uint32_t drawCount, uint32_t frameIndex) {
+    auto& vkDev = static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
+    rhi::VkRHICommandBuffer rhiCmd(vkDev, cmd);
+    auto rhiIb = rhi::VkRHIBuffer::createNonOwning(vkDev, indirectBuf, VK_WHOLE_SIZE);
+    // frameUbo 目前未被子方法实际使用，传入空包装占位
+    auto rhiDummy = rhi::VkRHIBuffer::createNonOwning(vkDev, frameUbo, VK_WHOLE_SIZE);
+    record(rhiCmd, rt, *rhiDummy, sceneGpu, *rhiIb, drawCount, frameIndex);
 }
 
-void ShadowPass::renderShadowMap(VkCommandBuffer cmd, VkBuffer, const SceneGpu&, VkBuffer indirectBuf, uint32_t drawCount) {
+// RHI 路径：清除 shadowMask 为白色（1.0 = 无阴影）
+void ShadowPass::recordNone(rhi::RHICommandBuffer& cmd) {
+    auto& vkDev = static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
+    // 用非拥有型包装临时包装已有 Vulkan 纹理
+    auto rhiTex = rhi::VkRHITexture::createNonOwning(vkDev, m_shadowMask.image(),
+        rhi::toRhiFormat(m_shadowMask.format()), m_outputSize.width, m_outputSize.height);
+
+    // UNDEFINED → TransferDst（clearColor 需要此布局）
+    cmd.textureBarrier(*rhiTex, rhi::TextureLayout::Undefined, rhi::TextureLayout::TransferDst);
+    // 清除为白色（1.0 = 无阴影）
+    cmd.clearColor(*rhiTex, 1.0f, 1.0f, 1.0f, 1.0f);
+    // TransferDst → ShaderReadOnly（供下游 compute pass 读取）
+    cmd.textureBarrier(*rhiTex, rhi::TextureLayout::TransferDst, rhi::TextureLayout::ShaderReadOnly);
+}
+
+// Vk 兼容路径：委托到 RHI 版本
+void ShadowPass::recordNone(VkCommandBuffer cmd) {
+    auto& vkDev = static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
+    rhi::VkRHICommandBuffer rhiCmd(vkDev, cmd);
+    recordNone(rhiCmd);
+}
+
+// RHI 路径：渲染 shadow map 深度图
+void ShadowPass::renderShadowMap(rhi::RHICommandBuffer& cmd, const rhi::RHIBuffer& indirectBuf, uint32_t drawCount) {
     if (drawCount == 0) return;
     computeSunViewProj(m_sunDir, m_sceneAabbMin, m_sceneAabbMax, m_shadowUbo.mapped());
-    transitionImage(cmd, m_shadowMap.image(), VK_IMAGE_ASPECT_DEPTH_BIT,
-        VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
-        VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
-        VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT, VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT);
-    {
-        VkRenderingAttachmentInfo depth{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
-        depth.imageView = m_shadowMap.view(); depth.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
-        depth.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR; depth.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-        depth.clearValue.depthStencil = {1.0f, 0};
-        VkRenderingInfo ri{VK_STRUCTURE_TYPE_RENDERING_INFO};
-        ri.renderArea = {{0, 0}, m_shadowMapSize}; ri.layerCount = 1;
-        ri.colorAttachmentCount = 0; ri.pDepthAttachment = &depth;
-        vkCmdBeginRendering(cmd, &ri);
-        VkViewport vp{0, 0, (float)m_shadowMapSize.width, (float)m_shadowMapSize.height, 0, 1};
-        VkRect2D sc{{0, 0}, m_shadowMapSize};
-        vkCmdSetViewport(cmd, 0, 1, &vp); vkCmdSetScissor(cmd, 0, 1, &sc);
-        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, VkPipe(m_smPipeline));
-        VkDescriptorSet smDs = VkSet(m_smSet);
-        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, VkLay(m_smPipeline), 0, 1, &smDs, 0, nullptr);
-        vkCmdBindIndexBuffer(cmd, m_indexBuffer, 0, VK_INDEX_TYPE_UINT32);
-        for (uint32_t d = 0; d < drawCount; ++d) {
-            VkDeviceSize offset = d > 0 ? d * sizeof(VkDrawIndexedIndirectCommand) : 0;
-            vkCmdDrawIndexedIndirect(cmd, indirectBuf, offset, 1, sizeof(VkDrawIndexedIndirectCommand));
-        }
-        vkCmdEndRendering(cmd);
-    }
-    transitionImage(cmd, m_shadowMap.image(), VK_IMAGE_ASPECT_DEPTH_BIT,
-        VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-        VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT, VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
-        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+
+    auto& vkDev = static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
+    // 非拥有型包装：深度纹理
+    auto depthTex = rhi::VkRHITexture::createNonOwning(vkDev, m_shadowMap.image(),
+        rhi::toRhiFormat(m_shadowMap.format()), m_shadowMapSize.width, m_shadowMapSize.height);
+    auto depthView = rhi::VkRHITextureView::createNonOwning(vkDev, m_shadowMap.view());
+
+    // UNDEFINED → DepthAttachment
+    cmd.textureBarrier(*depthTex, rhi::TextureLayout::Undefined, rhi::TextureLayout::DepthAttachment);
+
+    // 深度附件描述
+    rhi::RenderingAttachmentInfo depthAttach{};
+    depthAttach.view = depthView.get();
+    depthAttach.loadOp = rhi::AttachmentLoadOp::Clear;
+    depthAttach.storeOp = rhi::AttachmentStoreOp::Store;
+    depthAttach.clearDepth = 1.0f;
+
+    cmd.beginRendering(nullptr, 0, &depthAttach, m_shadowMapSize.width, m_shadowMapSize.height);
+    cmd.setViewport(0, 0, (float)m_shadowMapSize.width, (float)m_shadowMapSize.height);
+    cmd.setScissor(0, 0, m_shadowMapSize.width, m_shadowMapSize.height);
+    cmd.bindPipelineState(*m_smPipeline);
+    cmd.bindDescriptorSet(0, *m_smSet);
+
+    // 索引缓冲：非拥有型包装已有 VkBuffer
+    auto ibo = rhi::VkRHIBuffer::createNonOwning(vkDev, m_indexBuffer, VK_WHOLE_SIZE);
+    cmd.bindIndexBuffer(*ibo, 0, false);  // false = UINT32
+
+    cmd.drawIndexedIndirect(indirectBuf, 0, drawCount, sizeof(VkDrawIndexedIndirectCommand));
+
+    cmd.endRendering();
+
+    // DepthAttachment → ShaderReadOnly（供 resolve/downstream 读取）
+    cmd.textureBarrier(*depthTex, rhi::TextureLayout::DepthAttachment, rhi::TextureLayout::ShaderReadOnly);
 }
 
-void ShadowPass::recordHardSM(VkCommandBuffer cmd, const RenderTargets&, VkBuffer frameUbo, const SceneGpu& sceneGpu, VkBuffer indirectBuf, uint32_t drawCount) {
+// Vk 兼容路径：委托到 RHI 版本
+void ShadowPass::renderShadowMap(VkCommandBuffer cmd, VkBuffer, const SceneGpu&, VkBuffer indirectBuf, uint32_t drawCount) {
+    auto& vkDev = static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
+    rhi::VkRHICommandBuffer rhiCmd(vkDev, cmd);
+    auto rhiIb = rhi::VkRHIBuffer::createNonOwning(vkDev, indirectBuf, VK_WHOLE_SIZE);
+    renderShadowMap(rhiCmd, *rhiIb, drawCount);
+}
+
+// ── HardSM RHI 路径：渲染 shadow map + compute resolve ──
+void ShadowPass::recordHardSM(rhi::RHICommandBuffer& cmd, const rhi::RHIBuffer& indirectBuf, uint32_t drawCount) {
     if (drawCount == 0) { recordNone(cmd); return; }
-    renderShadowMap(cmd, frameUbo, sceneGpu, indirectBuf, drawCount);
-    restoreResolveDesc(*m_set, *m_rhiDevice, m_shadowMap.view(), (VkSampler)(uintptr_t)m_shadowSampler->nativeHandle());
+    renderShadowMap(cmd, indirectBuf, drawCount);
+
+    // 恢复 resolve 描述符（shadow map view + sampler）
+    restoreResolveDesc(*m_set, *m_rhiDevice, m_shadowMap.view(),
+        (VkSampler)(uintptr_t)m_shadowSampler->nativeHandle());
+
+    auto& vkDev = static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
     if (!m_fgAutoBarrier) {
-        transitionImage(cmd, m_shadowMask.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-            VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
-            VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
-            VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
+        auto maskTex = rhi::VkRHITexture::createNonOwning(vkDev, m_shadowMask.image(),
+            rhi::toRhiFormat(m_shadowMask.format()), m_outputSize.width, m_outputSize.height);
+        cmd.textureBarrier(*maskTex, rhi::TextureLayout::Undefined, rhi::TextureLayout::General);
     }
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, VkPipe(m_resolveHard));
-    VkDescriptorSet ds[2] = {VkSet(m_set), VkSet(m_frameSet)};
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, VkLay(m_resolveHard), 0, 2, ds, 0, nullptr);
-    ResolvePC pc{}; pc.outSizeX = m_outputSize.width; pc.outSizeY = m_outputSize.height;
+
+    cmd.bindPipelineState(*m_resolveHard);
+    const rhi::RHIDescriptorSet* ds[2] = {m_set.get(), m_frameSet.get()};
+    cmd.bindDescriptorSets(0, 2, ds);
+
+    ResolvePC pc{};
+    pc.outSizeX = m_outputSize.width; pc.outSizeY = m_outputSize.height;
     pc.invOutSizeX = 1.f / (float)pc.outSizeX; pc.invOutSizeY = 1.f / (float)pc.outSizeY;
-    pc.bias = 0.001f; pc.invShadowMapX = 1.f / (float)m_shadowMapSize.width; pc.invShadowMapY = 1.f / (float)m_shadowMapSize.height;
-    vkCmdPushConstants(cmd, VkLay(m_resolveHard), VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
-    vkCmdDispatch(cmd, (m_outputSize.width + 7) / 8, (m_outputSize.height + 7) / 8, 1);
+    pc.bias = 0.001f;
+    pc.invShadowMapX = 1.f / (float)m_shadowMapSize.width;
+    pc.invShadowMapY = 1.f / (float)m_shadowMapSize.height;
+    cmd.pushConstants(rhi::ShaderStage::Compute, &pc, sizeof(pc));
+    cmd.dispatch((m_outputSize.width + 7) / 8, (m_outputSize.height + 7) / 8);
+
     if (!m_fgAutoBarrier) {
-        transitionImage(cmd, m_shadowMask.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-            VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-            VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
-            VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+        auto maskTex = rhi::VkRHITexture::createNonOwning(vkDev, m_shadowMask.image(),
+            rhi::toRhiFormat(m_shadowMask.format()), m_outputSize.width, m_outputSize.height);
+        cmd.textureBarrier(*maskTex, rhi::TextureLayout::General, rhi::TextureLayout::ShaderReadOnly);
     }
 }
+// Vk 兼容路径
+void ShadowPass::recordHardSM(VkCommandBuffer cmd, const RenderTargets&, VkBuffer, const SceneGpu&, VkBuffer indirectBuf, uint32_t drawCount) {
+    auto& vkDev = static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
+    rhi::VkRHICommandBuffer rhiCmd(vkDev, cmd);
+    auto rhiIb = rhi::VkRHIBuffer::createNonOwning(vkDev, indirectBuf, VK_WHOLE_SIZE);
+    recordHardSM(rhiCmd, *rhiIb, drawCount);
+}
 
-void ShadowPass::recordPCF(VkCommandBuffer cmd, const RenderTargets&, VkBuffer frameUbo, const SceneGpu& sceneGpu, VkBuffer indirectBuf, uint32_t drawCount) {
+// ── PCF RHI 路径 ──
+void ShadowPass::recordPCF(rhi::RHICommandBuffer& cmd, const rhi::RHIBuffer& indirectBuf, uint32_t drawCount) {
     if (drawCount == 0) { recordNone(cmd); return; }
-    renderShadowMap(cmd, frameUbo, sceneGpu, indirectBuf, drawCount);
-    restoreResolveDesc(*m_set, *m_rhiDevice, m_shadowMap.view(), (VkSampler)(uintptr_t)m_shadowSampler->nativeHandle());
+    renderShadowMap(cmd, indirectBuf, drawCount);
+
+    restoreResolveDesc(*m_set, *m_rhiDevice, m_shadowMap.view(),
+        (VkSampler)(uintptr_t)m_shadowSampler->nativeHandle());
+
+    auto& vkDev = static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
     if (!m_fgAutoBarrier) {
-        transitionImage(cmd, m_shadowMask.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-            VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
-            VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
-            VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
+        auto maskTex = rhi::VkRHITexture::createNonOwning(vkDev, m_shadowMask.image(),
+            rhi::toRhiFormat(m_shadowMask.format()), m_outputSize.width, m_outputSize.height);
+        cmd.textureBarrier(*maskTex, rhi::TextureLayout::Undefined, rhi::TextureLayout::General);
     }
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, VkPipe(m_resolvePCF));
-    VkDescriptorSet ds[2] = {VkSet(m_set), VkSet(m_frameSet)};
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, VkLay(m_resolvePCF), 0, 2, ds, 0, nullptr);
-    ResolvePC pc{}; pc.outSizeX = m_outputSize.width; pc.outSizeY = m_outputSize.height;
+
+    cmd.bindPipelineState(*m_resolvePCF);
+    const rhi::RHIDescriptorSet* ds[2] = {m_set.get(), m_frameSet.get()};
+    cmd.bindDescriptorSets(0, 2, ds);
+
+    ResolvePC pc{};
+    pc.outSizeX = m_outputSize.width; pc.outSizeY = m_outputSize.height;
     pc.invOutSizeX = 1.f / (float)pc.outSizeX; pc.invOutSizeY = 1.f / (float)pc.outSizeY;
-    pc.bias = 0.001f; pc.invShadowMapX = 1.f / (float)m_shadowMapSize.width; pc.invShadowMapY = 1.f / (float)m_shadowMapSize.height;
-    vkCmdPushConstants(cmd, VkLay(m_resolvePCF), VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
-    vkCmdDispatch(cmd, (m_outputSize.width + 7) / 8, (m_outputSize.height + 7) / 8, 1);
+    pc.bias = 0.001f;
+    pc.invShadowMapX = 1.f / (float)m_shadowMapSize.width;
+    pc.invShadowMapY = 1.f / (float)m_shadowMapSize.height;
+    cmd.pushConstants(rhi::ShaderStage::Compute, &pc, sizeof(pc));
+    cmd.dispatch((m_outputSize.width + 7) / 8, (m_outputSize.height + 7) / 8);
+
     if (!m_fgAutoBarrier) {
-        transitionImage(cmd, m_shadowMask.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-            VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-            VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
-            VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+        auto maskTex = rhi::VkRHITexture::createNonOwning(vkDev, m_shadowMask.image(),
+            rhi::toRhiFormat(m_shadowMask.format()), m_outputSize.width, m_outputSize.height);
+        cmd.textureBarrier(*maskTex, rhi::TextureLayout::General, rhi::TextureLayout::ShaderReadOnly);
     }
 }
+void ShadowPass::recordPCF(VkCommandBuffer cmd, const RenderTargets&, VkBuffer, const SceneGpu&, VkBuffer indirectBuf, uint32_t drawCount) {
+    auto& vkDev = static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
+    rhi::VkRHICommandBuffer rhiCmd(vkDev, cmd);
+    auto rhiIb = rhi::VkRHIBuffer::createNonOwning(vkDev, indirectBuf, VK_WHOLE_SIZE);
+    recordPCF(rhiCmd, *rhiIb, drawCount);
+}
 
-void ShadowPass::recordPCSS(VkCommandBuffer cmd, const RenderTargets&, VkBuffer frameUbo, const SceneGpu& sceneGpu, VkBuffer indirectBuf, uint32_t drawCount) {
+// ── PCSS RHI 路径 ──
+void ShadowPass::recordPCSS(rhi::RHICommandBuffer& cmd, const rhi::RHIBuffer& indirectBuf, uint32_t drawCount) {
     if (drawCount == 0) { recordNone(cmd); return; }
-    renderShadowMap(cmd, frameUbo, sceneGpu, indirectBuf, drawCount);
-    restoreResolveDesc(*m_set, *m_rhiDevice, m_shadowMap.view(), (VkSampler)(uintptr_t)m_shadowSampler->nativeHandle());
+    renderShadowMap(cmd, indirectBuf, drawCount);
+
+    restoreResolveDesc(*m_set, *m_rhiDevice, m_shadowMap.view(),
+        (VkSampler)(uintptr_t)m_shadowSampler->nativeHandle());
+
+    auto& vkDev = static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
     if (!m_fgAutoBarrier) {
-        transitionImage(cmd, m_shadowMask.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-            VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
-            VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
-            VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
+        auto maskTex = rhi::VkRHITexture::createNonOwning(vkDev, m_shadowMask.image(),
+            rhi::toRhiFormat(m_shadowMask.format()), m_outputSize.width, m_outputSize.height);
+        cmd.textureBarrier(*maskTex, rhi::TextureLayout::Undefined, rhi::TextureLayout::General);
     }
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, VkPipe(m_resolvePCSS));
-    VkDescriptorSet ds[2] = {VkSet(m_set), VkSet(m_frameSet)};
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, VkLay(m_resolvePCSS), 0, 2, ds, 0, nullptr);
-    PCSS_PC pc{}; pc.outSizeX = m_outputSize.width; pc.outSizeY = m_outputSize.height;
+
+    cmd.bindPipelineState(*m_resolvePCSS);
+    const rhi::RHIDescriptorSet* ds[2] = {m_set.get(), m_frameSet.get()};
+    cmd.bindDescriptorSets(0, 2, ds);
+
+    PCSS_PC pc{};
+    pc.outSizeX = m_outputSize.width; pc.outSizeY = m_outputSize.height;
     pc.invOutSizeX = 1.f / (float)pc.outSizeX; pc.invOutSizeY = 1.f / (float)pc.outSizeY;
-    pc.bias = 0.001f; pc.invShadowMapX = 1.f / (float)m_shadowMapSize.width; pc.invShadowMapY = 1.f / (float)m_shadowMapSize.height;
-    pc.lightSize = 0.03f; pc.maxKernelRadius = 15.0f;
-    vkCmdPushConstants(cmd, VkLay(m_resolvePCSS), VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
-    vkCmdDispatch(cmd, (m_outputSize.width + 7) / 8, (m_outputSize.height + 7) / 8, 1);
+    pc.bias = 0.001f;
+    pc.invShadowMapX = 1.f / (float)m_shadowMapSize.width;
+    pc.invShadowMapY = 1.f / (float)m_shadowMapSize.height;
+    pc.lightSize = 0.03f;
+    pc.maxKernelRadius = 15.0f;
+    cmd.pushConstants(rhi::ShaderStage::Compute, &pc, sizeof(pc));
+    cmd.dispatch((m_outputSize.width + 7) / 8, (m_outputSize.height + 7) / 8);
+
     if (!m_fgAutoBarrier) {
-        transitionImage(cmd, m_shadowMask.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-            VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-            VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
-            VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+        auto maskTex = rhi::VkRHITexture::createNonOwning(vkDev, m_shadowMask.image(),
+            rhi::toRhiFormat(m_shadowMask.format()), m_outputSize.width, m_outputSize.height);
+        cmd.textureBarrier(*maskTex, rhi::TextureLayout::General, rhi::TextureLayout::ShaderReadOnly);
     }
 }
+void ShadowPass::recordPCSS(VkCommandBuffer cmd, const RenderTargets&, VkBuffer, const SceneGpu&, VkBuffer indirectBuf, uint32_t drawCount) {
+    auto& vkDev = static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
+    rhi::VkRHICommandBuffer rhiCmd(vkDev, cmd);
+    auto rhiIb = rhi::VkRHIBuffer::createNonOwning(vkDev, indirectBuf, VK_WHOLE_SIZE);
+    recordPCSS(rhiCmd, *rhiIb, drawCount);
+}
 
-void ShadowPass::recordVSM(VkCommandBuffer cmd, const RenderTargets&, VkBuffer, const SceneGpu&, VkBuffer indirectBuf, uint32_t drawCount) {
+// ── VSM RHI 路径：VSM 生成 + 双向模糊 + resolve ──
+void ShadowPass::recordVSM(rhi::RHICommandBuffer& cmd, const rhi::RHIBuffer& indirectBuf, uint32_t drawCount) {
     if (drawCount == 0) { recordNone(cmd); return; }
     computeSunViewProj(m_sunDir, m_sceneAabbMin, m_sceneAabbMax, m_shadowUbo.mapped());
-    transitionImage(cmd, m_vsmMap.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-        VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-        VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
-        VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
-    transitionImage(cmd, m_shadowMap.image(), VK_IMAGE_ASPECT_DEPTH_BIT,
-        VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
-        VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
-        VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT, VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT);
+
+    auto& vkDev = static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
+    // 非拥有型纹理包装
+    auto vsmTex = rhi::VkRHITexture::createNonOwning(vkDev, m_vsmMap.image(),
+        rhi::toRhiFormat(m_vsmMap.format()), m_shadowMapSize.width, m_shadowMapSize.height);
+    auto depthTex = rhi::VkRHITexture::createNonOwning(vkDev, m_shadowMap.image(),
+        rhi::toRhiFormat(m_shadowMap.format()), m_shadowMapSize.width, m_shadowMapSize.height);
+    auto vsmView = rhi::VkRHITextureView::createNonOwning(vkDev, m_vsmMap.view());
+    auto depthView = rhi::VkRHITextureView::createNonOwning(vkDev, m_shadowMap.view());
+
+    // 过渡到 attachment 布局
+    cmd.textureBarrier(*vsmTex, rhi::TextureLayout::Undefined, rhi::TextureLayout::ColorAttachment);
+    cmd.textureBarrier(*depthTex, rhi::TextureLayout::Undefined, rhi::TextureLayout::DepthAttachment);
+
+    // VSM 生成 pass（MRT: color + depth）
     {
-        VkRenderingAttachmentInfo color{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
-        color.imageView = m_vsmMap.view(); color.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-        color.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR; color.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-        color.clearValue.color = {{1.0f, 1.0f, 0.0f, 0.0f}};
-        VkRenderingAttachmentInfo depth{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
-        depth.imageView = m_shadowMap.view(); depth.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
-        depth.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR; depth.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-        depth.clearValue.depthStencil = {1.0f, 0};
-        VkRenderingInfo ri{VK_STRUCTURE_TYPE_RENDERING_INFO};
-        ri.renderArea = {{0, 0}, m_shadowMapSize}; ri.layerCount = 1;
-        ri.colorAttachmentCount = 1; ri.pColorAttachments = &color; ri.pDepthAttachment = &depth;
-        vkCmdBeginRendering(cmd, &ri);
-        VkViewport vp{0, 0, (float)m_shadowMapSize.width, (float)m_shadowMapSize.height, 0, 1};
-        VkRect2D sc{{0, 0}, m_shadowMapSize};
-        vkCmdSetViewport(cmd, 0, 1, &vp); vkCmdSetScissor(cmd, 0, 1, &sc);
-        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, VkPipe(m_vsmGenPipeline));
-        VkDescriptorSet smDs = VkSet(m_smSet);
-        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, VkLay(m_vsmGenPipeline), 0, 1, &smDs, 0, nullptr);
-        vkCmdBindIndexBuffer(cmd, m_indexBuffer, 0, VK_INDEX_TYPE_UINT32);
-        for (uint32_t d = 0; d < drawCount; ++d) {
-            VkDeviceSize offset = d > 0 ? d * sizeof(VkDrawIndexedIndirectCommand) : 0;
-            vkCmdDrawIndexedIndirect(cmd, indirectBuf, offset, 1, sizeof(VkDrawIndexedIndirectCommand));
-        }
-        vkCmdEndRendering(cmd);
+        rhi::RenderingAttachmentInfo colorAttach{};
+        colorAttach.view = vsmView.get();
+        colorAttach.loadOp = rhi::AttachmentLoadOp::Clear;
+        colorAttach.storeOp = rhi::AttachmentStoreOp::Store;
+        colorAttach.clearColor[0] = 1.0f; colorAttach.clearColor[1] = 1.0f;
+        colorAttach.clearColor[2] = 0.0f; colorAttach.clearColor[3] = 0.0f;
+
+        rhi::RenderingAttachmentInfo depthAttach{};
+        depthAttach.view = depthView.get();
+        depthAttach.loadOp = rhi::AttachmentLoadOp::Clear;
+        depthAttach.storeOp = rhi::AttachmentStoreOp::Store;
+        depthAttach.clearDepth = 1.0f;
+
+        cmd.beginRendering(&colorAttach, 1, &depthAttach, m_shadowMapSize.width, m_shadowMapSize.height);
+        cmd.setViewport(0, 0, (float)m_shadowMapSize.width, (float)m_shadowMapSize.height);
+        cmd.setScissor(0, 0, m_shadowMapSize.width, m_shadowMapSize.height);
+        cmd.bindPipelineState(*m_vsmGenPipeline);
+        cmd.bindDescriptorSet(0, *m_smSet);
+
+        auto ibo = rhi::VkRHIBuffer::createNonOwning(vkDev, m_indexBuffer, VK_WHOLE_SIZE);
+        cmd.bindIndexBuffer(*ibo, 0, false);
+        cmd.drawIndexedIndirect(indirectBuf, 0, drawCount, sizeof(VkDrawIndexedIndirectCommand));
+        cmd.endRendering();
     }
-    auto blurDispatch = [&](VkImageView inView, VkImageLayout, VkImageView outView, VkImageLayout, uint32_t dir) {
-        auto& vkD2 = static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
-        auto iv = rhi::VkRHITextureView::createNonOwning(vkD2, inView);
-        auto ov = rhi::VkRHITextureView::createNonOwning(vkD2, outView);
+
+    // VSM 双向模糊（RHI 路径）
+    auto blurDispatch = [&](rhi::RHITextureView& inView, rhi::TextureLayout inLayout,
+                             rhi::RHITextureView& outView, rhi::TextureLayout outLayout, uint32_t dir) {
+        // 更新模糊描述符
         m_vsmBlurSet->write({
-            {0, rhi::DescriptorType::SampledImage, iv.get()},
-            {1, rhi::DescriptorType::StorageImage, ov.get()},
+            {0, rhi::DescriptorType::SampledImage, &inView},
+            {1, rhi::DescriptorType::StorageImage, &outView},
         });
-        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, VkPipe(m_vsmBlurPipeline));
-        VkDescriptorSet bs = VkSet(m_vsmBlurSet);
-        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, VkLay(m_vsmBlurPipeline), 0, 1, &bs, 0, nullptr);
+        cmd.bindPipelineState(*m_vsmBlurPipeline);
+        cmd.bindDescriptorSet(0, *m_vsmBlurSet);
         struct { uint32_t x, y; float ix, iy; uint32_t dir, pad; } pc;
         pc.x = m_shadowMapSize.width; pc.y = m_shadowMapSize.height;
-        pc.ix = 1.f / (float)pc.x; pc.iy = 1.f / (float)pc.y; pc.dir = dir; pc.pad = 0;
-        vkCmdPushConstants(cmd, VkLay(m_vsmBlurPipeline), VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
-        vkCmdDispatch(cmd, (m_shadowMapSize.width + 7) / 8, (m_shadowMapSize.height + 7) / 8, 1);
+        pc.ix = 1.f / (float)pc.x; pc.iy = 1.f / (float)pc.y;
+        pc.dir = dir; pc.pad = 0;
+        cmd.pushConstants(rhi::ShaderStage::Compute, &pc, sizeof(pc));
+        cmd.dispatch((m_shadowMapSize.width + 7) / 8, (m_shadowMapSize.height + 7) / 8);
     };
-    transitionImage(cmd, m_vsmMap.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-        VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-        VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
-        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
-    transitionImage(cmd, m_vsmBlur.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-        VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
-        VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
-        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
-    blurDispatch(m_vsmMap.view(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, m_vsmBlur.view(), VK_IMAGE_LAYOUT_GENERAL, 0);
-    transitionImage(cmd, m_vsmBlur.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-        VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
-        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
-    transitionImage(cmd, m_vsmMap.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL,
-        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
-        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
-    blurDispatch(m_vsmBlur.view(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, m_vsmMap.view(), VK_IMAGE_LAYOUT_GENERAL, 1);
-    transitionImage(cmd, m_vsmMap.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-        VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
-        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
-    transitionImage(cmd, m_shadowMap.image(), VK_IMAGE_ASPECT_DEPTH_BIT,
-        VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-        VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT, VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
-        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+
+    auto blurTex = rhi::VkRHITexture::createNonOwning(vkDev, m_vsmBlur.image(),
+        rhi::toRhiFormat(m_vsmBlur.format()), m_shadowMapSize.width, m_shadowMapSize.height);
+    auto blurView = rhi::VkRHITextureView::createNonOwning(vkDev, m_vsmBlur.view());
+
+    // 水平模糊：VSM map → blur scratch
+    cmd.textureBarrier(*vsmTex, rhi::TextureLayout::ColorAttachment, rhi::TextureLayout::ShaderReadOnly);
+    cmd.textureBarrier(*blurTex, rhi::TextureLayout::Undefined, rhi::TextureLayout::General);
+    blurDispatch(*vsmView, rhi::TextureLayout::ShaderReadOnly, *blurView, rhi::TextureLayout::General, 0);
+
+    // 垂直模糊：blur scratch → VSM map
+    cmd.textureBarrier(*blurTex, rhi::TextureLayout::General, rhi::TextureLayout::ShaderReadOnly);
+    cmd.textureBarrier(*vsmTex, rhi::TextureLayout::ShaderReadOnly, rhi::TextureLayout::General);
+    blurDispatch(*blurView, rhi::TextureLayout::ShaderReadOnly, *vsmView, rhi::TextureLayout::General, 1);
+
+    // VSM map 最终布局
+    cmd.textureBarrier(*vsmTex, rhi::TextureLayout::General, rhi::TextureLayout::ShaderReadOnly);
+    // depth map 也过渡到可读布局
+    cmd.textureBarrier(*depthTex, rhi::TextureLayout::DepthAttachment, rhi::TextureLayout::ShaderReadOnly);
+
+    // Resolve dispatch
     restoreResolveDesc(*m_set, *m_rhiDevice, m_vsmMap.view(), (VkSampler)(uintptr_t)m_vsmSampler->nativeHandle());
+    auto maskTex = rhi::VkRHITexture::createNonOwning(vkDev, m_shadowMask.image(),
+        rhi::toRhiFormat(m_shadowMask.format()), m_outputSize.width, m_outputSize.height);
+
     if (!m_fgAutoBarrier) {
-        transitionImage(cmd, m_shadowMask.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-            VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
-            VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
-            VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
+        cmd.textureBarrier(*maskTex, rhi::TextureLayout::Undefined, rhi::TextureLayout::General);
     }
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, VkPipe(m_resolveVSM));
-    VkDescriptorSet ds[2] = {VkSet(m_set), VkSet(m_frameSet)};
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, VkLay(m_resolveVSM), 0, 2, ds, 0, nullptr);
-    {
-        ResolvePC pc{}; pc.outSizeX = m_outputSize.width; pc.outSizeY = m_outputSize.height;
-        pc.invOutSizeX = 1.f / (float)pc.outSizeX; pc.invOutSizeY = 1.f / (float)pc.outSizeY;
-        pc.bias = 0.001f; pc.invShadowMapX = 1.f / (float)m_shadowMapSize.width; pc.invShadowMapY = 1.f / (float)m_shadowMapSize.height;
-        vkCmdPushConstants(cmd, VkLay(m_resolveVSM), VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
-    }
-    vkCmdDispatch(cmd, (m_outputSize.width + 7) / 8, (m_outputSize.height + 7) / 8, 1);
+
+    cmd.bindPipelineState(*m_resolveVSM);
+    const rhi::RHIDescriptorSet* ds[2] = {m_set.get(), m_frameSet.get()};
+    cmd.bindDescriptorSets(0, 2, ds);
+
+    ResolvePC pc{};
+    pc.outSizeX = m_outputSize.width; pc.outSizeY = m_outputSize.height;
+    pc.invOutSizeX = 1.f / (float)pc.outSizeX; pc.invOutSizeY = 1.f / (float)pc.outSizeY;
+    pc.bias = 0.001f;
+    pc.invShadowMapX = 1.f / (float)m_shadowMapSize.width;
+    pc.invShadowMapY = 1.f / (float)m_shadowMapSize.height;
+    cmd.pushConstants(rhi::ShaderStage::Compute, &pc, sizeof(pc));
+    cmd.dispatch((m_outputSize.width + 7) / 8, (m_outputSize.height + 7) / 8);
+
     if (!m_fgAutoBarrier) {
-        transitionImage(cmd, m_shadowMask.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-            VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-            VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
-            VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+        cmd.textureBarrier(*maskTex, rhi::TextureLayout::General, rhi::TextureLayout::ShaderReadOnly);
     }
 }
+// Vk 兼容路径
+void ShadowPass::recordVSM(VkCommandBuffer cmd, const RenderTargets&, VkBuffer, const SceneGpu&, VkBuffer indirectBuf, uint32_t drawCount) {
+    auto& vkDev = static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
+    rhi::VkRHICommandBuffer rhiCmd(vkDev, cmd);
+    auto rhiIb = rhi::VkRHIBuffer::createNonOwning(vkDev, indirectBuf, VK_WHOLE_SIZE);
+    recordVSM(rhiCmd, *rhiIb, drawCount);
+}
 
-void ShadowPass::recordRTHard(VkCommandBuffer cmd) {
+// ── RT Hard RHI 路径：硬件光追硬阴影 ──
+void ShadowPass::recordRTHard(rhi::RHICommandBuffer& cmd) {
     if (!m_rtHardPipeline) return;
-    transitionImage(cmd, m_shadowMask.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-        VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
-        VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
-        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, VkPipe(m_rtHardPipeline));
-    VkDescriptorSet ds[2] = {VkSet(m_rtSet), VkSet(m_frameSet)};
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, VkLay(m_rtHardPipeline), 0, 2, ds, 0, nullptr);
+    auto& vkDev = static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
+    auto maskTex = rhi::VkRHITexture::createNonOwning(vkDev, m_shadowMask.image(),
+        rhi::toRhiFormat(m_shadowMask.format()), m_outputSize.width, m_outputSize.height);
+
+    cmd.textureBarrier(*maskTex, rhi::TextureLayout::Undefined, rhi::TextureLayout::General);
+
+    cmd.bindPipelineState(*m_rtHardPipeline);
+    const rhi::RHIDescriptorSet* ds[2] = {m_rtSet.get(), m_frameSet.get()};
+    cmd.bindDescriptorSets(0, 2, ds);
+
     struct { uint32_t x, y; float ix, iy; } pc;
-    pc.x = m_outputSize.width; pc.y = m_outputSize.height; pc.ix = 1.f / (float)pc.x; pc.iy = 1.f / (float)pc.y;
-    vkCmdPushConstants(cmd, VkLay(m_rtHardPipeline), VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
-    vkCmdDispatch(cmd, (m_outputSize.width + 7) / 8, (m_outputSize.height + 7) / 8, 1);
-    transitionImage(cmd, m_shadowMask.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-        VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
-        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+    pc.x = m_outputSize.width; pc.y = m_outputSize.height;
+    pc.ix = 1.f / (float)pc.x; pc.iy = 1.f / (float)pc.y;
+    cmd.pushConstants(rhi::ShaderStage::Compute, &pc, sizeof(pc));
+    cmd.dispatch((m_outputSize.width + 7) / 8, (m_outputSize.height + 7) / 8);
+
+    cmd.textureBarrier(*maskTex, rhi::TextureLayout::General, rhi::TextureLayout::ShaderReadOnly);
+}
+// Vk 兼容路径
+void ShadowPass::recordRTHard(VkCommandBuffer cmd) {
+    auto& vkDev = static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
+    rhi::VkRHICommandBuffer rhiCmd(vkDev, cmd);
+    recordRTHard(rhiCmd);
 }
 
-void ShadowPass::recordRTSoft(VkCommandBuffer cmd) {
+// ── RT Soft RHI 路径：硬件光追软阴影（多采样） ──
+void ShadowPass::recordRTSoft(rhi::RHICommandBuffer& cmd) {
     if (!m_rtSoftPipeline) { recordRTHard(cmd); return; }
-    transitionImage(cmd, m_shadowMask.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-        VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
-        VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
-        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, VkPipe(m_rtSoftPipeline));
-    VkDescriptorSet ds[2] = {VkSet(m_rtSet), VkSet(m_frameSet)};
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, VkLay(m_rtSoftPipeline), 0, 2, ds, 0, nullptr);
+    auto& vkDev = static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
+    auto maskTex = rhi::VkRHITexture::createNonOwning(vkDev, m_shadowMask.image(),
+        rhi::toRhiFormat(m_shadowMask.format()), m_outputSize.width, m_outputSize.height);
+
+    cmd.textureBarrier(*maskTex, rhi::TextureLayout::Undefined, rhi::TextureLayout::General);
+
+    cmd.bindPipelineState(*m_rtSoftPipeline);
+    const rhi::RHIDescriptorSet* ds[2] = {m_rtSet.get(), m_frameSet.get()};
+    cmd.bindDescriptorSets(0, 2, ds);
+
     struct { uint32_t x, y; float ix, iy; uint32_t fi; float sr; uint32_t rc; uint32_t pad; } pc;
     pc.x = m_outputSize.width; pc.y = m_outputSize.height;
     pc.ix = 1.f / (float)pc.x; pc.iy = 1.f / (float)pc.y;
     pc.fi = m_currentFrameIndex; pc.sr = m_rtSunRadius; pc.rc = (uint32_t)m_rtRayCount; pc.pad = 0;
-    vkCmdPushConstants(cmd, VkLay(m_rtSoftPipeline), VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
-    vkCmdDispatch(cmd, (m_outputSize.width + 7) / 8, (m_outputSize.height + 7) / 8, 1);
-    transitionImage(cmd, m_shadowMask.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-        VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
-        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+    cmd.pushConstants(rhi::ShaderStage::Compute, &pc, sizeof(pc));
+    cmd.dispatch((m_outputSize.width + 7) / 8, (m_outputSize.height + 7) / 8);
+
+    cmd.textureBarrier(*maskTex, rhi::TextureLayout::General, rhi::TextureLayout::ShaderReadOnly);
+}
+void ShadowPass::recordRTSoft(VkCommandBuffer cmd) {
+    auto& vkDev = static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
+    rhi::VkRHICommandBuffer rhiCmd(vkDev, cmd);
+    recordRTSoft(rhiCmd);
 }
 
 // ════════════════════════════════════════════════════════════════

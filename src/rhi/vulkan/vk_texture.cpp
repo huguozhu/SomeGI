@@ -19,6 +19,21 @@ static VkFormat toVkFormat(Format f) {
     }
 }
 
+// VkFormat → RHI Format 反向映射（用于非拥有型包装）
+Format toRhiFormat(VkFormat vkFmt) {
+    switch (vkFmt) {
+        case VK_FORMAT_R8_UNORM:            return Format::R8_UNORM;
+        case VK_FORMAT_R8G8B8A8_UNORM:      return Format::R8G8B8A8_UNORM;
+        case VK_FORMAT_R16G16B16A16_SFLOAT: return Format::R16G16B16A16_SFLOAT;
+        case VK_FORMAT_R32_UINT:            return Format::R32_UINT;
+        case VK_FORMAT_R32_SFLOAT:          return Format::R32_SFLOAT;
+        case VK_FORMAT_R32G32_SFLOAT:       return Format::R32G32_SFLOAT;
+        case VK_FORMAT_D32_SFLOAT:          return Format::D32_SFLOAT;
+        case VK_FORMAT_B8G8R8A8_UNORM:      return Format::B8G8R8A8_UNORM;
+        default: return Format::R8G8B8A8_UNORM;
+    }
+}
+
 static VkImageUsageFlags toVkUsage(TextureUsage u) {
     VkImageUsageFlags f = 0;
     if ((uint32_t)u & (uint32_t)TextureUsage::Sampled)         f |= VK_IMAGE_USAGE_SAMPLED_BIT;
@@ -50,7 +65,24 @@ std::unique_ptr<RHITexture> VkRHITexture::create(VkRHIDevice& device, const Text
     return std::unique_ptr<RHITexture>(new VkRHITexture(device, desc));
 }
 
-VkRHITexture::~VkRHITexture() { if (m_image) vmaDestroyImage(m_device.vma(), m_image, m_allocation); }
+VkRHITexture::VkRHITexture(VkRHIDevice& d, VkImage image, Format format,
+                             uint32_t width, uint32_t height, uint32_t mipLevels)
+    : m_device(d), m_image(image), m_ownsImage(false) {
+    m_desc.format = format;
+    m_desc.width = width;
+    m_desc.height = height;
+    m_desc.mipLevels = mipLevels;
+}
+
+std::unique_ptr<RHITexture> VkRHITexture::createNonOwning(VkRHIDevice& device, VkImage image,
+                                                            Format format, uint32_t width, uint32_t height,
+                                                            uint32_t mipLevels) {
+    return std::unique_ptr<RHITexture>(new VkRHITexture(device, image, format, width, height, mipLevels));
+}
+
+VkRHITexture::~VkRHITexture() {
+    if (m_ownsImage && m_image) vmaDestroyImage(m_device.vma(), m_image, m_allocation);
+}
 
 std::unique_ptr<RHITextureView> VkRHITexture::createView(const TextureViewDesc& desc) {
     return VkRHITextureView::create(m_device, *this, desc);
