@@ -19,7 +19,7 @@ public:
     uint64_t deviceAddress() const override;
     void* nativeHandle() const override { return (void*)m_resource; }
 
-    ID3D12Resource* resource() { return m_resource; }
+    ID3D12Resource* resource() const { return m_resource; }
     D3D12_GPU_VIRTUAL_ADDRESS gpuAddress() const { return m_gpuAddr; }
 
     // 非拥有型包装（用于临时包装已有 Vulkan 资源，暂不实现）

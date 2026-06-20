@@ -103,11 +103,19 @@ public:
     // ── D3D12 特定 ──
     ID3D12GraphicsCommandList* cmdList() { return m_cmdList; }
 
+    // 获取或创建 Indirect Draw 命令签名
+    ID3D12CommandSignature* getDrawIndexedSignature();
+    ID3D12CommandSignature* getDrawIndexedCountSignature();
+
 private:
     D3D12RHIDevice& m_device;
     D3D12RHICommandPool& m_pool;
     ID3D12GraphicsCommandList* m_cmdList = nullptr;
     bool m_recording = false;
+
+    // 缓存的命令签名
+    ID3D12CommandSignature* m_drawIndexedSig = nullptr;
+    ID3D12CommandSignature* m_drawIndexedCountSig = nullptr;
 };
 
 // ════════════════════════════════════════════════════════════════
