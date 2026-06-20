@@ -64,10 +64,19 @@ void NdgiPass::writeInitDescriptors(const NdgiResources& res){ if(!m_initSet)ret
     m_initSet->write({{0,rhi::DescriptorType::StorageBuffer,nullptr,w1.get()},{1,rhi::DescriptorType::StorageBuffer,nullptr,b1.get()},{2,rhi::DescriptorType::StorageBuffer,nullptr,w2.get()},{3,rhi::DescriptorType::StorageBuffer,nullptr,b2.get()},{4,rhi::DescriptorType::StorageBuffer,nullptr,w3.get()},{5,rhi::DescriptorType::StorageBuffer,nullptr,b3.get()},{6,rhi::DescriptorType::StorageBuffer,nullptr,sb.get()},{7,rhi::DescriptorType::StorageBuffer,nullptr,sc.get()}});
 }
 // VkCompat record — 使用 RHI PSO 的 nativeHandle + layout
-void NdgiPass::initWeights(VkCommandBuffer vkCmd){ if(!m_rtSupported||!m_initPipeline)return;
-    auto& p=static_cast<rhi::VkRHIPipelineState&>(*m_initPipeline); VkDescriptorSet ds=(VkDescriptorSet)(uintptr_t)m_initSet->nativeHandle();
-    vkCmdBindPipeline(vkCmd,VK_PIPELINE_BIND_POINT_COMPUTE,(VkPipeline)(uintptr_t)p.nativeHandle()); vkCmdBindDescriptorSets(vkCmd,VK_PIPELINE_BIND_POINT_COMPUTE,p.layout(),0,1,&ds,0,nullptr);
-    struct{uint32_t seed;float scale;uint32_t p0,p1;}pc{42,1.f,0,0}; vkCmdPushConstants(vkCmd,p.layout(),VK_SHADER_STAGE_COMPUTE_BIT,0,16,&pc); vkCmdDispatch(vkCmd,1,1,1);
+// RHI 路径：初始化 NDGI 神经网络权重
+void NdgiPass::initWeights(rhi::RHICommandBuffer& cmd){ if(!m_rtSupported||!m_initPipeline)return;
+    cmd.bindPipelineState(*m_initPipeline);
+    cmd.bindDescriptorSet(0, *m_initSet);
+    struct{uint32_t seed;float scale;uint32_t p0,p1;}pc{42,1.f,0,0};
+    cmd.pushConstants(rhi::ShaderStage::Compute, &pc, 16);
+    cmd.dispatch(1, 1, 1);
+}
+// Vk 兼容路径
+void NdgiPass::initWeights(VkCommandBuffer vkCmd){
+    auto& vkDev = static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
+    rhi::VkRHICommandBuffer rhiCmd(vkDev, vkCmd);
+    initWeights(rhiCmd);
 }
 void NdgiPass::record(rhi::RHICommandBuffer& cmd,NdgiResources& res,uint32_t fi,glm::vec3 o,glm::vec3 s){
     record(static_cast<rhi::VkRHICommandBuffer&>(cmd).vkCmd(),res,fi,o,s);}

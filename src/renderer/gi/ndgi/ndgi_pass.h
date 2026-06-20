@@ -13,6 +13,7 @@ public:
     void destroy();
     void bindResources(const NdgiResources& res, SceneRtAS& rtAS, const SceneGpu& scene, const RenderTargets& rt, VkBuffer frameUbo);
     void writeInitDescriptors(const NdgiResources& res);
+    void initWeights(rhi::RHICommandBuffer& cmd);
     void initWeights(VkCommandBuffer cmd);
     void record(rhi::RHICommandBuffer& cmd, NdgiResources& res, uint32_t frameIndex, glm::vec3 ddgiOrigin, glm::vec3 ddgiSpacing);
     void record(VkCommandBuffer cmd, NdgiResources& res, uint32_t frameIndex, glm::vec3 ddgiOrigin, glm::vec3 ddgiSpacing);
