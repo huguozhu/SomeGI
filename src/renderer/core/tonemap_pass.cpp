@@ -56,12 +56,12 @@ void TonemapPass::init(rhi::RHIDevice& d, rhi::RHISampler& linearSampler) {
     m_sampler.release();
 
     rhi::DescSetLayoutDesc layoutDesc; layoutDesc.debugName = "Tonemap";
-    // HLSL registers: CBV b0, SRV t0, Sampler s1, UAV u2
-    auto addB = [&](uint32_t vkBind, rhi::DescriptorType t, uint32_t hlslReg) {
-        rhi::DescriptorBinding b; b.binding = vkBind; b.type = t; b.hlslRegister = hlslReg;
+    auto addB = [&](uint32_t vk, rhi::DescriptorType t, uint32_t hlsl) {
+        rhi::DescriptorBinding b; b.binding = vk; b.type = t; b.hlslRegister = hlsl;
         layoutDesc.bindings.push_back(b);
     };
-    addB(0, rhi::DescriptorType::UniformBuffer, 0); // CBV b0 (push const)
+    // HLSL: CBV b0 + SRV t0 + Sampler s1 + UAV u2
+    addB(0, rhi::DescriptorType::UniformBuffer, 0); // CBV b0
     addB(1, rhi::DescriptorType::SampledImage, 0);  // SRV t0
     addB(2, rhi::DescriptorType::Sampler, 1);       // Sampler s1
     addB(3, rhi::DescriptorType::StorageImage, 2);  // UAV u2
@@ -70,7 +70,7 @@ void TonemapPass::init(rhi::RHIDevice& d, rhi::RHISampler& linearSampler) {
 
     // D3D12 DXIL shader 加载
     rhi::ShaderDesc sd; sd.stage = rhi::ShaderStage::Compute;
-    sd.entryPoint = "cs_main"; sd.format = rhi::ShaderFormat::DXIL;
+    sd.entryPoint = "comp_main"; sd.format = rhi::ShaderFormat::DXIL;
     std::ifstream f("build/shaders_dxil/tonemap/tonemap.dxil", std::ios::binary);
     if (f) {
         std::vector<uint8_t> bytecode(std::istreambuf_iterator<char>(f), {});

@@ -82,6 +82,14 @@ def compile_one(spv_path, output_dir):
         print(f"  FAIL spirv-cross: {name} — {ret.stderr.strip()[:200]}")
         return False
 
+    # Post-process: 给无 register 的 cbuffer 添加 register(b0, space0)
+    with open(hlsl_path, 'r') as f:
+        hlsl = f.read()
+    import re
+    hlsl = re.sub(r'^(cbuffer\s+\w+)\s*$', r'\1 : register(b0, space0)', hlsl, flags=re.MULTILINE)
+    with open(hlsl_path, 'w') as f:
+        f.write(hlsl)
+
     # Step 2: HLSL → DXIL
     ret = subprocess.run([
         DXC, "-T", profile, "-E", entry,

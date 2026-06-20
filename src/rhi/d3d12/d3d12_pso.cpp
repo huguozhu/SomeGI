@@ -108,10 +108,14 @@ void D3D12RHIPipelineState::createRootSignature(
             D3D12_DESCRIPTOR_RANGE1 r{};
             r.RangeType = toD3D12RangeType(b.type);
             r.NumDescriptors = b.count;
-            r.BaseShaderRegister = b.hlslRegister ? b.hlslRegister : b.binding;
+            r.BaseShaderRegister = (b.hlslRegister != ~0u ? b.hlslRegister : b.binding);
             r.RegisterSpace = (UINT)s;
             r.Flags = D3D12_DESCRIPTOR_RANGE_FLAG_NONE;
             r.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+
+            const char* rnames[] = {"SRV","UAV","CBV","SMP"};
+            std::printf("[d3d12]   bind=%u type=%u range=%s reg=%u\n",
+                b.binding, (unsigned)b.type, rnames[(int)r.RangeType], r.BaseShaderRegister);
 
             // D3D12 要求采样器必须在独立的 descriptor table 中
             if (r.RangeType == D3D12_DESCRIPTOR_RANGE_TYPE_SAMPLER)
