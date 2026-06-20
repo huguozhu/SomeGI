@@ -130,16 +130,22 @@ SwapchainFrame D3D12RHISwapchain::acquireNextFrame() {
 }
 
 void D3D12RHISwapchain::present(const SwapchainFrame& frame) {
-    // 无垂直同步 + tearing
-    UINT flags = 0;
-    UINT interval = 1;
-    m_swapchain->Present(interval, flags);
-
-    // 信号本帧 fence
+    presentCurrentFrame();
+    // 信号本帧 fence（acquire 时等待）
     auto& sync = m_syncs[frame.frameInFlight];
     sync.fenceValue++;
     m_device.commandQueue()->Signal(sync.fence, sync.fenceValue);
     sync.fence->SetEventOnCompletion(sync.fenceValue, sync.fenceEvent);
+}
+
+void D3D12RHISwapchain::presentCurrentFrame() const {
+    m_swapchain->Present(1, 0);
+}
+
+void D3D12RHISwapchain::signalSubmitFence(ID3D12CommandQueue* queue, uint64_t fenceVal) {
+    auto& sync = m_syncs[m_frameIndex % kFrameCount];
+    sync.fenceValue = fenceVal;
+    queue->Signal(sync.fence, fenceVal);
 }
 
 void D3D12RHISwapchain::recreate() {

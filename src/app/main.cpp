@@ -4,6 +4,9 @@
 #include "rhi/base/device.h"
 #include "rhi/base/swapchain.h"
 #include "rhi/base/command_buffer.h"
+#include "rhi/base/shader.h"
+#include "rhi/base/pipeline_state.h"
+#include "rhi/base/fence.h"
 #define GLFW_EXPOSE_NATIVE_WIN32
 #include <GLFW/glfw3.h>
 #include <GLFW/glfw3native.h>
@@ -12,6 +15,8 @@
 #include <cstring>
 #include <exception>
 #include <filesystem>
+#include <fstream>
+#include <vector>
 
 namespace {
 
@@ -27,7 +32,7 @@ struct CliConfig {
     bool captureCompare = false;      // --capture-compare：截帧对比
     double refThreshold = 40.0;       // --ref-threshold N
     // 后端选择
-    const char* backend = "vulkan";   // --backend vulkan|d3d12
+    const char* backend = "d3d12";   // --backend vulkan|d3d12
 };
 
 CliConfig parseCli(int argc, char** argv) {
@@ -105,6 +110,30 @@ int main(int argc, char** argv) {
             auto cmdPool = d3d12Device->createCommandPool();
             std::unique_ptr<somegi::rhi::RHICommandBuffer> cmdBuf(cmdPool->allocateRaw());
 
+            // 加载 DXIL compute shader（如果有）
+            std::vector<uint8_t> csBytecode;
+            {
+                std::ifstream f("build/shaders_dxil/ssao/ssao.dxil", std::ios::binary);
+                if (f) {
+                    csBytecode.assign(std::istreambuf_iterator<char>(f),
+                                      std::istreambuf_iterator<char>());
+                    std::printf("[d3d12] loaded ssao.dxil (%zu bytes)\n", csBytecode.size());
+                }
+            }
+
+            if (!csBytecode.empty()) {
+                somegi::rhi::ShaderDesc sd;
+                sd.stage = somegi::rhi::ShaderStage::Compute;
+                sd.entryPoint = "main";
+                auto csShader = d3d12Device->createShader(sd, csBytecode.data(), csBytecode.size());
+                std::printf("[d3d12] shader compiled: %zu bytes DXIL\n", csBytecode.size());
+                // PSO 创建需要 root signature 匹配 shader 资源 — Phase 5
+            }
+
+            // 创建 fence 用于提交同步
+            auto submitFence = d3d12Device->createFence(false);
+            uint64_t fenceVal = 0;
+
             std::printf("[d3d12] clear loop: press ESC or close window to exit\n");
             while (!glfwWindowShouldClose(win)) {
                 glfwPollEvents();
@@ -133,7 +162,12 @@ int main(int argc, char** argv) {
 
                 somegi::rhi::SubmitDesc sd{};
                 sd.commandBuffer = cmdBuf.get();
+                sd.signalFence = submitFence.get();
                 d3d12Device->submit(sd);
+
+                // 等待提交完成
+                d3d12Device->waitForFence(*submitFence, UINT64_MAX);
+                submitFence->reset();
 
                 swapchain->present(frame);
             }

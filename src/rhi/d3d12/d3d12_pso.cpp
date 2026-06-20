@@ -261,9 +261,14 @@ void D3D12RHIPipelineState::createComputePSO(const ComputePSODesc& desc) {
         auto* d3dShader = static_cast<const D3D12RHIShader*>(desc.computeShader);
         psd.CS = { d3dShader->bytecodeData(), d3dShader->bytecodeSize() };
     }
-    if (FAILED(m_device.device()->CreateComputePipelineState(&psd,
-            IID_PPV_ARGS(&m_pipeline))))
-        throw std::runtime_error("[d3d12] CreateComputePipelineState failed");
+    HRESULT hr = m_device.device()->CreateComputePipelineState(&psd,
+        IID_PPV_ARGS(&m_pipeline));
+    if (FAILED(hr)) {
+        char buf[256];
+        std::snprintf(buf, sizeof(buf),
+            "[d3d12] CreateComputePipelineState failed: HRESULT=0x%08X", (unsigned)hr);
+        throw std::runtime_error(buf);
+    }
 }
 
 // ════════════════════════════════════════════════════════════════

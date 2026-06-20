@@ -210,9 +210,11 @@ void D3D12RHIDevice::submit(const SubmitDesc& desc) {
 }
 
 void D3D12RHIDevice::present(const RHISwapchain& swapchain, const RHISemaphore*) {
-    // D3D12 swapchain::present 在 swapchain 类中处理
-    // 这里仅作为接口占位
-    (void)swapchain;
+    auto& d3dSwap = static_cast<const D3D12RHISwapchain&>(swapchain);
+    // 提交命令队列前先确保所有提交完成
+    // Phase 5: 使用 fence 精确同步
+    d3dSwap.presentCurrentFrame();
+    resetDescriptorHeap(); // 每帧重置描述符堆
 }
 
 void D3D12RHIDevice::waitForFence(const RHIFence& fence, uint64_t timeoutNs) {
