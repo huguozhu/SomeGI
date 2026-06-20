@@ -1624,6 +1624,52 @@ void App::runD3D12() {
     auto submitFence = d3dDevice->createFence(false);
 
     // 加载简单三角形 shader（验证图形管线）
+    // 从 SPIR-V reflection JSON 自动生成 DescriptorSetLayout
+    auto buildLayoutFromReflect = [&](const char* spvPath) -> std::unique_ptr<rhi::RHIDescriptorSetLayout> {
+        // 运行 spirv-cross --reflect
+        std::string jsonPath = std::string(spvPath) + ".reflect.json";
+        std::string cmd = "spirv-cross --reflect --output " + jsonPath + " " + std::string(spvPath) + " 2>nul";
+        if (std::system(cmd.c_str()) != 0) return nullptr;
+
+        std::ifstream jf(jsonPath);
+        if (!jf) return nullptr;
+        std::string json((std::istreambuf_iterator<char>(jf)), {});
+        jf.close();
+
+        // 简单解析 JSON 提取 bindings
+        rhi::DescSetLayoutDesc desc;
+        auto extractBindings = [&](const std::string& key, rhi::DescriptorType type) {
+            size_t pos = 0;
+            std::string search = "\"" + key + "\"";
+            while ((pos = json.find(search, pos)) != std::string::npos) {
+                // 找到 binding 号
+                size_t bp = json.find("\"binding\"", pos);
+                if (bp == std::string::npos || bp > pos + 500) break;
+                size_t bv = json.find(':', bp);
+                if (bv == std::string::npos) break;
+                uint32_t binding = (uint32_t)std::atoi(json.c_str() + bv + 1);
+                // 跳过已经声明的 binding
+                bool exists = false;
+                for (auto& b : desc.bindings)
+                    if (b.binding == binding && b.type == type) exists = true;
+                if (!exists) {
+                    rhi::DescriptorBinding b;
+                    b.binding = binding; b.type = type; b.hlslRegister = binding;
+                    desc.bindings.push_back(b);
+                }
+                pos = bv + 1;
+            }
+        };
+        extractBindings("ubos", rhi::DescriptorType::UniformBuffer);
+        extractBindings("separate_images", rhi::DescriptorType::SampledImage);
+        extractBindings("storage_images", rhi::DescriptorType::StorageImage);
+        extractBindings("separate_samplers", rhi::DescriptorType::Sampler);
+        extractBindings("images", rhi::DescriptorType::StorageImage);
+
+        if (desc.bindings.empty()) return nullptr;
+        return d3dDevice->createDescriptorSetLayout(desc);
+    };
+
     auto loadShader = [&](const char* path, rhi::ShaderStage stage, const char* entry) {
         std::ifstream f(path, std::ios::binary);
         if (!f) { std::fprintf(stderr, "[d3d12] shader not found: %s\n", path); return std::unique_ptr<rhi::RHIShader>(); }
@@ -1759,11 +1805,15 @@ void App::runD3D12() {
                 {4, rhi::VertexFormat::Uint,  48, 0},    // matIndex
             };
             gd.vertexInput = vis;
-            // 最小 descriptor set layout: CBV b0 (per-draw UBO)
-            rhi::DescSetLayoutDesc gbDesc;
-            gbDesc.bindings.push_back({0, rhi::DescriptorType::UniformBuffer, 1, rhi::ShaderStage::Vertex});
-            auto gbDSL = d3dDevice->createDescriptorSetLayout(gbDesc);
-            gd.descriptorSetLayouts.push_back(gbDSL.get());
+            // 从 SPIR-V reflection 自动生成 descriptor set layout
+            auto gbDSL = buildLayoutFromReflect("build/shaders/gbuffer/gbuffer.spv");
+            if (gbDSL) {
+                gd.descriptorSetLayouts.push_back(gbDSL.get());
+                auto* d3dL = static_cast<rhi::D3D12RHIDescriptorSetLayout*>(gbDSL.get());
+                std::printf("[d3d12] GBuffer auto-layout: %zu bindings\n", d3dL->bindings().size());
+                for (auto& b : d3dL->bindings())
+                    std::printf("[d3d12]   bind=%u type=%u hlslReg=%u\n", b.binding, (unsigned)b.type, b.hlslRegister);
+            }
             try {
                 auto gbPSO = d3dDevice->createGraphicsPSO(gd);
                 std::printf("[d3d12] GBuffer PSO created\n");
