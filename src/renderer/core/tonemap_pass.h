@@ -20,6 +20,8 @@ public:
     void destroy();
     void bindTargets(const RenderTargets& rt);
     void bindOutput(VkImageView outView, uint32_t frameIdx);
+    auto& sets() { return m_sets; }
+    auto* pipeline() { return m_pipeline.get(); } // D3D12 手动 bind
     void record(rhi::RHICommandBuffer& cmd, const RenderTargets& rt, uint32_t frameIdx,
                 bool hdrMode = false, float exposure = 1.0f);
     void record(VkCommandBuffer cmd, const RenderTargets& rt, uint32_t frameIdx,

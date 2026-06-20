@@ -1677,8 +1677,31 @@ void App::runD3D12() {
     vb->unmap();
     std::printf("[d3d12] vertex buffer: %zu bytes\n", sizeof(triVerts));
 
-    // TonemapPass PSO 创建成功（见上方日志）
-    // 完整 dispatch 需要 D3D12 descriptor 绑定（Phase 5）
+    // 创建渲染目标 + push constant buffer
+    rhi::TextureDesc hdrDesc; hdrDesc.format = rhi::Format::R16G16B16A16_SFLOAT;
+    hdrDesc.width = 800; hdrDesc.height = 450;
+    hdrDesc.usage = (rhi::TextureUsage)((uint32_t)rhi::TextureUsage::Sampled | (uint32_t)rhi::TextureUsage::Storage);
+    auto hdrTex = d3dDevice->createTexture(hdrDesc);
+    auto hdrView = hdrTex->createView({});
+    rhi::TextureDesc ldrDesc = hdrDesc; ldrDesc.format = rhi::Format::B8G8R8A8_UNORM;
+    auto ldrTex = d3dDevice->createTexture(ldrDesc);
+    auto ldrView = ldrTex->createView({});
+
+    rhi::BufferDesc pcDesc{}; pcDesc.size = 16;
+    pcDesc.usage = rhi::BufferUsage::Uniform; pcDesc.memory = rhi::MemoryType::HostVisible;
+    auto pcBuf = d3dDevice->createBuffer(pcDesc);
+
+    // 获取 tonemap 的 descriptor set (slot 0, frame 0)
+    auto& tonemapSets = tonemap.sets();
+    if (tonemapSets[0]) {
+        tonemapSets[0]->write({
+            {0, rhi::DescriptorType::UniformBuffer, nullptr, pcBuf.get()},
+            {1, rhi::DescriptorType::SampledImage, hdrView.get()},
+            {2, rhi::DescriptorType::Sampler, nullptr, nullptr, 0, 0, linearSampler.get()},
+            {3, rhi::DescriptorType::StorageImage, ldrView.get()},
+        });
+        std::printf("[d3d12] tonemap descriptor set bound\n");
+    }
     while (!m_window->shouldClose()) {
         m_window->pollEvents();
         if (glfwGetKey(m_window->handle(), GLFW_KEY_ESCAPE) == GLFW_PRESS)
@@ -1705,12 +1728,25 @@ void App::runD3D12() {
         colorAttach.clearColor[0] = 0.1f; colorAttach.clearColor[1] = 0.2f;
         colorAttach.clearColor[2] = 0.4f; colorAttach.clearColor[3] = 1.0f;
         cmdBuf->beginRendering(&colorAttach, 1, nullptr, frame.width, frame.height);
+
+        // Graphics pipeline: draw triangle
         cmdBuf->bindPipelineState(*pso);
         cmdBuf->setViewport(0, 0, (float)frame.width, (float)frame.height);
         cmdBuf->setScissor(0, 0, frame.width, frame.height);
         cmdBuf->bindVertexBuffer(0, *vb);
         cmdBuf->draw(3);
         cmdBuf->endRendering();
+
+        // Compute pipeline: tonemap dispatch
+        if (auto* tonemapPSO = tonemap.pipeline()) {
+            cmdBuf->bindPipelineState(*tonemapPSO);
+            cmdBuf->bindDescriptorSet(0, *tonemap.sets()[0]);
+            uint32_t pc[4] = {0}; // hdrMode=0, exposure=1.0
+            std::memcpy(pcBuf->map(), pc, sizeof(pc));
+            pcBuf->unmap();
+            cmdBuf->pushConstants(rhi::ShaderStage::Compute, pc, sizeof(pc));
+            cmdBuf->dispatch((800 + 7) / 8, (450 + 7) / 8);
+        }
         cmdBuf->end();
 
         rhi::SubmitDesc sub{}; sub.commandBuffer = cmdBuf.get();
