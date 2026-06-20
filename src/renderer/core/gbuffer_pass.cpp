@@ -422,85 +422,85 @@ void GBufferPass::updateFrame(const FrameUBO& ubo) {
 // ──────────────────────────────────────────────────────────────────
 // record（VK 原生 + RHI 重载委托）
 // 注：RHI 路径通过 VkRHICommandBuffer::vkCmd() 获取原生句柄后使用 VK API，
-// 因直接使用 RHICommandBuffer 方法存在 segfault（待查）。
-// ──────────────────────────────────────────────────────────────────
-void GBufferPass::record(rhi::RHICommandBuffer& rhiCmd, const RenderTargets& rt,
+// RHI 路径：GBuffer MRT 渲染（3 颜色附件 + 深度，可选 MSAA resolve）
+void GBufferPass::record(rhi::RHICommandBuffer& cmd, const RenderTargets& rt,
                          const rhi::RHIBuffer& indirectBuf, uint32_t drawCount, const SceneGpu& gpu) {
-    auto vkCmd = static_cast<rhi::VkRHICommandBuffer&>(rhiCmd).vkCmd();
-    auto vkIndirectBuf = static_cast<VkBuffer>(indirectBuf.nativeHandle());
-    record(vkCmd, rt, vkIndirectBuf, drawCount, gpu);
-}
-
-void GBufferPass::record(VkCommandBuffer vkCmd, const RenderTargets& rt,
-                         VkBuffer indirectBuf, uint32_t drawCount, const SceneGpu& gpu) {
     if (drawCount == 0) return;
+    auto& vkDev = static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
     bool useMsaa = m_msaaSamples != VK_SAMPLE_COUNT_1_BIT;
 
-    std::array<VkRenderingAttachmentInfo, 3> color{};
+    // 非拥有型 texture view 包装
+    auto cv0 = rhi::VkRHITextureView::createNonOwning(vkDev,
+        useMsaa ? rt.gAlbedoMetalMs.view() : rt.gAlbedoMetal.view());
+    auto cv1 = rhi::VkRHITextureView::createNonOwning(vkDev,
+        useMsaa ? rt.gNormalRoughMs.view() : rt.gNormalRough.view());
+    auto cv2 = rhi::VkRHITextureView::createNonOwning(vkDev,
+        useMsaa ? rt.gEmissiveAOMs.view() : rt.gEmissiveAO.view());
+    auto dv = rhi::VkRHITextureView::createNonOwning(vkDev,
+        useMsaa ? rt.depthMs.view() : rt.depth.view());
+
+    // MSAA resolve 视图
+    auto res0 = useMsaa ? rhi::VkRHITextureView::createNonOwning(vkDev, rt.gAlbedoMetal.view()) : nullptr;
+    auto res1 = useMsaa ? rhi::VkRHITextureView::createNonOwning(vkDev, rt.gNormalRough.view()) : nullptr;
+    auto res2 = useMsaa ? rhi::VkRHITextureView::createNonOwning(vkDev, rt.gEmissiveAO.view()) : nullptr;
+    auto dres = useMsaa ? rhi::VkRHITextureView::createNonOwning(vkDev, rt.depth.view()) : nullptr;
+
+    // 颜色附件
+    rhi::RenderingAttachmentInfo cAttach[3]{};
     for (int i = 0; i < 3; ++i) {
-        color[i] = {VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
-        color[i].imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-        color[i].loadOp      = VK_ATTACHMENT_LOAD_OP_CLEAR;
-        color[i].storeOp     = VK_ATTACHMENT_STORE_OP_STORE;
-        color[i].clearValue.color = {{0, 0, 0, 0}};
+        cAttach[i].view = (i == 0 ? cv0 : i == 1 ? cv1 : cv2).get();
+        cAttach[i].loadOp = rhi::AttachmentLoadOp::Clear;
+        cAttach[i].storeOp = rhi::AttachmentStoreOp::Store;
     }
-    color[0].imageView = useMsaa ? rt.gAlbedoMetalMs.view() : rt.gAlbedoMetal.view();
-    color[1].imageView = useMsaa ? rt.gNormalRoughMs.view() : rt.gNormalRough.view();
-    color[2].imageView = useMsaa ? rt.gEmissiveAOMs.view() : rt.gEmissiveAO.view();
-
     if (useMsaa) {
-        color[0].resolveImageView   = rt.gAlbedoMetal.view();
-        color[0].resolveMode        = VK_RESOLVE_MODE_AVERAGE_BIT;
-        color[0].resolveImageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-        color[1].resolveImageView   = rt.gNormalRough.view();
-        color[1].resolveMode        = VK_RESOLVE_MODE_AVERAGE_BIT;
-        color[1].resolveImageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-        color[2].resolveImageView   = rt.gEmissiveAO.view();
-        color[2].resolveMode        = VK_RESOLVE_MODE_AVERAGE_BIT;
-        color[2].resolveImageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        cAttach[0].resolveView = res0.get(); cAttach[0].resolveMode = rhi::ResolveMode::Average;
+        cAttach[1].resolveView = res1.get(); cAttach[1].resolveMode = rhi::ResolveMode::Average;
+        cAttach[2].resolveView = res2.get(); cAttach[2].resolveMode = rhi::ResolveMode::Average;
     }
 
-    VkRenderingAttachmentInfo depth{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
-    depth.imageView   = useMsaa ? rt.depthMs.view() : rt.depth.view();
-    depth.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
-    depth.loadOp      = VK_ATTACHMENT_LOAD_OP_CLEAR;
-    depth.storeOp     = VK_ATTACHMENT_STORE_OP_STORE;
-    depth.clearValue.depthStencil = {1.0f, 0};
+    // 深度附件
+    rhi::RenderingAttachmentInfo dAttach{};
+    dAttach.view = dv.get();
+    dAttach.loadOp = rhi::AttachmentLoadOp::Clear;
+    dAttach.storeOp = rhi::AttachmentStoreOp::Store;
+    dAttach.clearDepth = 1.0f;
     if (useMsaa) {
-        depth.resolveImageView   = rt.depth.view();
-        depth.resolveMode        = VK_RESOLVE_MODE_MIN_BIT;
-        depth.resolveImageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+        dAttach.resolveView = dres.get();
+        dAttach.resolveMode = rhi::ResolveMode::Min;
     }
 
-    VkRenderingInfo ri{VK_STRUCTURE_TYPE_RENDERING_INFO};
-    ri.renderArea = {{0, 0}, rt.extent}; ri.layerCount = 1;
-    ri.colorAttachmentCount = (uint32_t)color.size(); ri.pColorAttachments = color.data();
-    ri.pDepthAttachment = &depth;
-    vkCmdBeginRendering(vkCmd, &ri);
+    cmd.beginRendering(cAttach, 3, &dAttach, rt.extent.width, rt.extent.height);
+    cmd.setViewport(0, 0, (float)rt.extent.width, (float)rt.extent.height);
+    cmd.setScissor(0, 0, rt.extent.width, rt.extent.height);
 
-    VkViewport vp{0, 0, (float)rt.extent.width, (float)rt.extent.height, 0, 1};
-    VkRect2D sc{{0, 0}, rt.extent};
-    vkCmdSetViewport(vkCmd, 0, 1, &vp); vkCmdSetScissor(vkCmd, 0, 1, &sc);
-
+    // Mesh shader 路径
     if (m_useMeshShader && m_meshPipeline != VK_NULL_HANDLE) {
+        auto vkCmd = static_cast<rhi::VkRHICommandBuffer&>(cmd).vkCmd();
         vkCmdBindPipeline(vkCmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_meshPipeline);
         vkCmdBindDescriptorSets(vkCmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
             m_meshPipelineLayout, 0, 1, &m_meshSet, 0, nullptr);
         m_device->vkCmdDrawMeshTasksEXT(vkCmd, m_meshGroupCount, 1, 1);
     } else {
-        vkCmdBindPipeline(vkCmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-            (VkPipeline)(uintptr_t)m_pipeline->nativeHandle());
-        VkDescriptorSet ds = (VkDescriptorSet)(uintptr_t)m_set->nativeHandle();
-        vkCmdBindDescriptorSets(vkCmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-            static_cast<rhi::VkRHIPipelineState&>(*m_pipeline).layout(), 0, 1, &ds, 0, nullptr);
-        VkDeviceSize zero = 0;
-        VkBuffer vb = gpu.vertexBuffer.handle();
-        vkCmdBindVertexBuffers(vkCmd, 0, 1, &vb, &zero);
-        vkCmdBindIndexBuffer(vkCmd, gpu.indexBuffer.handle(), 0, VK_INDEX_TYPE_UINT32);
-        vkCmdDrawIndexedIndirectCount(vkCmd, indirectBuf, 0, indirectBuf, 0,
-                                       drawCount, sizeof(VkDrawIndexedIndirectCommand));
+        // 顶点/索引缓冲路径（RHI）
+        cmd.bindPipelineState(*m_pipeline);
+        cmd.bindDescriptorSet(0, *m_set);
+        auto vb = rhi::VkRHIBuffer::createNonOwning(vkDev, gpu.vertexBuffer.handle(), VK_WHOLE_SIZE);
+        auto ib = rhi::VkRHIBuffer::createNonOwning(vkDev, gpu.indexBuffer.handle(), VK_WHOLE_SIZE);
+        cmd.bindVertexBuffer(0, *vb);
+        cmd.bindIndexBuffer(*ib, 0, false);
+        cmd.drawIndexedIndirectCount(indirectBuf, 0, indirectBuf, 0,
+                                      drawCount, sizeof(VkDrawIndexedIndirectCommand));
     }
-    vkCmdEndRendering(vkCmd);
+    cmd.endRendering();
+}
+
+// Vk 兼容路径：委托到 RHI 实现
+void GBufferPass::record(VkCommandBuffer vkCmd, const RenderTargets& rt,
+                         VkBuffer indirectBuf, uint32_t drawCount, const SceneGpu& gpu) {
+    auto& vkDev = static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
+    rhi::VkRHICommandBuffer rhiCmd(vkDev, vkCmd);
+    auto rhiIb = rhi::VkRHIBuffer::createNonOwning(vkDev, indirectBuf, VK_WHOLE_SIZE);
+    record(rhiCmd, rt, *rhiIb, drawCount, gpu);
 }
 
 } // namespace somegi

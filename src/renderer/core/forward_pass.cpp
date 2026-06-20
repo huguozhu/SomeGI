@@ -181,36 +181,48 @@ void ForwardPass::setNdgiWeights(Device&, VkBuffer w1,VkBuffer b1,VkBuffer w2,Vk
     m_set->write({{4,rhi::DescriptorType::StorageBuffer,nullptr,W1.get()},{5,rhi::DescriptorType::StorageBuffer,nullptr,B1.get()},{6,rhi::DescriptorType::StorageBuffer,nullptr,W2.get()},{7,rhi::DescriptorType::StorageBuffer,nullptr,B2.get()},{8,rhi::DescriptorType::StorageBuffer,nullptr,W3.get()},{9,rhi::DescriptorType::StorageBuffer,nullptr,B3.get()}});
 }
 
+// RHI 路径：前向渲染（1 颜色附件 + 深度）
 void ForwardPass::record(rhi::RHICommandBuffer& cmd, const RenderTargets& rt, const rhi::RHIBuffer& ib, uint32_t dc, const SceneGpu& gpu) {
-    auto vkCmd = static_cast<rhi::VkRHICommandBuffer&>(cmd).vkCmd();
-    auto vkIb = static_cast<VkBuffer>(ib.nativeHandle());
-    record(vkCmd, rt, vkIb, dc, gpu);}
-
-void ForwardPass::record(VkCommandBuffer vkCmd, const RenderTargets& rt, VkBuffer ib, uint32_t dc, const SceneGpu& gpu) {
     if(!m_pipeline||!m_set||!m_iblSet) return;
-    auto& vkD=static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
-    VkDescriptorSet ds[2]={VkSet(m_set),VkSet(m_iblSet)};
-    auto cv=rhi::VkRHITextureView::createNonOwning(vkD,rt.hdrColor.view());
-    auto dv=rhi::VkRHITextureView::createNonOwning(vkD,rt.depth.view());
-    const rhi::RHITextureView* cvs[]={cv.get()};
-    // beginRendering
-    VkRenderingAttachmentInfo ca{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
-    ca.imageView=(VkImageView)(uintptr_t)cv->nativeHandle(); ca.imageLayout=VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-    ca.loadOp=VK_ATTACHMENT_LOAD_OP_CLEAR; ca.storeOp=VK_ATTACHMENT_STORE_OP_STORE; ca.clearValue.color={{0,0,0,0}};
-    VkRenderingAttachmentInfo da{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
-    da.imageView=(VkImageView)(uintptr_t)dv->nativeHandle(); da.imageLayout=VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
-    da.loadOp=VK_ATTACHMENT_LOAD_OP_CLEAR; da.storeOp=VK_ATTACHMENT_STORE_OP_STORE; da.clearValue.depthStencil={1.f,0};
-    VkRenderingInfo ri{VK_STRUCTURE_TYPE_RENDERING_INFO}; ri.renderArea={{0,0},rt.extent}; ri.layerCount=1;
-    ri.colorAttachmentCount=1; ri.pColorAttachments=&ca; ri.pDepthAttachment=&da;
-    vkCmdBeginRendering(vkCmd,&ri);
-    VkViewport vp{0,0,(float)rt.extent.width,(float)rt.extent.height,0,1}; VkRect2D sc{{0,0},rt.extent};
-    vkCmdSetViewport(vkCmd,0,1,&vp); vkCmdSetScissor(vkCmd,0,1,&sc);
-    vkCmdBindPipeline(vkCmd,VK_PIPELINE_BIND_POINT_GRAPHICS,(VkPipeline)(uintptr_t)m_pipeline->nativeHandle());
-    vkCmdBindDescriptorSets(vkCmd,VK_PIPELINE_BIND_POINT_GRAPHICS,VkLay(m_pipeline),0,2,ds,0,nullptr);
-    VkDeviceSize zero=0; VkBuffer vb=gpu.vertexBuffer.handle();
-    vkCmdBindVertexBuffers(vkCmd,0,1,&vb,&zero); vkCmdBindIndexBuffer(vkCmd,gpu.indexBuffer.handle(),0,VK_INDEX_TYPE_UINT32);
-    vkCmdDrawIndexedIndirectCount(vkCmd,(VkBuffer)(uintptr_t)ib,0,(VkBuffer)(uintptr_t)ib,0,dc,sizeof(VkDrawIndexedIndirectCommand));
-    vkCmdEndRendering(vkCmd);
+    auto& vkDev = static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
+
+    auto cv = rhi::VkRHITextureView::createNonOwning(vkDev, rt.hdrColor.view());
+    auto dv = rhi::VkRHITextureView::createNonOwning(vkDev, rt.depth.view());
+
+    rhi::RenderingAttachmentInfo cAttach{};
+    cAttach.view = cv.get();
+    cAttach.loadOp = rhi::AttachmentLoadOp::Clear;
+    cAttach.storeOp = rhi::AttachmentStoreOp::Store;
+
+    rhi::RenderingAttachmentInfo dAttach{};
+    dAttach.view = dv.get();
+    dAttach.loadOp = rhi::AttachmentLoadOp::Clear;
+    dAttach.storeOp = rhi::AttachmentStoreOp::Store;
+    dAttach.clearDepth = 1.0f;
+
+    cmd.beginRendering(&cAttach, 1, &dAttach, rt.extent.width, rt.extent.height);
+    cmd.setViewport(0, 0, (float)rt.extent.width, (float)rt.extent.height);
+    cmd.setScissor(0, 0, rt.extent.width, rt.extent.height);
+
+    cmd.bindPipelineState(*m_pipeline);
+    const rhi::RHIDescriptorSet* sets[2] = {m_set.get(), m_iblSet.get()};
+    cmd.bindDescriptorSets(0, 2, sets);
+
+    auto vb = rhi::VkRHIBuffer::createNonOwning(vkDev, gpu.vertexBuffer.handle(), VK_WHOLE_SIZE);
+    auto ibo = rhi::VkRHIBuffer::createNonOwning(vkDev, gpu.indexBuffer.handle(), VK_WHOLE_SIZE);
+    cmd.bindVertexBuffer(0, *vb);
+    cmd.bindIndexBuffer(*ibo, 0, false);
+    cmd.drawIndexedIndirectCount(ib, 0, ib, 0, dc, sizeof(VkDrawIndexedIndirectCommand));
+
+    cmd.endRendering();
+}
+
+// Vk 兼容路径：委托到 RHI 实现
+void ForwardPass::record(VkCommandBuffer vkCmd, const RenderTargets& rt, VkBuffer ib, uint32_t dc, const SceneGpu& gpu) {
+    auto& vkDev = static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
+    rhi::VkRHICommandBuffer rhiCmd(vkDev, vkCmd);
+    auto rhiIb = rhi::VkRHIBuffer::createNonOwning(vkDev, ib, VK_WHOLE_SIZE);
+    record(rhiCmd, rt, *rhiIb, dc, gpu);
 }
 
 void ForwardPass::bindHiZViews(VkImageView m1,VkImageView m2,VkImageView m3,VkImageView m4) { (void)m1;(void)m2;(void)m3;(void)m4; }
