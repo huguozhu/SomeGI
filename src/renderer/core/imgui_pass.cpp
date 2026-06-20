@@ -1,5 +1,9 @@
 #include "renderer/core/imgui_pass.h"
 #include "core/device.h"
+#include "rhi/vulkan/vk_device.h"
+#include "rhi/vulkan/vk_texture.h"
+#include "rhi/vulkan/vk_command.h"
+#include "rhi/base/command_buffer.h"
 
 #include <imgui.h>
 #include <imgui_impl_glfw.h>
@@ -7,8 +11,9 @@
 
 namespace somegi {
 
-void ImGuiPass::init(Device& d, rhi::RHIDevice&, GLFWwindow* window, VkFormat swapchainFormat, uint32_t imageCount) {
+void ImGuiPass::init(Device& d, rhi::RHIDevice& rhiDev, GLFWwindow* window, VkFormat swapchainFormat, uint32_t imageCount) {
     m_device = &d;
+    m_rhiDevice = &rhiDev;
 
     VkDescriptorPoolSize ps[] = {
         {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1024},
@@ -181,24 +186,30 @@ void ImGuiPass::loadStyle() {
     fclose(f);
 }
 
-void ImGuiPass::render(VkCommandBuffer cmd, VkImageView swapchainView, VkExtent2D extent) {
+// RHI 路径：rendering pass 通过 RHI 接口，ImGui 绘制仍用原生 VkCommandBuffer
+void ImGuiPass::render(rhi::RHICommandBuffer& cmd, VkImageView swapchainView, VkExtent2D extent) {
     ImGui::Render();
 
-    VkRenderingAttachmentInfo color{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
-    color.imageView = swapchainView;
-    color.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-    color.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-    color.clearValue.color = {{0.1f, 0.1f, 0.1f, 1.0f}};
-    color.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    auto& vkDev = static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
+    auto swView = rhi::VkRHITextureView::createNonOwning(vkDev, swapchainView);
 
-    VkRenderingInfo ri{VK_STRUCTURE_TYPE_RENDERING_INFO};
-    ri.renderArea = {{0,0}, extent};
-    ri.layerCount = 1;
-    ri.colorAttachmentCount = 1;
-    ri.pColorAttachments = &color;
-    vkCmdBeginRendering(cmd, &ri);
-    ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), cmd);
-    vkCmdEndRendering(cmd);
+    rhi::RenderingAttachmentInfo colorAttach{};
+    colorAttach.view = swView.get();
+    colorAttach.loadOp = rhi::AttachmentLoadOp::Clear;
+    colorAttach.storeOp = rhi::AttachmentStoreOp::Store;
+    colorAttach.clearColor[0] = 0.1f; colorAttach.clearColor[1] = 0.1f;
+    colorAttach.clearColor[2] = 0.1f; colorAttach.clearColor[3] = 1.0f;
+
+    cmd.beginRendering(&colorAttach, 1, nullptr, extent.width, extent.height);
+    // ImGui 内部仍依赖 VkCommandBuffer，通过原生句柄桥接
+    ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), (VkCommandBuffer)(uintptr_t)cmd.nativeHandle());
+    cmd.endRendering();
+}
+// Vk 兼容路径
+void ImGuiPass::render(VkCommandBuffer cmd, VkImageView swapchainView, VkExtent2D extent) {
+    auto& vkDev = static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
+    rhi::VkRHICommandBuffer rhiCmd(vkDev, cmd);
+    render(rhiCmd, swapchainView, extent);
 }
 
 }
