@@ -22,7 +22,7 @@ public:
     uint32_t mipLevels() const override { return m_desc.mipLevels; }
     void* nativeHandle() const override { return (void*)m_resource; }
 
-    ID3D12Resource* resource() { return m_resource; }
+    ID3D12Resource* resource() const { return m_resource; }
     D3D12_RESOURCE_STATES defaultState() const { return m_defaultState; }
     DXGI_FORMAT dxgiFormat() const { return m_dxgiFormat; }
 

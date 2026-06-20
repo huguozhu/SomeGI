@@ -46,57 +46,57 @@ public:
     void setScissor(int32_t x, int32_t y, uint32_t w, uint32_t h) override;
 
     // ── PSO / Descriptor / PushConstants ──
-    void bindPipelineState(const RHIPipelineState& pso) override        { throw std::runtime_error("[d3d12] not implemented"); }
-    void bindDescriptorSet(uint32_t slot, const RHIDescriptorSet& set) override { throw std::runtime_error("[d3d12] not implemented"); }
+    void bindPipelineState(const RHIPipelineState& pso) override;
+    void bindDescriptorSet(uint32_t slot, const RHIDescriptorSet& set) override;
     void bindDescriptorSets(uint32_t firstSlot, uint32_t count,
-                            const RHIDescriptorSet* const* sets) override { throw std::runtime_error("[d3d12] not implemented"); }
+                            const RHIDescriptorSet* const* sets) override;
     void pushConstants(ShaderStage stage, const void* data,
-                       uint32_t size, uint32_t offset) override         { throw std::runtime_error("[d3d12] not implemented"); }
+                       uint32_t size, uint32_t offset) override;
 
     // ── 顶点/索引 ──
     void bindVertexBuffer(uint32_t binding, const RHIBuffer& buffer,
-                          uint64_t offset, uint64_t stride) override    { throw std::runtime_error("[d3d12] not implemented"); }
+                          uint64_t offset, uint64_t stride) override;
     void bindIndexBuffer(const RHIBuffer& buffer, uint64_t offset,
-                         bool uint16) override                          { throw std::runtime_error("[d3d12] not implemented"); }
+                         bool uint16) override;
 
     // ── Draw ──
-    void draw(uint32_t vc, uint32_t fv, uint32_t fi) override          { throw std::runtime_error("[d3d12] not implemented"); }
-    void drawIndexed(uint32_t ic, uint32_t fi, int32_t vo) override    { throw std::runtime_error("[d3d12] not implemented"); }
-    void drawIndirect(const RHIBuffer&, uint64_t, uint32_t, uint32_t) override { throw std::runtime_error("[d3d12] not implemented"); }
-    void drawIndexedIndirect(const RHIBuffer&, uint64_t, uint32_t, uint32_t) override { throw std::runtime_error("[d3d12] not implemented"); }
+    void draw(uint32_t vc, uint32_t fv, uint32_t fi) override;
+    void drawIndexed(uint32_t ic, uint32_t fi, int32_t vo) override;
+    void drawIndirect(const RHIBuffer&, uint64_t, uint32_t, uint32_t) override;
+    void drawIndexedIndirect(const RHIBuffer&, uint64_t, uint32_t, uint32_t) override;
     void drawIndexedIndirectCount(const RHIBuffer&, uint64_t,
                                    const RHIBuffer&, uint64_t,
-                                   uint32_t, uint32_t) override        { throw std::runtime_error("[d3d12] not implemented"); }
-    void drawMeshTasks(uint32_t, uint32_t, uint32_t) override          { throw std::runtime_error("[d3d12] not implemented"); }
-    void drawMeshTasksIndirect(const RHIBuffer&, uint64_t, uint32_t, uint32_t) override { throw std::runtime_error("[d3d12] not implemented"); }
+                                   uint32_t, uint32_t) override;
+    void drawMeshTasks(uint32_t, uint32_t, uint32_t) override;
+    void drawMeshTasksIndirect(const RHIBuffer&, uint64_t, uint32_t, uint32_t) override;
 
     // ── Dispatch ──
-    void dispatch(uint32_t, uint32_t, uint32_t) override               { throw std::runtime_error("[d3d12] not implemented"); }
-    void dispatchIndirect(const RHIBuffer&, uint64_t) override         { throw std::runtime_error("[d3d12] not implemented"); }
+    void dispatch(uint32_t, uint32_t, uint32_t) override;
+    void dispatchIndirect(const RHIBuffer&, uint64_t) override;
 
     // ── 复制/清除 ──
     void copyBuffer(const RHIBuffer&, const RHIBuffer&, uint64_t,
-                    uint64_t, uint64_t) override                       { throw std::runtime_error("[d3d12] not implemented"); }
-    void copyTexture(const RHITexture&, const RHITexture&) override    { throw std::runtime_error("[d3d12] not implemented"); }
-    void fillBuffer(const RHIBuffer&, uint64_t, uint64_t, uint32_t) override { throw std::runtime_error("[d3d12] not implemented"); }
-    void clearColor(const RHITexture&, float, float, float, float) override { throw std::runtime_error("[d3d12] not implemented"); }
-    void clearDepth(const RHITexture&, float, uint32_t) override       { throw std::runtime_error("[d3d12] not implemented"); }
+                    uint64_t, uint64_t) override;
+    void copyTexture(const RHITexture&, const RHITexture&) override;
+    void fillBuffer(const RHIBuffer&, uint64_t, uint64_t, uint32_t) override;
+    void clearColor(const RHITexture&, float, float, float, float) override;
+    void clearDepth(const RHITexture&, float, uint32_t) override;
 
     // ── Barrier ──
-    void textureBarrier(const RHITexture&, TextureLayout, TextureLayout) override { throw std::runtime_error("[d3d12] not implemented"); }
+    void textureBarrier(const RHITexture&, TextureLayout, TextureLayout) override;
     void bufferBarrier(const RHIBuffer&, PipelineStage, PipelineStage,
-                       BufferAccess, BufferAccess) override            { throw std::runtime_error("[d3d12] not implemented"); }
-    void globalBarrier() override                                      { throw std::runtime_error("[d3d12] not implemented"); }
+                       BufferAccess, BufferAccess) override;
+    void globalBarrier() override;
 
     // ── 渲染通道 ──
     void beginRendering(const RenderingAttachmentInfo*, uint32_t,
                         const RenderingAttachmentInfo*,
-                        uint32_t, uint32_t) override                   { throw std::runtime_error("[d3d12] not implemented"); }
-    void endRendering() override                                       { throw std::runtime_error("[d3d12] not implemented"); }
+                        uint32_t, uint32_t) override;
+    void endRendering() override;
 
     // ── 时间戳 ──
-    void writeTimestamp(const RHIQueryPool&, uint32_t) override        { throw std::runtime_error("[d3d12] not implemented"); }
-    void resetQueryPool(const RHIQueryPool&, uint32_t, uint32_t) override { throw std::runtime_error("[d3d12] not implemented"); }
+    void writeTimestamp(const RHIQueryPool&, uint32_t) override;
+    void resetQueryPool(const RHIQueryPool&, uint32_t, uint32_t) override;
 
     void* nativeHandle() const override { return (void*)m_cmdList; }
 

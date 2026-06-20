@@ -25,8 +25,8 @@ public:
 
     void* nativeHandle() const override { return (void*)m_pipeline; }
 
-    ID3D12PipelineState* pipeline() { return m_pipeline; }
-    ID3D12RootSignature* rootSignature() { return m_rootSig; }
+    ID3D12PipelineState* pipeline() const { return m_pipeline; }
+    ID3D12RootSignature* rootSignature() const { return m_rootSig; }
     bool isCompute() const { return m_isCompute; }
 
 private:
