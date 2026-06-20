@@ -1622,45 +1622,46 @@ void App::runD3D12() {
     std::unique_ptr<rhi::RHICommandBuffer> cmdBuf(cmdPool->allocateRaw());
     auto submitFence = d3dDevice->createFence(false);
 
-    // 加载 SSAO DXIL shader（已验证 PSO 创建成功）
-    std::vector<uint8_t> bytecode;
-    {
-        std::ifstream f("build/shaders_dxil/ssao/ssao.dxil", std::ios::binary);
-        if (!f) { std::fprintf(stderr, "[d3d12] ssao.dxil not found\n"); return; }
-        bytecode.assign(std::istreambuf_iterator<char>(f), {});
-        std::printf("[d3d12] ssao.dxil: %zu bytes\n", bytecode.size());
-    }
-
-    rhi::ShaderDesc sd; sd.stage = rhi::ShaderStage::Compute; sd.entryPoint = "comp_main";
-    auto csShader = d3dDevice->createShader(sd, bytecode.data(), bytecode.size());
-
-    rhi::DescSetLayoutDesc dslDesc;
-    auto addBind = [&](uint32_t vk, rhi::DescriptorType t, uint32_t hlsl) {
-        rhi::DescriptorBinding b; b.binding = vk; b.type = t; b.hlslRegister = hlsl;
-        dslDesc.bindings.push_back(b);
+    // 加载简单三角形 shader（验证图形管线）
+    auto loadShader = [&](const char* path, rhi::ShaderStage stage, const char* entry) {
+        std::ifstream f(path, std::ios::binary);
+        if (!f) { std::fprintf(stderr, "[d3d12] shader not found: %s\n", path); return std::unique_ptr<rhi::RHIShader>(); }
+        std::vector<uint8_t> code(std::istreambuf_iterator<char>(f), {});
+        rhi::ShaderDesc sd; sd.stage = stage; sd.entryPoint = entry;
+        return d3dDevice->createShader(sd, code.data(), code.size());
     };
-    addBind(0, rhi::DescriptorType::UniformBuffer, 0);  // b0
-    addBind(0, rhi::DescriptorType::SampledImage, 0);   // t0
-    addBind(1, rhi::DescriptorType::SampledImage, 1);   // t1
-    addBind(2, rhi::DescriptorType::StorageImage, 2);   // u2
-    auto dsl = d3dDevice->createDescriptorSetLayout(dslDesc);
+    auto vs = loadShader("build/shaders_dxil/tri_vs.dxil", rhi::ShaderStage::Vertex, "main");
+    auto ps = loadShader("build/shaders_dxil/tri_ps.dxil", rhi::ShaderStage::Fragment, "main");
+    if (!vs || !ps) { std::fprintf(stderr, "[d3d12] triangle shaders missing\n"); return; }
 
-    rhi::ComputePSODesc psd; psd.computeShader = csShader.get();
-    psd.descriptorSetLayouts.push_back(dsl.get());
-    auto pso = d3dDevice->createComputePSO(psd);
-    std::printf("[d3d12] SSAO PSO created\n");
+    // Graphics PSO（无 descriptor set，仅光栅化三角形）
+    rhi::VertexInputState vis;
+    vis.bindings = {{0, 20, false}}; // pos(8) + color(12) = 20 bytes
+    vis.attributes = {{0, rhi::VertexFormat::Float2, 0, 0}, {1, rhi::VertexFormat::Float3, 8, 0}};
+    rhi::GraphicsPSODesc gpsd;
+    gpsd.vertexShader = vs.get(); gpsd.fragmentShader = ps.get();
+    gpsd.vertexInput = vis; gpsd.topology = rhi::PrimitiveTopology::TriangleList;
+    gpsd.renderTargets.colorFormats = {rhi::Format::B8G8R8A8_UNORM};
+    gpsd.renderTargets.depthFormat = rhi::Format::Unknown;
+    gpsd.renderTargets.sampleCount = 1;
+    auto pso = d3dDevice->createGraphicsPSO(gpsd);
+    std::printf("[d3d12] graphics PSO created — triangle pipeline\n");
 
-    // 创建 D3D12 渲染目标纹理（模拟离屏渲染）
-    RenderTargets rt;
-    rt.createRHI(*d3dDevice, {800, 450}, (VkSampleCountFlagBits)1);
-
-    // 创建 descriptor set 并绑定渲染目标
-    auto descSet = d3dDevice->createDescriptorSet(*dsl);
-    // 绑定 UAV: gOutAO → ldrTonemap（用于输出到 swapchain）
-    descSet->write({{2, rhi::DescriptorType::StorageImage, rt.rhi.ldrTonemapView.get()}});
-
-    std::printf("[d3d12] render targets + descriptor set ready\n");
-    std::printf("[d3d12] compute+present loop: press ESC to exit\n");
+    // 创建三角形顶点缓冲
+    struct Vertex { float x, y; float r, g, b; };
+    Vertex triVerts[] = {
+        { 0.0f, -0.5f, 1,0,0 },
+        { 0.5f,  0.5f, 0,1,0 },
+        {-0.5f,  0.5f, 0,0,1 },
+    };
+    rhi::BufferDesc vbDesc{};
+    vbDesc.size = sizeof(triVerts);
+    vbDesc.usage = rhi::BufferUsage::Vertex;
+    vbDesc.memory = rhi::MemoryType::HostVisible;
+    auto vb = d3dDevice->createBuffer(vbDesc);
+    std::memcpy(vb->map(), triVerts, sizeof(triVerts));
+    vb->unmap();
+    std::printf("[d3d12] vertex buffer: %zu bytes\n", sizeof(triVerts));
     while (!m_window->shouldClose()) {
         m_window->pollEvents();
         if (glfwGetKey(m_window->handle(), GLFW_KEY_ESCAPE) == GLFW_PRESS)
@@ -1669,20 +1670,17 @@ void App::runD3D12() {
         auto frame = swapchain->acquireNextFrame();
         if (frame.needsResize) continue;
 
+        // 三角形顶点数据（CPU 端）
+        struct Vertex { float x, y; float r, g, b; };
+        Vertex tri[] = {
+            { 0.0f, -0.5f, 1,0,0 },
+            { 0.5f,  0.5f, 0,1,0 },
+            {-0.5f,  0.5f, 0,0,1 },
+        };
+
         cmdBuf->begin();
 
-        // 1. Dispatch SSAO compute shader 到 ldrTonemap 纹理
-        cmdBuf->bindPipelineState(*pso);
-        cmdBuf->bindDescriptorSet(0, *descSet);
-        struct { float pad[32]; } pc{}; // 简化 push constants
-        cmdBuf->pushConstants(rhi::ShaderStage::Compute, &pc, 16);
-        cmdBuf->dispatch((800 + 7) / 8, (450 + 7) / 8);
-
-        // 2. Barrier: UAV → ShaderReadOnly（后续 tonemap 读取）
-        cmdBuf->textureBarrier(*rt.rhi.ldrTonemap,
-            rhi::TextureLayout::General, rhi::TextureLayout::ShaderReadOnly);
-
-        // 3. 清除 swapchain back buffer 并呈现
+        // 清除 + 渲染三角形到 swapchain
         rhi::RenderingAttachmentInfo colorAttach{};
         colorAttach.view = frame.view.get();
         colorAttach.loadOp = rhi::AttachmentLoadOp::Clear;
@@ -1690,6 +1688,11 @@ void App::runD3D12() {
         colorAttach.clearColor[0] = 0.1f; colorAttach.clearColor[1] = 0.2f;
         colorAttach.clearColor[2] = 0.4f; colorAttach.clearColor[3] = 1.0f;
         cmdBuf->beginRendering(&colorAttach, 1, nullptr, frame.width, frame.height);
+        cmdBuf->bindPipelineState(*pso);
+        cmdBuf->setViewport(0, 0, (float)frame.width, (float)frame.height);
+        cmdBuf->setScissor(0, 0, frame.width, frame.height);
+        cmdBuf->bindVertexBuffer(0, *vb);
+        cmdBuf->draw(3);
         cmdBuf->endRendering();
         cmdBuf->end();
 
