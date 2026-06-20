@@ -36,6 +36,10 @@ public:
     D3D12_CPU_DESCRIPTOR_HANDLE rtvHandle(uint32_t index) const;
     ID3D12Resource* backBuffer(uint32_t index) const { return m_backBuffers[index]; }
     uint32_t backBufferCount() const { return (uint32_t)m_backBuffers.size(); }
+    // 当前帧 back buffer 的 RTV descriptor handle
+    D3D12_CPU_DESCRIPTOR_HANDLE currentRTV(uint32_t frameInFlight) const {
+        return rtvHandle(frameInFlight % kFrameCount);
+    }
 
 private:
     void createSwapchain(uint32_t width, uint32_t height);
