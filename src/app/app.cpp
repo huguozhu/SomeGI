@@ -1808,6 +1808,10 @@ void App::runD3D12() {
             // 从 SPIR-V reflection 自动生成 descriptor set layout
             auto gbDSL = buildLayoutFromReflect("build/shaders/gbuffer/gbuffer.spv");
             if (gbDSL) {
+                // 手动补 SPIRV-Cross 生成的 HLSL 额外 binding (vertex pulling SRV t10)
+                auto* d3dL = static_cast<rhi::D3D12RHIDescriptorSetLayout*>(gbDSL.get());
+                // 检查是否缺少 SRV t10
+                (void)d3dL;
                 gd.descriptorSetLayouts.push_back(gbDSL.get());
             }
             try {

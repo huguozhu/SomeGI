@@ -270,15 +270,40 @@ void D3D12RHICommandBuffer::fillBuffer(const RHIBuffer& dst, uint64_t offset,
 void D3D12RHICommandBuffer::clearColor(const RHITexture& tex,
                                         float r, float g, float b, float a) {
     auto& d3dTex = static_cast<const D3D12RHITexture&>(tex);
-    // 创建临时 RTV 并清除
-    // Phase 5: 在 D3D12RHITexture 上缓存持久 RTV handle
-    const float clear[4] = { r, g, b, a };
-    (void)d3dTex; (void)clear;
+    // 在 CPU RTV heap 上创建临时 RTV descriptor 并清除
+    if (m_device.cpuRtvHeap()) {
+        static uint32_t tmpRtvIdx = 256; // 使用 heap 后半段避免与持久 RTV 冲突
+        D3D12_CPU_DESCRIPTOR_HANDLE h = m_device.cpuRtvHeap()->GetCPUDescriptorHandleForHeapStart();
+        h.ptr += tmpRtvIdx++ * m_device.cpuRtvIncrement();
+        if (tmpRtvIdx > 384) tmpRtvIdx = 256; // 循环使用
+
+        D3D12_RENDER_TARGET_VIEW_DESC rtvd{};
+        rtvd.Format = d3dTex.dxgiFormat();
+        rtvd.ViewDimension = D3D12_RTV_DIMENSION_TEXTURE2D;
+        m_device.device()->CreateRenderTargetView(d3dTex.resource(), &rtvd, h);
+
+        const float clear[4] = { r, g, b, a };
+        m_cmdList->ClearRenderTargetView(h, clear, 0, nullptr);
+    }
 }
 void D3D12RHICommandBuffer::clearDepth(const RHITexture& tex,
                                         float depth, uint32_t stencil) {
     auto& d3dTex = static_cast<const D3D12RHITexture&>(tex);
-    (void)d3dTex; (void)depth; (void)stencil;
+    if (m_device.cpuDsvHeap()) {
+        static uint32_t tmpDsvIdx = 32;
+        D3D12_CPU_DESCRIPTOR_HANDLE h = m_device.cpuDsvHeap()->GetCPUDescriptorHandleForHeapStart();
+        h.ptr += tmpDsvIdx++ * m_device.cpuDsvIncrement();
+        if (tmpDsvIdx > 48) tmpDsvIdx = 32;
+
+        D3D12_DEPTH_STENCIL_VIEW_DESC dsvd{};
+        dsvd.Format = d3dTex.dxgiFormat();
+        dsvd.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2D;
+        m_device.device()->CreateDepthStencilView(d3dTex.resource(), &dsvd, h);
+
+        D3D12_CLEAR_FLAGS flags = D3D12_CLEAR_FLAG_DEPTH;
+        if (stencil) flags |= D3D12_CLEAR_FLAG_STENCIL;
+        m_cmdList->ClearDepthStencilView(h, flags, depth, (UINT8)stencil, 0, nullptr);
+    }
 }
 
 // ════════════════════════════════════════════════════════════════
