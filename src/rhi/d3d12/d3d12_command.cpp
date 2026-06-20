@@ -153,7 +153,13 @@ void D3D12RHICommandBuffer::draw(uint32_t vc, uint32_t fv, uint32_t fi) {
 void D3D12RHICommandBuffer::drawIndexed(uint32_t ic, uint32_t fi, int32_t vo) {
     m_cmdList->DrawIndexedInstanced(ic, 1, fi, vo, 0);
 }
-void D3D12RHICommandBuffer::drawIndirect(const RHIBuffer&, uint64_t, uint32_t, uint32_t) {}
+void D3D12RHICommandBuffer::drawIndirect(const RHIBuffer& buf, uint64_t offset,
+                                          uint32_t drawCount, uint32_t stride) {
+    auto& d3dBuf = static_cast<const D3D12RHIBuffer&>(buf);
+    // 复用 drawIndexed 命令签名（D3D12 通过 stride 区分 indexed vs non-indexed）
+    auto* sig = getDrawIndexedSignature();
+    m_cmdList->ExecuteIndirect(sig, drawCount, d3dBuf.resource(), offset, nullptr, 0);
+}
 void D3D12RHICommandBuffer::drawIndexedIndirect(const RHIBuffer& buf, uint64_t offset,
                                                   uint32_t drawCount, uint32_t stride) {
     auto& d3dBuf = static_cast<const D3D12RHIBuffer&>(buf);
@@ -183,7 +189,21 @@ void D3D12RHICommandBuffer::drawMeshTasksIndirect(const RHIBuffer&, uint64_t,
 void D3D12RHICommandBuffer::dispatch(uint32_t gx, uint32_t gy, uint32_t gz) {
     m_cmdList->Dispatch(gx, gy, gz);
 }
-void D3D12RHICommandBuffer::dispatchIndirect(const RHIBuffer&, uint64_t) {}
+void D3D12RHICommandBuffer::dispatchIndirect(const RHIBuffer& buf, uint64_t offset) {
+    auto& d3dBuf = static_cast<const D3D12RHIBuffer&>(buf);
+    // 创建 Dispatch 命令签名（懒初始化）
+    static ID3D12CommandSignature* s_dispatchSig = nullptr;
+    if (!s_dispatchSig) {
+        D3D12_INDIRECT_ARGUMENT_DESC arg{};
+        arg.Type = D3D12_INDIRECT_ARGUMENT_TYPE_DISPATCH;
+        D3D12_COMMAND_SIGNATURE_DESC sd{};
+        sd.ByteStride = sizeof(D3D12_DISPATCH_ARGUMENTS);
+        sd.NumArgumentDescs = 1;
+        sd.pArgumentDescs = &arg;
+        m_device.device()->CreateCommandSignature(&sd, nullptr, IID_PPV_ARGS(&s_dispatchSig));
+    }
+    m_cmdList->ExecuteIndirect(s_dispatchSig, 1, d3dBuf.resource(), offset, nullptr, 0);
+}
 
 // ════════════════════════════════════════════════════════════════
 // 复制/清除
