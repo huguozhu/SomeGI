@@ -1744,6 +1744,32 @@ void App::runD3D12() {
     std::memcpy(fsqVB->map(), fsqVerts, sizeof(fsqVerts));
     fsqVB->unmap();
 
+    // Fill compute PSO（生成测试 HDR 数据）
+    std::unique_ptr<rhi::RHIPipelineState> fillPSO;
+    rhi::BufferDesc fillPcDesc{}; fillPcDesc.size = 16;
+    fillPcDesc.usage = rhi::BufferUsage::Uniform; fillPcDesc.memory = rhi::MemoryType::HostVisible;
+    auto fillPcBuf = d3dDevice->createBuffer(fillPcDesc);
+    {
+        std::ifstream f("build/shaders_dxil/fill_cs.dxil", std::ios::binary);
+        if (f) {
+            std::vector<uint8_t> bc(std::istreambuf_iterator<char>(f), {});
+            rhi::ShaderDesc sd; sd.stage = rhi::ShaderStage::Compute; sd.entryPoint = "main";
+            auto cs = d3dDevice->createShader(sd, bc.data(), bc.size());
+            rhi::DescSetLayoutDesc d;
+            auto ab = [&](uint32_t vk, rhi::DescriptorType t, uint32_t hlsl) {
+                rhi::DescriptorBinding b; b.binding = vk; b.type = t; b.hlslRegister = hlsl;
+                d.bindings.push_back(b);
+            };
+            ab(0, rhi::DescriptorType::UniformBuffer, 0); // CBV b0
+            ab(1, rhi::DescriptorType::StorageImage, 0); // UAV u0
+            auto dsl = d3dDevice->createDescriptorSetLayout(d);
+            rhi::ComputePSODesc psd; psd.computeShader = cs.get();
+            psd.descriptorSetLayouts.push_back(dsl.get());
+            fillPSO = d3dDevice->createComputePSO(psd);
+            std::printf("[d3d12] fill compute PSO created\n");
+        }
+    }
+
     // 创建渲染目标 + push constant buffer
     rhi::TextureDesc hdrDesc; hdrDesc.format = rhi::Format::R16G16B16A16_SFLOAT;
     hdrDesc.width = 800; hdrDesc.height = 450;
@@ -1753,6 +1779,25 @@ void App::runD3D12() {
     rhi::TextureDesc ldrDesc = hdrDesc; ldrDesc.format = rhi::Format::B8G8R8A8_UNORM;
     auto ldrTex = d3dDevice->createTexture(ldrDesc);
     auto ldrView = ldrTex->createView({});
+
+    // Fill descriptor set: CBV b0 + UAV u0 → hdrColor
+    std::unique_ptr<rhi::RHIDescriptorSet> fillSet;
+    if (fillPSO) {
+        rhi::DescSetLayoutDesc fd;
+        auto ab = [&](uint32_t vk, rhi::DescriptorType t, uint32_t hlsl) {
+            rhi::DescriptorBinding b; b.binding = vk; b.type = t; b.hlslRegister = hlsl;
+            fd.bindings.push_back(b);
+        };
+        ab(0, rhi::DescriptorType::UniformBuffer, 0);
+        ab(1, rhi::DescriptorType::StorageImage, 0);
+        auto fdsl = d3dDevice->createDescriptorSetLayout(fd);
+        fillSet = d3dDevice->createDescriptorSet(*fdsl);
+        fillSet->write({
+            {0, rhi::DescriptorType::UniformBuffer, nullptr, fillPcBuf.get()},
+            {1, rhi::DescriptorType::StorageImage, hdrView.get()},
+        });
+        std::printf("[d3d12] fill descriptor set bound\n");
+    }
 
     rhi::BufferDesc pcDesc{}; pcDesc.size = 16;
     pcDesc.usage = rhi::BufferUsage::Uniform; pcDesc.memory = rhi::MemoryType::HostVisible;
@@ -1794,7 +1839,17 @@ void App::runD3D12() {
         colorAttach.storeOp = rhi::AttachmentStoreOp::Store;
         colorAttach.clearColor[0] = 0.1f; colorAttach.clearColor[1] = 0.2f;
         colorAttach.clearColor[2] = 0.4f; colorAttach.clearColor[3] = 1.0f;
-        // 先跑 compute passes（写入离屏纹理）
+        // Fill: 生成 HDR 渐变 → hdrColor
+        static float gTime = 0; gTime += 0.016f;
+        if (fillPSO && fillSet) {
+            uint32_t fc[4] = { *(uint32_t*)&gTime, 800, 450, 0 };
+            std::memcpy(fillPcBuf->map(), fc, sizeof(fc));
+            fillPcBuf->unmap();
+            cmdBuf->bindPipelineState(*fillPSO);
+            cmdBuf->bindDescriptorSet(0, *fillSet);
+            cmdBuf->dispatch((800 + 7) / 8, (450 + 7) / 8);
+        }
+        // Tonemap: HDR → LDR
         if (auto* tPSO = tonemap.pipeline()) {
             cmdBuf->bindPipelineState(*tPSO);
             cmdBuf->bindDescriptorSet(0, *tonemap.sets()[0]);
