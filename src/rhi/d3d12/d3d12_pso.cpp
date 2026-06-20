@@ -124,15 +124,12 @@ void D3D12RHIPipelineState::createRootSignature(
             D3D12_DESCRIPTOR_RANGE1 r{};
             r.RangeType = toD3D12RangeType(b.type);
             r.NumDescriptors = b.count;
+            // hlslRegister 覆盖 Vulkan binding 实现 D3D12 独立寄存器映射
             r.BaseShaderRegister = b.hlslRegister ? b.hlslRegister : b.binding;
             r.RegisterSpace = (UINT)s;
             r.Flags = D3D12_DESCRIPTOR_RANGE_FLAG_NONE;
             r.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
             ranges.push_back(r);
-            const char* tns[] = {"SRV","UAV","CBV","SMP"};
-            int ti = (int)r.RangeType - 1; // D3D12: SRV=1, UAV=2, CBV=3, Sampler=4
-            std::printf("[d3d12]  bind=%u type=%d range=%s reg=%u\n",
-                b.binding, (int)b.type, ti>=0&&ti<4?tns[ti]:"?", r.BaseShaderRegister);
         }
 
         if (!ranges.empty()) {
