@@ -431,7 +431,7 @@ void D3D12RHICommandBuffer::bufferBarrier(const RHIBuffer& buf,
     if (before == after) {
         // UAV → UAV 特殊处理：TRANSITION barrier 不允许 before == after，
         // fallback 为 UAV barrier 确保 UAV 写入对其他 pass 可见
-        if (before == D3D12_RESOURCE_STATE_UNORDERED_ACCESS) {
+        if (before & D3D12_RESOURCE_STATE_UNORDERED_ACCESS) {
             D3D12_RESOURCE_BARRIER rb{};
             rb.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
             rb.UAV.pResource = d3dBuf.resource();
@@ -441,8 +441,6 @@ void D3D12RHICommandBuffer::bufferBarrier(const RHIBuffer& buf,
         return;
     }
 
-    m_device.trackResourceState(d3dBuf.resource(), after);
-
     D3D12_RESOURCE_BARRIER rb{};
     rb.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
     rb.Transition.pResource   = d3dBuf.resource();
@@ -450,6 +448,8 @@ void D3D12RHICommandBuffer::bufferBarrier(const RHIBuffer& buf,
     rb.Transition.StateAfter  = after;
     rb.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
     m_cmdList->ResourceBarrier(1, &rb);
+
+    m_device.trackResourceState(d3dBuf.resource(), after);
 }
 void D3D12RHICommandBuffer::globalBarrier() {
     D3D12_RESOURCE_BARRIER rb{};
