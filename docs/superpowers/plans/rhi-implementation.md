@@ -98,7 +98,23 @@ cmake --build build --target somegi_rhi
 
 ---
 
-## 当前状态
+## 当前状态（2026-06-20 更新）
 
 - [x] RHI 设计文档完成
-- [ ] Phase 1 未开始
+- [x] RHI 核心抽象（device/buffer/texture/shader/descriptor/pipeline_state/command_buffer/swapchain/fence/sampler/acceleration_structure）
+- [x] Vulkan 后端实现（全部 vk_* 文件）
+- [x] 全部 34 个 Pass 添加 RHI record() 重载
+- [x] RHI record 签名中 Vulkan 裸类型清理（VkBuffer→RHIBuffer&, VkDescriptorSet→RHIDescriptorSet&）
+- [x] ShadowPass 子方法全部 RHI 化
+- [x] NdgiPass::initWeights 迁移
+- [x] RenderPipeline 添加 executeRHI + recordRHI 并行路径
+- [x] FrameGraph::executeRHI 就绪
+- [x] registerPipelineSteps 从 App 迁移到 FrameRenderer
+- [x] App::writeTimestamp 合并到 FrameRenderer
+- [x] ImGuiPass::render 迁移
+- [x] App 帧循环切换到 RHICommandBuffer
+- [x] app.cpp 模块拆分（5182→1544 行，-70%）
+- [x] BarrierManager 死代码清理
+- [ ] Phase 4: D3D12 后端（未来）
+- [ ] Phase 5: Metal 后端（未来）
+- [ ] 删除不再使用的 VkCommandBuffer 兼容重载（待记录回调迁移后）

@@ -13,7 +13,7 @@ std::unique_ptr<RHISwapchain> VkRHISwapchain::create(VkRHIDevice& device, void* 
 }
 
 void VkRHISwapchain::createSwapchain(uint32_t w, uint32_t h) {
-    auto* window = static_cast<Window*>((void*)(uintptr_t)0); // FIXME
+    // surface 已在 VkRHIDevice 初始化时创建，此处直接使用
     VkSurfaceKHR surface = m_device.surface();
 
     VkSurfaceCapabilitiesKHR caps;
