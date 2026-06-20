@@ -14,7 +14,7 @@ public:
     ~D3D12RHIQueryPool() override;
     void getResults(uint32_t first, uint32_t count, uint64_t* data) override;
     void* nativeHandle() const override { return (void*)m_heap; }
-    ID3D12QueryHeap* heap() { return m_heap; }
+    ID3D12QueryHeap* heap() const { return m_heap; }
 private:
     ID3D12QueryHeap* m_heap = nullptr;
     uint32_t m_count = 0;

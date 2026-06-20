@@ -253,7 +253,9 @@ std::unique_ptr<RHIFence> D3D12RHIDevice::createFence(bool signaled) {
 std::unique_ptr<RHISemaphore> D3D12RHIDevice::createSemaphore() {
     return std::unique_ptr<RHISemaphore>(new D3D12RHISemaphore());
 }
-std::unique_ptr<RHIQueryPool> D3D12RHIDevice::createQueryPool(uint32_t) { NOT_IMPL("createQueryPool"); }
+std::unique_ptr<RHIQueryPool> D3D12RHIDevice::createQueryPool(uint32_t count) {
+    return std::make_unique<D3D12RHIQueryPool>(*this, count);
+}
 
 // ════════════════════════════════════════════════════════════════
 // 提交 / 呈现 / 同步

@@ -116,9 +116,11 @@ private:
     bool m_recording = false;
     const D3D12RHIPipelineState* m_boundPSO = nullptr; // 当前绑定的 PSO
 
-    // 缓存的命令签名
+    // 缓存的命令签名 + upload buffer
     ID3D12CommandSignature* m_drawIndexedSig = nullptr;
     ID3D12CommandSignature* m_drawIndexedCountSig = nullptr;
+    ID3D12Resource* m_fillUploadBuf = nullptr; // fillBuffer 持久化 upload buffer
+    uint64_t m_fillUploadSize = 0;
 };
 
 

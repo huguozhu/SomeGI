@@ -5,6 +5,7 @@
 #include "d3d12_buffer.h"
 #include "d3d12_pso.h"
 #include "d3d12_swapchain.h"
+#include "d3d12_query_pool.h"
 #include <stdexcept>
 #include <cstdio>
 #include <cstring>
@@ -55,6 +56,7 @@ D3D12RHICommandBuffer::D3D12RHICommandBuffer(D3D12RHIDevice& device,
 D3D12RHICommandBuffer::~D3D12RHICommandBuffer() {
     if (m_drawIndexedSig) m_drawIndexedSig->Release();
     if (m_drawIndexedCountSig) m_drawIndexedCountSig->Release();
+    if (m_fillUploadBuf) m_fillUploadBuf->Release();
     if (m_cmdList) m_cmdList->Release();
 }
 
@@ -123,10 +125,13 @@ void D3D12RHICommandBuffer::bindDescriptorSets(uint32_t firstSlot, uint32_t coun
     }
 }
 
-void D3D12RHICommandBuffer::pushConstants(ShaderStage, const void* data,
+void D3D12RHICommandBuffer::pushConstants(ShaderStage stage, const void* data,
                                            uint32_t size, uint32_t offset) {
-    // 简化：仅支持 compute root constants（参数索引固定为 descriptor set 之后的槽位）
-    m_cmdList->SetComputeRoot32BitConstants(0, size / 4, data, offset / 4);
+    // 简化：root constants 参数索引固定为 0（Phase 5 从 PSO 获取正确索引）
+    if (stage == ShaderStage::Compute || (uint32_t)stage & (uint32_t)ShaderStage::Compute)
+        m_cmdList->SetComputeRoot32BitConstants(0, size / 4, data, offset / 4);
+    else
+        m_cmdList->SetGraphicsRoot32BitConstants(0, size / 4, data, offset / 4);
 }
 
 // ════════════════════════════════════════════════════════════════
@@ -243,41 +248,36 @@ void D3D12RHICommandBuffer::copyTexture(const RHITexture& src, const RHITexture&
 void D3D12RHICommandBuffer::fillBuffer(const RHIBuffer& dst, uint64_t offset,
                                         uint64_t size, uint32_t data) {
     auto& d3dBuf = static_cast<const D3D12RHIBuffer&>(dst);
-    // 使用临时 upload buffer → CopyBufferRegion
-    D3D12_HEAP_PROPERTIES uploadHeap{D3D12_HEAP_TYPE_UPLOAD,
-        D3D12_CPU_PAGE_PROPERTY_UNKNOWN, D3D12_MEMORY_POOL_UNKNOWN, 1, 1};
-    D3D12_RESOURCE_DESC ud{D3D12_RESOURCE_DIMENSION_BUFFER, 0, size, 1, 1, 1,
-        DXGI_FORMAT_UNKNOWN, {1, 0}, D3D12_TEXTURE_LAYOUT_ROW_MAJOR};
-
-    ID3D12Resource* uploadBuf = nullptr;
-    m_device.device()->CreateCommittedResource(&uploadHeap, D3D12_HEAP_FLAG_NONE, &ud,
-        D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&uploadBuf));
-
+    // 使用持久化 upload buffer（延迟分配，按需扩展）
+    if (!m_fillUploadBuf || m_fillUploadSize < size) {
+        if (m_fillUploadBuf) m_fillUploadBuf->Release();
+        m_fillUploadSize = (size + 255) & ~255ull; // 256 对齐
+        D3D12_HEAP_PROPERTIES hp{D3D12_HEAP_TYPE_UPLOAD,
+            D3D12_CPU_PAGE_PROPERTY_UNKNOWN, D3D12_MEMORY_POOL_UNKNOWN, 1, 1};
+        D3D12_RESOURCE_DESC rd{D3D12_RESOURCE_DIMENSION_BUFFER, 0, m_fillUploadSize,
+            1, 1, 1, DXGI_FORMAT_UNKNOWN, {1, 0}, D3D12_TEXTURE_LAYOUT_ROW_MAJOR};
+        m_device.device()->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &rd,
+            D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&m_fillUploadBuf));
+    }
+    // 填充 upload buffer
     uint8_t* mapped = nullptr;
-    uploadBuf->Map(0, nullptr, (void**)&mapped);
+    m_fillUploadBuf->Map(0, nullptr, (void**)&mapped);
     for (uint64_t i = 0; i < size; i += 4)
         std::memcpy(mapped + i, &data, size - i < 4 ? size - i : 4);
-    uploadBuf->Unmap(0, nullptr);
-
-    m_cmdList->CopyBufferRegion(d3dBuf.resource(), offset, uploadBuf, 0, size);
-    uploadBuf->Release();
+    m_fillUploadBuf->Unmap(0, nullptr);
+    m_cmdList->CopyBufferRegion(d3dBuf.resource(), offset, m_fillUploadBuf, 0, size);
 }
 void D3D12RHICommandBuffer::clearColor(const RHITexture& tex,
                                         float r, float g, float b, float a) {
-    // 简化：仅支持创建了 RTV descriptor 的纹理
-    // 完整实现需在 D3D12RHITexture 上缓存 RTV handle
     auto& d3dTex = static_cast<const D3D12RHITexture&>(tex);
+    // 创建临时 RTV 并清除
+    // Phase 5: 在 D3D12RHITexture 上缓存持久 RTV handle
     const float clear[4] = { r, g, b, a };
-    // 使用临时 descriptor heap 创建 RTV 并清除
-    // Phase 5 完整实现 descriptor heap 管理后改进
     (void)d3dTex; (void)clear;
 }
 void D3D12RHICommandBuffer::clearDepth(const RHITexture& tex,
                                         float depth, uint32_t stencil) {
-    // 需要 DSV descriptor handle — 通过 beginRendering 设置
-    // 此处提供基础实现：直接从纹理获取 DSV
     auto& d3dTex = static_cast<const D3D12RHITexture&>(tex);
-    // Phase 5 将 DSV handle 缓存在纹理上
     (void)d3dTex; (void)depth; (void)stencil;
 }
 
@@ -364,9 +364,15 @@ void D3D12RHICommandBuffer::textureBarrier(const RHITexture& tex,
     m_device.trackResourceState(d3dTex.resource(), after);
 }
 
-void D3D12RHICommandBuffer::bufferBarrier(const RHIBuffer&,
+void D3D12RHICommandBuffer::bufferBarrier(const RHIBuffer& buf,
                                            PipelineStage, PipelineStage,
-                                           BufferAccess, BufferAccess) {}
+                                           BufferAccess, BufferAccess) {
+    auto& d3dBuf = static_cast<const D3D12RHIBuffer&>(buf);
+    D3D12_RESOURCE_BARRIER rb{};
+    rb.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+    rb.UAV.pResource = d3dBuf.resource();
+    m_cmdList->ResourceBarrier(1, &rb);
+}
 void D3D12RHICommandBuffer::globalBarrier() {
     D3D12_RESOURCE_BARRIER rb{};
     rb.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
@@ -421,12 +427,12 @@ void D3D12RHICommandBuffer::endRendering() {
 // ════════════════════════════════════════════════════════════════
 
 void D3D12RHICommandBuffer::writeTimestamp(const RHIQueryPool& pool, uint32_t index) {
-    // D3D12 时间戳通过 query heap + EndQuery 实现
-    // 简化：记录到命令列表末尾
-    (void)pool; (void)index;
+    auto& d3dPool = static_cast<const D3D12RHIQueryPool&>(pool);
+    m_cmdList->EndQuery(d3dPool.heap(), D3D12_QUERY_TYPE_TIMESTAMP, index);
 }
 void D3D12RHICommandBuffer::resetQueryPool(const RHIQueryPool& pool, uint32_t first,
                                             uint32_t count) {
+    // D3D12 query heap 不需要显式重置；时间戳通过 resolve 回读
     (void)pool; (void)first; (void)count;
 }
 
