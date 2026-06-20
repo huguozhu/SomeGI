@@ -210,7 +210,6 @@ private:
     void bootstrapSsgiTemporal();
     void rebuildDemoLights();
 
-    void registerPipelineSteps();
     void buildPipelineTable();
     void setupFrameGraph();
     void setupFgImports(VkExtent3D ext, bool aaEnabled);

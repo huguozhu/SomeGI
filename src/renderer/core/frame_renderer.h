@@ -63,6 +63,35 @@ struct PipelineConfig {
     int  giIndex  = 0;          // 当前 GI 技术索引（用于 RT GI 判断）
 };
 
+// 场景绑定数据 —— 场景加载后由 App 设置一次，注册管线步骤时捕获引用
+struct BoundScene {
+    const SceneCpu* cpu = nullptr;
+    const SceneGpu* gpu = nullptr;
+    VkBuffer drawDataBuf = VK_NULL_HANDLE;     // 原始绘制数据（GPU culling 输入）
+    VkBuffer indirectBuf = VK_NULL_HANDLE;     // GPU culling 输出
+    VkBuffer indirectBufSun = VK_NULL_HANDLE;  // sun-view indirect
+    VkBuffer countBuf = VK_NULL_HANDLE;        // culling count buffer
+    uint32_t drawCount = 0;
+    uint32_t culledDrawCount = 0;              // GPU culling 后的实际绘制数
+    bool useHiZOcclusion = false;
+};
+
+// 每帧渲染状态 —— App 每帧在 pipeline.execute() 前设置
+struct FrameState {
+    uint32_t frameInFlight = 0;
+    VkImage swapImage = VK_NULL_HANDLE;
+    VkImageView swapView = VK_NULL_HANDLE;
+    VkExtent2D swapExtent{};
+    glm::mat4 proj{1.0f};
+    glm::mat4 view{1.0f};
+    glm::mat4 viewProj{1.0f};
+    glm::mat4 invViewProj{1.0f};
+    glm::mat4 prevViewProj{1.0f};
+    glm::vec2 jitter{0.0f};
+    glm::vec2 prevJitter{0.0f};
+    float taaBlendAlpha = 0.92f;
+};
+
 class FrameRenderer {
 public:
     struct BenchResult { int gi, aa, ao; float fps, gpuMs; };
@@ -206,6 +235,14 @@ public:
     // 当前帧的 swapchain 图像索引（0..kFramesInFlight-1），App 每帧设置
     void setFrameInFlight(uint32_t fi) { m_currentFrameInFlight = fi; }
     uint32_t frameInFlight() const { return m_currentFrameInFlight; }
+
+    // 场景绑定数据（App 在场景加载后设置，registerPipelineSteps 捕获引用）
+    void setBoundScene(const BoundScene& s) { m_boundScene = s; }
+    BoundScene& boundScene() { return m_boundScene; }
+
+    // 每帧渲染状态（App 在 pipeline.execute() 前设置）
+    void setFrameState(const FrameState& s) { m_frameState = s; }
+    FrameState& frameState() { return m_frameState; }
 
     // Benchmark
     bool& benchRunning()    { return m_benchRunning; }
@@ -367,6 +404,10 @@ private:
     // Frame state
     uint32_t m_frameIndex = 0;
     uint32_t m_currentFrameInFlight = 0;
+
+    // 场景绑定 + 每帧状态（registerPipelineSteps lambda 捕获）
+    BoundScene m_boundScene{};
+    FrameState m_frameState{};
 };
 
 } // namespace somegi
