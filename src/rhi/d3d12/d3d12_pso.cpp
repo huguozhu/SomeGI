@@ -258,9 +258,26 @@ void D3D12RHIPipelineState::createGraphicsPSO(const GraphicsPSODesc& desc) {
         ? D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP
         : D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
 
-    if (FAILED(m_device.device()->CreateGraphicsPipelineState(&psd,
-            IID_PPV_ARGS(&m_pipeline))))
+    HRESULT hr = m_device.device()->CreateGraphicsPipelineState(&psd,
+        IID_PPV_ARGS(&m_pipeline));
+    if (FAILED(hr)) {
+        ID3D12InfoQueue* infoQueue = nullptr;
+        if (SUCCEEDED(m_device.device()->QueryInterface(IID_PPV_ARGS(&infoQueue)))) {
+            UINT64 msgCount = infoQueue->GetNumStoredMessages();
+            for (UINT64 i = 0; i < msgCount && i < 3; ++i) {
+                SIZE_T msgLen = 0;
+                infoQueue->GetMessage(i, nullptr, &msgLen);
+                if (msgLen > 0) {
+                    auto* msg = (D3D12_MESSAGE*)alloca(msgLen);
+                    infoQueue->GetMessage(i, msg, &msgLen);
+                    std::fprintf(stderr, "[d3d12]   %s\n", msg->pDescription);
+                }
+            }
+            infoQueue->ClearStoredMessages();
+            infoQueue->Release();
+        }
         throw std::runtime_error("[d3d12] CreateGraphicsPipelineState failed");
+    }
 }
 
 void D3D12RHIPipelineState::createComputePSO(const ComputePSODesc& desc) {

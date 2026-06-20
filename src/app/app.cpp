@@ -1734,6 +1734,45 @@ void App::runD3D12() {
         std::printf("[d3d12] fullscreen quad PSO created\n");
     }
 
+    // GBuffer PSO 验证（VS+PS DXIL 编译成功，测试 PSO 创建）
+    {
+        auto gbVS = loadShader("build/shaders_dxil/gbuffer/gbuffer_vs.dxil", rhi::ShaderStage::Vertex, "main");
+        auto gbPS = loadShader("build/shaders_dxil/gbuffer/gbuffer_ps.dxil", rhi::ShaderStage::Fragment, "main");
+        if (gbVS && gbPS) {
+            rhi::GraphicsPSODesc gd;
+            gd.vertexShader = gbVS.get(); gd.fragmentShader = gbPS.get();
+            gd.topology = rhi::PrimitiveTopology::TriangleList;
+            gd.renderTargets.colorFormats = {
+                rhi::Format::R8G8B8A8_UNORM,      // gAlbedoMetal
+                rhi::Format::R16G16B16A16_SFLOAT,  // gNormalRough
+                rhi::Format::R8G8B8A8_UNORM,       // gEmissiveAO
+            };
+            gd.renderTargets.depthFormat = rhi::Format::D32_SFLOAT;
+            gd.renderTargets.sampleCount = 1;
+            rhi::VertexInputState vis;
+            vis.bindings = {{0, 56, false}}; // pos(12)+normal(12)+tangent(16)+uv(8)+matIdx(4)+pad(4)
+            vis.attributes = {
+                {0, rhi::VertexFormat::Float3, 0, 0},   // position
+                {1, rhi::VertexFormat::Float3, 12, 0},   // normal
+                {2, rhi::VertexFormat::Float4, 24, 0},   // tangent
+                {3, rhi::VertexFormat::Float2, 40, 0},   // uv
+                {4, rhi::VertexFormat::Uint,  48, 0},    // matIndex
+            };
+            gd.vertexInput = vis;
+            // 最小 descriptor set layout: CBV b0 (per-draw UBO)
+            rhi::DescSetLayoutDesc gbDesc;
+            gbDesc.bindings.push_back({0, rhi::DescriptorType::UniformBuffer, 1, rhi::ShaderStage::Vertex});
+            auto gbDSL = d3dDevice->createDescriptorSetLayout(gbDesc);
+            gd.descriptorSetLayouts.push_back(gbDSL.get());
+            try {
+                auto gbPSO = d3dDevice->createGraphicsPSO(gd);
+                std::printf("[d3d12] GBuffer PSO created\n");
+            } catch (const std::exception& e) {
+                std::printf("[d3d12] GBuffer PSO failed: %s\n", e.what());
+            }
+        }
+    }
+
     // Fullscreen quad vertex buffer (NDC quad)
     struct FSQVertex { float x, y; float u, v; };
     FSQVertex fsqVerts[] = {
