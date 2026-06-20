@@ -34,10 +34,14 @@ public:
     // ── D3D12 特定 ──
     IDXGISwapChain4* dxgiSwapchain() { return m_swapchain; }
     D3D12_CPU_DESCRIPTOR_HANDLE rtvHandle(uint32_t index) const;
+    D3D12_CPU_DESCRIPTOR_HANDLE uavHandle(uint32_t index) const;
     ID3D12Resource* backBuffer(uint32_t index) const { return m_backBuffers[index]; }
     uint32_t backBufferCount() const { return (uint32_t)m_backBuffers.size(); }
     D3D12_CPU_DESCRIPTOR_HANDLE currentRTV(uint32_t frameInFlight) const {
         return rtvHandle(frameInFlight % kFrameCount);
+    }
+    D3D12_CPU_DESCRIPTOR_HANDLE currentUAV(uint32_t frameInFlight) const {
+        return uavHandle(frameInFlight % kFrameCount);
     }
     // 呈现上一帧（由 device::present 调用）
     void presentCurrentFrame() const;
@@ -58,6 +62,8 @@ private:
     // RTV 描述符堆
     ID3D12DescriptorHeap* m_rtvHeap = nullptr;
     uint32_t m_rtvDescriptorSize = 0;
+    // UAV 描述符（使用 device CPU SRV/UAV heap）
+    D3D12_CPU_DESCRIPTOR_HANDLE m_uavHandles[2]{};
 
     // 同步对象
     struct FrameSync {

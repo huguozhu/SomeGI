@@ -1621,38 +1621,37 @@ void App::runD3D12() {
     std::unique_ptr<rhi::RHICommandBuffer> cmdBuf(cmdPool->allocateRaw());
     auto submitFence = d3dDevice->createFence(false);
 
-    // 加载 DXIL compute shader
+    // 加载 gradient DXIL compute shader（写入 swapchain UAV）
     std::vector<uint8_t> bytecode;
     {
-        std::ifstream f("build/shaders_dxil/ssao/ssao.dxil", std::ios::binary);
-        if (!f) { std::fprintf(stderr, "[d3d12] SSAO shader not found\n"); return; }
+        std::ifstream f("build/shaders_dxil/gradient.dxil", std::ios::binary);
+        if (!f) { std::fprintf(stderr, "[d3d12] gradient.dxil not found\n"); return; }
         bytecode.assign(std::istreambuf_iterator<char>(f), {});
-        std::printf("[d3d12] SSAO DXIL: %zu bytes\n", bytecode.size());
+        std::printf("[d3d12] gradient.dxil: %zu bytes\n", bytecode.size());
     }
 
-    rhi::ShaderDesc sd; sd.stage = rhi::ShaderStage::Compute; sd.entryPoint = "comp_main";
+    rhi::ShaderDesc sd; sd.stage = rhi::ShaderStage::Compute; sd.entryPoint = "main";
     auto csShader = d3dDevice->createShader(sd, bytecode.data(), bytecode.size());
 
+    // Root signature: UAV at u0 + CBV at b0
     rhi::DescSetLayoutDesc dslDesc;
     auto addBind = [&](uint32_t vk, rhi::DescriptorType t, uint32_t hlsl) {
         rhi::DescriptorBinding b; b.binding = vk; b.type = t; b.hlslRegister = hlsl;
         dslDesc.bindings.push_back(b);
     };
-    addBind(0, rhi::DescriptorType::UniformBuffer, 0);
-    addBind(0, rhi::DescriptorType::SampledImage, 0);
-    addBind(1, rhi::DescriptorType::SampledImage, 1);
-    addBind(2, rhi::DescriptorType::StorageImage, 2);
+    addBind(0, rhi::DescriptorType::UniformBuffer, 0);  // b0 params
+    addBind(1, rhi::DescriptorType::StorageImage, 0);   // u0 output
     auto dsl = d3dDevice->createDescriptorSetLayout(dslDesc);
 
     rhi::ComputePSODesc psd; psd.computeShader = csShader.get();
     psd.descriptorSetLayouts.push_back(dsl.get());
     auto pso = d3dDevice->createComputePSO(psd);
-    std::printf("[d3d12] compute PSO created — ready for dispatch\n");
+    std::printf("[d3d12] gradient PSO created\n");
 
-    // 创建 push constant upload buffer
-    struct SsaoPC { float pad[32]; }; // 128 bytes push constants
-    SsaoPC pcData{};
-    rhi::BufferDesc pcDesc{}; pcDesc.size = sizeof(SsaoPC);
+    // Push constant upload buffer (gTime + gSize = 12 bytes → 16 aligned)
+    struct PCB { float time; uint32_t width; uint32_t height; float pad; };
+    PCB pcData{0, 800, 450, 0};
+    rhi::BufferDesc pcDesc{}; pcDesc.size = sizeof(PCB);
     pcDesc.usage = rhi::BufferUsage::Uniform;
     pcDesc.memory = rhi::MemoryType::HostVisible;
     auto pcBuffer = d3dDevice->createBuffer(pcDesc);
@@ -1660,13 +1659,10 @@ void App::runD3D12() {
     pcBuffer->unmap();
 
     auto descSet = d3dDevice->createDescriptorSet(*dsl);
-    // 绑定 push constant buffer 到 binding 0 (CBV)
     descSet->write({{0, rhi::DescriptorType::UniformBuffer, nullptr, pcBuffer.get()}});
-    // 绑定 swapchain UAV 到 binding 2
-    // Phase 5: 创建 swapchain UAV descriptor
 
     float t = 0;
-    std::printf("[d3d12] compute dispatch loop: press ESC to exit\n");
+    std::printf("[d3d12] gradient dispatch loop: press ESC to exit\n");
     while (!m_window->shouldClose()) {
         m_window->pollEvents();
         if (glfwGetKey(m_window->handle(), GLFW_KEY_ESCAPE) == GLFW_PRESS)
@@ -1675,14 +1671,17 @@ void App::runD3D12() {
         auto frame = swapchain->acquireNextFrame();
         if (frame.needsResize) continue;
 
-        // 更新 push constants
         t += 0.016f;
-        std::memcpy(pcBuffer->map(), &t, sizeof(float)); // offset into pcData
+        pcData.time = t;
+        pcData.width = 800; pcData.height = 450;
+        std::memcpy(pcBuffer->map(), &pcData, sizeof(pcData));
         pcBuffer->unmap();
 
         cmdBuf->begin();
 
-        // 清除 back buffer
+        // Transition swapchain to UAV, dispatch gradient, then present
+        // Phase 6: 需要通过 D3D12 explicit barrier transition
+        // 当前先清除 + 演示 compute dispatch
         rhi::RenderingAttachmentInfo colorAttach{};
         colorAttach.view = frame.view.get();
         colorAttach.loadOp = rhi::AttachmentLoadOp::Clear;
@@ -1691,11 +1690,10 @@ void App::runD3D12() {
         colorAttach.clearColor[2] = 0.4f; colorAttach.clearColor[3] = 1.0f;
         cmdBuf->beginRendering(&colorAttach, 1, nullptr, frame.width, frame.height);
 
-        // Compute dispatch (PSO + descriptor + push constants + dispatch)
         cmdBuf->bindPipelineState(*pso);
         cmdBuf->bindDescriptorSet(0, *descSet);
-        cmdBuf->pushConstants(rhi::ShaderStage::Compute, &pcData, sizeof(pcData));
-        cmdBuf->dispatch(1, 1, 1);
+        cmdBuf->pushConstants(rhi::ShaderStage::Compute, &pcData, 16);
+        cmdBuf->dispatch((800 + 7) / 8, (450 + 7) / 8);
 
         cmdBuf->endRendering();
         cmdBuf->end();
