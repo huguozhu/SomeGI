@@ -228,7 +228,7 @@ void RenderTargets::destroy() {
     aaHistory.reset();
 }
 
-void RenderTargets::createRHI(rhi::RHIDevice& rhiDev, VkExtent2D ext, VkSampleCountFlagBits) {
+void RenderTargets::createRHI(rhi::RHIDevice& rhiDev, VkExtent2D ext, VkSampleCountFlagBits msaaSamples) {
     extent = ext;
     auto makeTex = [&](rhi::Format fmt, VkImageUsageFlags usage,
                        std::unique_ptr<rhi::RHITexture>& tex,
@@ -275,6 +275,74 @@ void RenderTargets::createRHI(rhi::RHIDevice& rhiDev, VkExtent2D ext, VkSampleCo
     makeTex(rhi::Format::R8G8B8A8_UNORM,
         VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
         rhi.gEmissiveAO, rhi.gEmissiveAOView);
+
+    // MSAA targets (skip if samples == 1)
+    auto makeMsaa = [&](rhi::Format fmt, VkImageUsageFlags usage,
+                        std::unique_ptr<rhi::RHITexture>& tex) {
+        if (msaaSamples == VK_SAMPLE_COUNT_1_BIT) return;
+        rhi::TextureDesc td;
+        td.format = fmt; td.width = ext.width; td.height = ext.height;
+        td.samples = (uint32_t)msaaSamples;
+        uint32_t u = 0;
+        if (usage & VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT) u |= (uint32_t)rhi::TextureUsage::ColorAttachment;
+        if (usage & VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT) u = (uint32_t)rhi::TextureUsage::DepthStencil;
+        td.usage = (rhi::TextureUsage)u;
+        tex.reset(static_cast<rhi::RHITexture*>(rhiDev.createTexture(td).release()));
+    };
+    makeMsaa(rhi::Format::R8G8B8A8_UNORM,
+        VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT, rhi.gAlbedoMetalMs);
+    makeMsaa(rhi::Format::R16G16B16A16_SFLOAT,
+        VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT, rhi.gNormalRoughMs);
+    makeMsaa(rhi::Format::R8G8B8A8_UNORM,
+        VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT, rhi.gEmissiveAOMs);
+    makeMsaa(rhi::Format::D32_SFLOAT,
+        VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, rhi.depthMs);
+
+    // AO + screen-space
+    auto makeAux = [&](rhi::Format fmt, VkImageUsageFlags usage,
+                       std::unique_ptr<rhi::RHITexture>& tex,
+                       std::unique_ptr<rhi::RHITextureView>& view) {
+        rhi::TextureDesc td;
+        td.format = fmt; td.width = ext.width; td.height = ext.height;
+        uint32_t u = (uint32_t)rhi::TextureUsage::Sampled | (uint32_t)rhi::TextureUsage::Storage;
+        if (usage & VK_IMAGE_USAGE_TRANSFER_SRC_BIT) u |= (uint32_t)rhi::TextureUsage::TransferSrc;
+        if (usage & VK_IMAGE_USAGE_TRANSFER_DST_BIT) u |= (uint32_t)rhi::TextureUsage::TransferDst;
+        td.usage = (rhi::TextureUsage)u;
+        tex.reset(static_cast<rhi::RHITexture*>(rhiDev.createTexture(td).release()));
+        view = tex->createView({});
+    };
+    makeAux(rhi::Format::R8_UNORM,
+        VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, rhi.ssao, rhi.ssaoView);
+    makeAux(rhi::Format::R16G16B16A16_SFLOAT,
+        VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, rhi.ssr, rhi.ssrView);
+    makeAux(rhi::Format::R16G16B16A16_SFLOAT,
+        VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+        rhi.hdrPrev, rhi.hdrPrevView);
+    makeAux(rhi::Format::R16G16B16A16_SFLOAT,
+        VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, rhi.ssgi, rhi.ssgiView);
+    makeAux(rhi::Format::R16G16B16A16_SFLOAT,
+        VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+        rhi.ssgiPrev, rhi.ssgiPrevView);
+
+    // GI outputs
+    makeAux(rhi::Format::R16G16B16A16_SFLOAT,
+        VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, rhi.rsmGI, rhi.rsmGIView);
+    makeAux(rhi::Format::R16G16B16A16_SFLOAT,
+        VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, rhi.restir, rhi.restirView);
+    makeAux(rhi::Format::R16G16B16A16_SFLOAT,
+        VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+        rhi.rtGI, rhi.rtGIView);
+    makeAux(rhi::Format::R16G16B16A16_SFLOAT,
+        VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+        rhi.lumenGI, rhi.lumenGIView);
+
+    // AA textures
+    makeAux(rhi::Format::R16G16B16A16_SFLOAT,
+        VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
+        rhi.aaHdr, rhi.aaHdrView);
+    makeAux(rhi::Format::R16G16B16A16_SFLOAT,
+        VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+        rhi.aaHistory, rhi.aaHistoryView);
 }
 
 } // namespace somegi

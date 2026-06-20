@@ -79,8 +79,15 @@ struct RenderTargets {
     struct RHITargets {
         std::unique_ptr<rhi::RHITexture> hdrColor, depth, ldrTonemap;
         std::unique_ptr<rhi::RHITexture> gAlbedoMetal, gNormalRough, gEmissiveAO;
+        std::unique_ptr<rhi::RHITexture> gAlbedoMetalMs, gNormalRoughMs, gEmissiveAOMs, depthMs;
+        std::unique_ptr<rhi::RHITexture> ssao, ssr, hdrPrev, ssgi, ssgiPrev;
+        std::unique_ptr<rhi::RHITexture> rsmGI, restir, rtGI, lumenGI, aaHdr, aaHistory;
         std::unique_ptr<rhi::RHITextureView> hdrColorView, depthView, ldrTonemapView;
         std::unique_ptr<rhi::RHITextureView> gAlbedoMetalView, gNormalRoughView, gEmissiveAOView;
+        std::unique_ptr<rhi::RHITextureView> ssaoView, ssrView, ssgiView;
+        std::unique_ptr<rhi::RHITextureView> hdrPrevView, ssgiPrevView;
+        std::unique_ptr<rhi::RHITextureView> rsmGIView, restirView, rtGIView, lumenGIView;
+        std::unique_ptr<rhi::RHITextureView> aaHdrView, aaHistoryView;
     };
     RHITargets rhi{};
 };
