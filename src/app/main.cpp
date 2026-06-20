@@ -115,9 +115,8 @@ int main(int argc, char** argv) {
                 if (frame.needsResize) continue;
 
                 cmdBuf->begin();
-                // Clear back buffer to blue
-                float clearColor[4] = { 0.1f, 0.2f, 0.4f, 1.0f };
-                // 简单测试：仅验证设备/交换链/命令缓冲正常工作
+                // D3D12 链路验证：设备→交换链→命令缓冲→提交→呈现
+                // 清除渲染在 beginRendering 完善后进行（Phase 5 TextureView descriptor）
                 cmdBuf->end();
 
                 somegi::rhi::SubmitDesc sd{};

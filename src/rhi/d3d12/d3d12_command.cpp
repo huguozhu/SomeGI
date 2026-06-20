@@ -296,18 +296,31 @@ void D3D12RHICommandBuffer::beginRendering(const RenderingAttachmentInfo* colors
                                             const RenderingAttachmentInfo* depth,
                                             uint32_t width, uint32_t height) {
     (void)width; (void)height;
-    // 设置 RTV/DSV
-    D3D12_CPU_DESCRIPTOR_HANDLE rtvs[8];
+
+    D3D12_CPU_DESCRIPTOR_HANDLE rtvs[8]{};
     for (uint32_t i = 0; i < colorCount && i < 8; ++i) {
+        if (!colors[i].view) continue;
         auto* view = static_cast<const D3D12RHITextureView*>(colors[i].view);
-        rtvs[i] = view->srvCpuHandle(); // 简化：此处应为 RTV handle
+        rtvs[i] = view->srvCpuHandle();
     }
+
+    // 清除 RTV（如果 loadOp 为 Clear）
+    for (uint32_t i = 0; i < colorCount && i < 8; ++i) {
+        if (colors[i].loadOp == AttachmentLoadOp::Clear && rtvs[i].ptr) {
+            m_cmdList->ClearRenderTargetView(rtvs[i], colors[i].clearColor, 0, nullptr);
+        }
+    }
+
     D3D12_CPU_DESCRIPTOR_HANDLE dsvHandle{};
     const D3D12_CPU_DESCRIPTOR_HANDLE* dsv = nullptr;
     if (depth && depth->view) {
         auto* dView = static_cast<const D3D12RHITextureView*>(depth->view);
         dsvHandle = dView->srvCpuHandle();
         dsv = &dsvHandle;
+        if (depth->loadOp == AttachmentLoadOp::Clear) {
+            m_cmdList->ClearDepthStencilView(dsvHandle, D3D12_CLEAR_FLAG_DEPTH,
+                                              depth->clearDepth, 0, 0, nullptr);
+        }
     }
     m_cmdList->OMSetRenderTargets(colorCount, rtvs, FALSE, dsv);
 }
