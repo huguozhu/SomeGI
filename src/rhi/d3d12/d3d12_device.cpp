@@ -4,6 +4,7 @@
 #include "d3d12_texture.h"
 #include "d3d12_swapchain.h"
 #include "d3d12_command.h"
+#include "d3d12_pso.h"
 #include <d3d12.h>
 #include <dxgi1_6.h>
 #include <stdexcept>
@@ -127,11 +128,23 @@ std::unique_ptr<RHISampler> D3D12RHIDevice::createSampler(const SamplerDesc&) { 
 std::unique_ptr<RHISwapchain> D3D12RHIDevice::createSwapchain(void* nativeWindow, uint32_t w, uint32_t h) {
     return std::unique_ptr<RHISwapchain>(new D3D12RHISwapchain(*this, nativeWindow, w, h));
 }
-std::unique_ptr<RHIPipelineState> D3D12RHIDevice::createGraphicsPSO(const GraphicsPSODesc&) { NOT_IMPL("createGraphicsPSO"); }
-std::unique_ptr<RHIPipelineState> D3D12RHIDevice::createComputePSO(const ComputePSODesc&) { NOT_IMPL("createComputePSO"); }
-std::unique_ptr<RHIPipelineState> D3D12RHIDevice::createRayTracingPSO(const RayTracingPSODesc&) { NOT_IMPL("createRayTracingPSO"); }
-std::unique_ptr<RHIDescriptorSetLayout> D3D12RHIDevice::createDescriptorSetLayout(const DescSetLayoutDesc&) { NOT_IMPL("createDescriptorSetLayout"); }
-std::unique_ptr<RHIDescriptorSet> D3D12RHIDevice::createDescriptorSet(const RHIDescriptorSetLayout&) { NOT_IMPL("createDescriptorSet"); }
+std::unique_ptr<RHIPipelineState> D3D12RHIDevice::createGraphicsPSO(const GraphicsPSODesc& desc) {
+    return std::unique_ptr<RHIPipelineState>(new D3D12RHIPipelineState(*this, desc));
+}
+std::unique_ptr<RHIPipelineState> D3D12RHIDevice::createComputePSO(const ComputePSODesc& desc) {
+    return std::unique_ptr<RHIPipelineState>(new D3D12RHIPipelineState(*this, desc));
+}
+std::unique_ptr<RHIPipelineState> D3D12RHIDevice::createRayTracingPSO(const RayTracingPSODesc&) {
+    NOT_IMPL("createRayTracingPSO");
+}
+std::unique_ptr<RHIDescriptorSetLayout> D3D12RHIDevice::createDescriptorSetLayout(const DescSetLayoutDesc& desc) {
+    return std::unique_ptr<RHIDescriptorSetLayout>(new D3D12RHIDescriptorSetLayout(desc));
+}
+std::unique_ptr<RHIDescriptorSet> D3D12RHIDevice::createDescriptorSet(const RHIDescriptorSetLayout& layout) {
+    return std::unique_ptr<RHIDescriptorSet>(new D3D12RHIDescriptorSet(
+        *this, const_cast<D3D12RHIDescriptorSetLayout&>(
+            static_cast<const D3D12RHIDescriptorSetLayout&>(layout))));
+}
 std::unique_ptr<RHICommandPool> D3D12RHIDevice::createCommandPool() {
     return std::unique_ptr<RHICommandPool>(new D3D12RHICommandPool(*this));
 }

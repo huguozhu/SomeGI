@@ -23,6 +23,7 @@ if(WIN32)
         d3d12/d3d12_device.cpp
         d3d12/d3d12_buffer.cpp
         d3d12/d3d12_texture.cpp
+        d3d12/d3d12_pso.cpp
         d3d12/d3d12_swapchain.cpp
         d3d12/d3d12_command.cpp
     )
