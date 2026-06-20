@@ -7,6 +7,7 @@
 #include "d3d12_swapchain.h"
 #include <stdexcept>
 #include <cstdio>
+#include <cstring>
 
 namespace somegi {
 namespace rhi {
@@ -191,7 +192,28 @@ void D3D12RHICommandBuffer::dispatchIndirect(const RHIBuffer&, uint64_t) {}
 void D3D12RHICommandBuffer::copyBuffer(const RHIBuffer&, const RHIBuffer&,
                                         uint64_t, uint64_t, uint64_t) {}
 void D3D12RHICommandBuffer::copyTexture(const RHITexture&, const RHITexture&) {}
-void D3D12RHICommandBuffer::fillBuffer(const RHIBuffer&, uint64_t, uint64_t, uint32_t) {}
+void D3D12RHICommandBuffer::fillBuffer(const RHIBuffer& dst, uint64_t offset,
+                                        uint64_t size, uint32_t data) {
+    auto& d3dBuf = static_cast<const D3D12RHIBuffer&>(dst);
+    // 使用临时 upload buffer → CopyBufferRegion
+    D3D12_HEAP_PROPERTIES uploadHeap{D3D12_HEAP_TYPE_UPLOAD,
+        D3D12_CPU_PAGE_PROPERTY_UNKNOWN, D3D12_MEMORY_POOL_UNKNOWN, 1, 1};
+    D3D12_RESOURCE_DESC ud{D3D12_RESOURCE_DIMENSION_BUFFER, 0, size, 1, 1, 1,
+        DXGI_FORMAT_UNKNOWN, {1, 0}, D3D12_TEXTURE_LAYOUT_ROW_MAJOR};
+
+    ID3D12Resource* uploadBuf = nullptr;
+    m_device.device()->CreateCommittedResource(&uploadHeap, D3D12_HEAP_FLAG_NONE, &ud,
+        D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&uploadBuf));
+
+    uint8_t* mapped = nullptr;
+    uploadBuf->Map(0, nullptr, (void**)&mapped);
+    for (uint64_t i = 0; i < size; i += 4)
+        std::memcpy(mapped + i, &data, size - i < 4 ? size - i : 4);
+    uploadBuf->Unmap(0, nullptr);
+
+    m_cmdList->CopyBufferRegion(d3dBuf.resource(), offset, uploadBuf, 0, size);
+    uploadBuf->Release();
+}
 void D3D12RHICommandBuffer::clearColor(const RHITexture& tex,
                                         float r, float g, float b, float a) {
     // 简化：仅支持创建了 RTV descriptor 的纹理

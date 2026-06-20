@@ -2,6 +2,7 @@
 #pragma once
 #include "../base/texture.h"
 #include "../base/shader.h"
+#include "../base/sampler.h"
 #include <d3d12.h>
 
 namespace somegi {
@@ -60,7 +61,17 @@ private:
     bool m_isDSV = false;
 };
 
-// D3D12 Shader（桩，Phase 3 随 SPIRV-Cross 工具链实现）
+// D3D12 采样器
+class D3D12RHISampler : public RHISampler {
+public:
+    D3D12RHISampler(const SamplerDesc& desc);
+    void* nativeHandle() const override { return (void*)(uintptr_t)m_cpuHandle.ptr; }
+    D3D12_CPU_DESCRIPTOR_HANDLE cpuHandle() const { return m_cpuHandle; }
+private:
+    D3D12_CPU_DESCRIPTOR_HANDLE m_cpuHandle{};
+};
+
+// D3D12 Shader（DXIL bytecode 包装）
 class D3D12RHIShader : public RHIShader {
 public:
     D3D12RHIShader(const ShaderDesc& desc, const void* bytecode, size_t size);

@@ -102,6 +102,39 @@ D3D12RHITextureView::~D3D12RHITextureView() = default;
 // D3D12RHIShader
 // ════════════════════════════════════════════════════════════════
 
+// ════════════════════════════════════════════════════════════════
+// D3D12RHISampler
+// ════════════════════════════════════════════════════════════════
+
+static D3D12_FILTER toD3D12Filter(Filter mag, Filter min, SamplerMipmapMode mip) {
+    if (min == Filter::Linear && mag == Filter::Linear && mip == SamplerMipmapMode::Linear)
+        return D3D12_FILTER_MIN_MAG_MIP_LINEAR;
+    if (min == Filter::Linear && mag == Filter::Linear)
+        return D3D12_FILTER_MIN_MAG_LINEAR_MIP_POINT;
+    if (min == Filter::Nearest && mag == Filter::Nearest)
+        return D3D12_FILTER_MIN_MAG_MIP_POINT;
+    return D3D12_FILTER_MIN_MAG_MIP_LINEAR;
+}
+
+static D3D12_TEXTURE_ADDRESS_MODE toD3D12Addr(SamplerAddressMode m) {
+    switch (m) {
+        case SamplerAddressMode::Repeat:         return D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+        case SamplerAddressMode::MirroredRepeat: return D3D12_TEXTURE_ADDRESS_MODE_MIRROR;
+        case SamplerAddressMode::ClampToBorder:  return D3D12_TEXTURE_ADDRESS_MODE_BORDER;
+        default: return D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+    }
+}
+
+D3D12RHISampler::D3D12RHISampler(const SamplerDesc& desc) {
+    // D3D12 sampler 在 root signature 中是静态的，此处仅存储配置
+    // 完整实现需将 sampler 加入 root signature 或 sampler descriptor heap
+    (void)desc;
+}
+
+// ════════════════════════════════════════════════════════════════
+// D3D12RHIShader
+// ════════════════════════════════════════════════════════════════
+
 D3D12RHIShader::D3D12RHIShader(const ShaderDesc& desc, const void* bytecode, size_t size)
     : m_stage(desc.stage), m_entryPoint(desc.entryPoint ? desc.entryPoint : "main") {
     auto* data = static_cast<const uint8_t*>(bytecode);

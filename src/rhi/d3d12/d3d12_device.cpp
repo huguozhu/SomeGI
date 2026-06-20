@@ -166,7 +166,9 @@ std::unique_ptr<RHITextureView> D3D12RHIDevice::createTextureView(const RHITextu
 std::unique_ptr<RHIShader> D3D12RHIDevice::createShader(const ShaderDesc& desc, const void* bytecode, size_t size) {
     return std::make_unique<D3D12RHIShader>(desc, bytecode, size);
 }
-std::unique_ptr<RHISampler> D3D12RHIDevice::createSampler(const SamplerDesc&) { NOT_IMPL("createSampler"); }
+std::unique_ptr<RHISampler> D3D12RHIDevice::createSampler(const SamplerDesc& desc) {
+    return std::make_unique<D3D12RHISampler>(desc);
+}
 std::unique_ptr<RHISwapchain> D3D12RHIDevice::createSwapchain(void* nativeWindow, uint32_t w, uint32_t h) {
     return std::unique_ptr<RHISwapchain>(new D3D12RHISwapchain(*this, nativeWindow, w, h));
 }
