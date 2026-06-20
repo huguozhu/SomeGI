@@ -357,7 +357,7 @@ void D3D12RHICommandBuffer::beginRendering(const RenderingAttachmentInfo* colors
     for (uint32_t i = 0; i < colorCount && i < 8; ++i) {
         if (!colors[i].view) continue;
         auto* view = static_cast<const D3D12RHITextureView*>(colors[i].view);
-        rtvs[i] = view->srvCpuHandle();
+        rtvs[i] = view->rtvCpuHandle();
     }
 
     // 清除 RTV（如果 loadOp 为 Clear）
@@ -371,7 +371,7 @@ void D3D12RHICommandBuffer::beginRendering(const RenderingAttachmentInfo* colors
     const D3D12_CPU_DESCRIPTOR_HANDLE* dsv = nullptr;
     if (depth && depth->view) {
         auto* dView = static_cast<const D3D12RHITextureView*>(depth->view);
-        dsvHandle = dView->srvCpuHandle();
+        dsvHandle = dView->dsvCpuHandle();
         dsv = &dsvHandle;
         if (depth->loadOp == AttachmentLoadOp::Clear) {
             m_cmdList->ClearDepthStencilView(dsvHandle, D3D12_CLEAR_FLAG_DEPTH,

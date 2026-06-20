@@ -71,7 +71,6 @@ public:
     ID3D12DescriptorHeap* gpuDescriptorHeap() { return m_gpuDescHeap; }
     uint32_t gpuDescHeapIncrement() const { return m_gpuDescIncrement; }
 
-    // 从 GPU 可见堆分配 count 个描述符，返回分配起始处的 CPU + GPU handle
     struct DescAlloc {
         D3D12_CPU_DESCRIPTOR_HANDLE cpu;
         D3D12_GPU_DESCRIPTOR_HANDLE gpu;
@@ -80,6 +79,14 @@ public:
     DescAlloc allocDescriptors(uint32_t count);
     void resetDescriptorHeap();
 
+    // CPU 端描述符堆（用于 RTV/DSV/SRV 持久视图，非 shader 可见）
+    ID3D12DescriptorHeap* cpuRtvHeap()    { return m_cpuRtvHeap; }
+    ID3D12DescriptorHeap* cpuDsvHeap()    { return m_cpuDsvHeap; }
+    ID3D12DescriptorHeap* cpuSrvUavHeap() { return m_cpuSrvHeap; }
+    uint32_t cpuRtvIncrement()   const { return m_cpuRtvInc; }
+    uint32_t cpuDsvIncrement()   const { return m_cpuDsvInc; }
+    uint32_t cpuSrvIncrement()   const { return m_cpuSrvInc; }
+
     // 资源状态追踪（用于正确的 barrier StateBefore）
     void trackResourceState(ID3D12Resource* res, D3D12_RESOURCE_STATES state);
     D3D12_RESOURCE_STATES getResourceState(ID3D12Resource* res) const;
@@ -87,6 +94,12 @@ public:
 
 private:
     void createDescriptorHeap();
+
+    // CPU 端描述符堆（持久视图，非 shader 可见）
+    ID3D12DescriptorHeap* m_cpuRtvHeap = nullptr;
+    ID3D12DescriptorHeap* m_cpuDsvHeap = nullptr;
+    ID3D12DescriptorHeap* m_cpuSrvHeap = nullptr;
+    uint32_t m_cpuRtvInc = 0, m_cpuDsvInc = 0, m_cpuSrvInc = 0;
 
     // 资源状态追踪表
     std::unordered_map<ID3D12Resource*, D3D12_RESOURCE_STATES> m_resourceStates;

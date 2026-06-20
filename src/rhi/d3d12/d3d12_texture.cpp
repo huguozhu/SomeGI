@@ -96,9 +96,41 @@ D3D12RHITextureView::D3D12RHITextureView(D3D12RHIDevice& device,
     bool isDS = (texture.defaultState() == D3D12_RESOURCE_STATE_DEPTH_WRITE);
     m_isDSV = isDS;
     m_isRTV = !isDS && (texture.defaultState() == D3D12_RESOURCE_STATE_RENDER_TARGET);
-    // Phase 5: 实际创建 SRV/RTV/DSV 并缓存 handle
-    (void)device;
-    (void)desc;
+
+    if (m_isDSV && device.cpuDsvHeap()) {
+        // 分配 DSV
+        static uint32_t dsvIdx = 0;
+        m_dsvHandle = device.cpuDsvHeap()->GetCPUDescriptorHandleForHeapStart();
+        m_dsvHandle.ptr += dsvIdx++ * device.cpuDsvIncrement();
+
+        D3D12_DEPTH_STENCIL_VIEW_DESC dsvd{};
+        dsvd.Format = texture.dxgiFormat();
+        dsvd.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2D;
+        device.device()->CreateDepthStencilView(texture.resource(), &dsvd, m_dsvHandle);
+    } else if (m_isRTV && device.cpuRtvHeap()) {
+        // 分配 RTV
+        static uint32_t rtvIdx = 0;
+        m_rtvHandle = device.cpuRtvHeap()->GetCPUDescriptorHandleForHeapStart();
+        m_rtvHandle.ptr += rtvIdx++ * device.cpuRtvIncrement();
+
+        D3D12_RENDER_TARGET_VIEW_DESC rtvd{};
+        rtvd.Format = texture.dxgiFormat();
+        rtvd.ViewDimension = D3D12_RTV_DIMENSION_TEXTURE2D;
+        device.device()->CreateRenderTargetView(texture.resource(), &rtvd, m_rtvHandle);
+    } else if (device.cpuSrvUavHeap()) {
+        // 分配 SRV
+        static uint32_t srvIdx = 0;
+        m_srvHandle = device.cpuSrvUavHeap()->GetCPUDescriptorHandleForHeapStart();
+        m_srvHandle.ptr += srvIdx++ * device.cpuSrvIncrement();
+
+        D3D12_SHADER_RESOURCE_VIEW_DESC srvd{};
+        srvd.Format = texture.dxgiFormat();
+        srvd.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+        srvd.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        srvd.Texture2D.MipLevels = desc.mipCount ? desc.mipCount : texture.mipLevels();
+        srvd.Texture2D.MostDetailedMip = desc.baseMip;
+        device.device()->CreateShaderResourceView(texture.resource(), &srvd, m_srvHandle);
+    }
 }
 
 D3D12RHITextureView::~D3D12RHITextureView() = default;

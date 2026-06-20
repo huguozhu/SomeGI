@@ -44,9 +44,9 @@ public:
     ~D3D12RHITextureView() override;
     void* nativeHandle() const override { return (void*)(uintptr_t)m_srvHandle.ptr; }
 
-    D3D12_CPU_DESCRIPTOR_HANDLE srvCpuHandle() const {
-        return m_isRTV ? m_rtvHandle : m_srvHandle;
-    }
+    D3D12_CPU_DESCRIPTOR_HANDLE srvCpuHandle() const { return m_srvHandle; }
+    D3D12_CPU_DESCRIPTOR_HANDLE rtvCpuHandle() const { return m_rtvHandle; }
+    D3D12_CPU_DESCRIPTOR_HANDLE dsvCpuHandle() const { return m_dsvHandle; }
     D3D12_GPU_DESCRIPTOR_HANDLE srvGpuHandle() const { return m_srvGpuHandle; }
     bool isRenderTarget() const { return m_isRTV; }
     bool isDepthStencil() const { return m_isDSV; }
@@ -56,6 +56,7 @@ private:
     friend class D3D12RHICommandBuffer;
     D3D12_CPU_DESCRIPTOR_HANDLE m_srvHandle{};
     D3D12_CPU_DESCRIPTOR_HANDLE m_rtvHandle{};
+    D3D12_CPU_DESCRIPTOR_HANDLE m_dsvHandle{};
     D3D12_GPU_DESCRIPTOR_HANDLE m_srvGpuHandle{};
     bool m_isRTV = false;
     bool m_isDSV = false;

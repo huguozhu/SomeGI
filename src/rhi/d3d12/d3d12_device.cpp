@@ -105,6 +105,30 @@ D3D12RHIDevice::D3D12RHIDevice() {
 
     // ── 创建 GPU 可见描述符堆 ──
     createDescriptorHeap();
+
+    // ── 创建 CPU 端描述符堆（持久 RTV/DSV/SRV） ──
+    {
+        D3D12_DESCRIPTOR_HEAP_DESC hdRtv{};
+        hdRtv.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
+        hdRtv.NumDescriptors = 256;
+        hdRtv.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
+        m_device->CreateDescriptorHeap(&hdRtv, IID_PPV_ARGS(&m_cpuRtvHeap));
+        m_cpuRtvInc = m_device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
+
+        D3D12_DESCRIPTOR_HEAP_DESC hdDsv{};
+        hdDsv.Type = D3D12_DESCRIPTOR_HEAP_TYPE_DSV;
+        hdDsv.NumDescriptors = 64;
+        hdDsv.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
+        m_device->CreateDescriptorHeap(&hdDsv, IID_PPV_ARGS(&m_cpuDsvHeap));
+        m_cpuDsvInc = m_device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_DSV);
+
+        D3D12_DESCRIPTOR_HEAP_DESC hdSrv{};
+        hdSrv.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+        hdSrv.NumDescriptors = 1024;
+        hdSrv.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
+        m_device->CreateDescriptorHeap(&hdSrv, IID_PPV_ARGS(&m_cpuSrvHeap));
+        m_cpuSrvInc = m_device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+    }
 }
 
 void D3D12RHIDevice::createDescriptorHeap() {
@@ -155,6 +179,9 @@ void D3D12RHIDevice::removeResourceState(ID3D12Resource* res) {
 D3D12RHIDevice::~D3D12RHIDevice() {
     waitIdle();
     if (m_gpuDescHeap) { m_gpuDescHeap->Release(); }
+    if (m_cpuRtvHeap)  { m_cpuRtvHeap->Release(); }
+    if (m_cpuDsvHeap)  { m_cpuDsvHeap->Release(); }
+    if (m_cpuSrvHeap)  { m_cpuSrvHeap->Release(); }
     if (m_queue)   { m_queue->Release(); }
     if (m_device)  { m_device->Release(); }
     if (m_factory) { m_factory->Release(); }
