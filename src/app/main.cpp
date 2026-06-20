@@ -115,8 +115,20 @@ int main(int argc, char** argv) {
                 if (frame.needsResize) continue;
 
                 cmdBuf->begin();
-                // D3D12 链路验证：设备→交换链→命令缓冲→提交→呈现
-                // 清除渲染在 beginRendering 完善后进行（Phase 5 TextureView descriptor）
+
+                // 清除 back buffer（蓝色背景）
+                somegi::rhi::RenderingAttachmentInfo colorAttach{};
+                colorAttach.view = frame.view.get();
+                colorAttach.loadOp = somegi::rhi::AttachmentLoadOp::Clear;
+                colorAttach.storeOp = somegi::rhi::AttachmentStoreOp::Store;
+                colorAttach.clearColor[0] = 0.1f;
+                colorAttach.clearColor[1] = 0.2f;
+                colorAttach.clearColor[2] = 0.4f;
+                colorAttach.clearColor[3] = 1.0f;
+
+                cmdBuf->beginRendering(&colorAttach, 1, nullptr, frame.width, frame.height);
+                cmdBuf->endRendering();
+
                 cmdBuf->end();
 
                 somegi::rhi::SubmitDesc sd{};

@@ -37,19 +37,24 @@ private:
 // D3D12 纹理视图（即 SRV/RTV/DSV/UAV descriptor handle）
 class D3D12RHITextureView : public RHITextureView {
 public:
+    D3D12RHITextureView() = default;  // 用于 swapchain back buffer 视图
     D3D12RHITextureView(D3D12RHIDevice& device, D3D12RHITexture& texture,
                          const TextureViewDesc& desc);
     ~D3D12RHITextureView() override;
     void* nativeHandle() const override { return (void*)(uintptr_t)m_srvHandle.ptr; }
 
-    D3D12_CPU_DESCRIPTOR_HANDLE srvCpuHandle() const { return m_srvHandle; }
+    D3D12_CPU_DESCRIPTOR_HANDLE srvCpuHandle() const {
+        return m_isRTV ? m_rtvHandle : m_srvHandle;
+    }
     D3D12_GPU_DESCRIPTOR_HANDLE srvGpuHandle() const { return m_srvGpuHandle; }
     bool isRenderTarget() const { return m_isRTV; }
     bool isDepthStencil() const { return m_isDSV; }
 
 private:
-    D3D12RHIDevice& m_device;
+    friend class D3D12RHISwapchain;
+    friend class D3D12RHICommandBuffer;
     D3D12_CPU_DESCRIPTOR_HANDLE m_srvHandle{};
+    D3D12_CPU_DESCRIPTOR_HANDLE m_rtvHandle{};
     D3D12_GPU_DESCRIPTOR_HANDLE m_srvGpuHandle{};
     bool m_isRTV = false;
     bool m_isDSV = false;

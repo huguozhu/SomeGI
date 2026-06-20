@@ -87,14 +87,13 @@ std::unique_ptr<RHITextureView> D3D12RHITexture::createView(const TextureViewDes
 
 D3D12RHITextureView::D3D12RHITextureView(D3D12RHIDevice& device,
                                            D3D12RHITexture& texture,
-                                           const TextureViewDesc& desc)
-    : m_device(device) {
-
-    // 简化：创建 SRV descriptor
-    // Phase 3 将实现完整的 descriptor heap 管理，当前仅占位
+                                           const TextureViewDesc& desc) {
     bool isDS = (texture.defaultState() == D3D12_RESOURCE_STATE_DEPTH_WRITE);
     m_isDSV = isDS;
     m_isRTV = !isDS && (texture.defaultState() == D3D12_RESOURCE_STATE_RENDER_TARGET);
+    // Phase 5: 实际创建 SRV/RTV/DSV 并缓存 handle
+    (void)device;
+    (void)desc;
 }
 
 D3D12RHITextureView::~D3D12RHITextureView() = default;

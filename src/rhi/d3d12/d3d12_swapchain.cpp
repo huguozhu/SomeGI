@@ -1,6 +1,7 @@
 // rhi/d3d12/d3d12_swapchain.cpp — D3D12 交换链实现
 #include "d3d12_swapchain.h"
 #include "d3d12_device.h"
+#include "d3d12_texture.h"
 #include <stdexcept>
 #include <cstdio>
 
@@ -116,6 +117,13 @@ SwapchainFrame D3D12RHISwapchain::acquireNextFrame() {
 
     f.width  = m_width;
     f.height = m_height;
+
+    // 创建 back buffer 的 RTV 视图（非拥有型）
+    uint32_t idx = m_frameIndex % kFrameCount;
+    auto* bbView = new D3D12RHITextureView();
+    bbView->m_isRTV = true;
+    bbView->m_rtvHandle = rtvHandle(idx);
+    f.view.reset(bbView);
 
     m_frameIndex++;
     return f;
