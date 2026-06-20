@@ -1737,9 +1737,9 @@ void App::runD3D12() {
         cmdBuf->draw(3);
         cmdBuf->endRendering();
 
-        // Compute pipeline: tonemap dispatch
-        if (auto* tonemapPSO = tonemap.pipeline()) {
-            cmdBuf->bindPipelineState(*tonemapPSO);
+        // Compute pipeline: tonemap dispatch (HDR→LDR)
+        if (auto* tPSO = tonemap.pipeline()) {
+            cmdBuf->bindPipelineState(*tPSO);
             cmdBuf->bindDescriptorSet(0, *tonemap.sets()[0]);
             uint32_t pc[4] = {0}; // hdrMode=0, exposure=1.0
             std::memcpy(pcBuf->map(), pc, sizeof(pc));
@@ -1747,6 +1747,9 @@ void App::runD3D12() {
             cmdBuf->pushConstants(rhi::ShaderStage::Compute, pc, sizeof(pc));
             cmdBuf->dispatch((800 + 7) / 8, (450 + 7) / 8);
         }
+        // SSAO dispatch (验证第二个 compute PSO)
+        // Phase 5: 创建 SSAO PSO + 绑定
+
         cmdBuf->end();
 
         rhi::SubmitDesc sub{}; sub.commandBuffer = cmdBuf.get();
