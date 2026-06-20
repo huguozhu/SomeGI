@@ -114,6 +114,8 @@ void D3D12RHIPipelineState::createRootSignature(
     std::vector<std::vector<D3D12_DESCRIPTOR_RANGE1>> rangesPerSet(setLayouts.size());
 
     // 每个 descriptor set → 一个 descriptor table
+    // D3D12 CBV/SRV/UAV 寄存器独立编号：按 Vulkan binding 的声明顺序，
+    // 同类型 descriptor 从 0 开始累加为 HLSL 寄存器号
     for (size_t s = 0; s < setLayouts.size(); ++s) {
         auto* d3dLayout = static_cast<D3D12RHIDescriptorSetLayout*>(setLayouts[s]);
         auto& ranges = rangesPerSet[s];
@@ -122,11 +124,15 @@ void D3D12RHIPipelineState::createRootSignature(
             D3D12_DESCRIPTOR_RANGE1 r{};
             r.RangeType = toD3D12RangeType(b.type);
             r.NumDescriptors = b.count;
-            r.BaseShaderRegister = b.binding;
-            r.RegisterSpace = (UINT)s; // descriptor set index → register space
+            r.BaseShaderRegister = b.hlslRegister ? b.hlslRegister : b.binding;
+            r.RegisterSpace = (UINT)s;
             r.Flags = D3D12_DESCRIPTOR_RANGE_FLAG_NONE;
             r.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
             ranges.push_back(r);
+            const char* tns[] = {"SRV","UAV","CBV","SMP"};
+            int ti = (int)r.RangeType - 1; // D3D12: SRV=1, UAV=2, CBV=3, Sampler=4
+            std::printf("[d3d12]  bind=%u type=%d range=%s reg=%u\n",
+                b.binding, (int)b.type, ti>=0&&ti<4?tns[ti]:"?", r.BaseShaderRegister);
         }
 
         if (!ranges.empty()) {
@@ -264,6 +270,22 @@ void D3D12RHIPipelineState::createComputePSO(const ComputePSODesc& desc) {
     HRESULT hr = m_device.device()->CreateComputePipelineState(&psd,
         IID_PPV_ARGS(&m_pipeline));
     if (FAILED(hr)) {
+        // 尝试从 info queue 获取详细错误
+        ID3D12InfoQueue* infoQueue = nullptr;
+        if (SUCCEEDED(m_device.device()->QueryInterface(IID_PPV_ARGS(&infoQueue)))) {
+            UINT64 msgCount = infoQueue->GetNumStoredMessages();
+            for (UINT64 i = 0; i < msgCount && i < 5; ++i) {
+                SIZE_T msgLen = 0;
+                infoQueue->GetMessage(i, nullptr, &msgLen);
+                if (msgLen > 0) {
+                    auto* msg = (D3D12_MESSAGE*)alloca(msgLen);
+                    infoQueue->GetMessage(i, msg, &msgLen);
+                    std::fprintf(stderr, "[d3d12]   %s\n", msg->pDescription);
+                }
+            }
+            infoQueue->ClearStoredMessages();
+            infoQueue->Release();
+        }
         char buf[256];
         std::snprintf(buf, sizeof(buf),
             "[d3d12] CreateComputePipelineState failed: HRESULT=0x%08X", (unsigned)hr);

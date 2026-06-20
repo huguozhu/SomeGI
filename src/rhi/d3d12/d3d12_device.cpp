@@ -24,8 +24,14 @@ D3D12RHIDevice::D3D12RHIDevice() {
         ID3D12Debug* debugCtrl = nullptr;
         if (SUCCEEDED(D3D12GetDebugInterface(IID_PPV_ARGS(&debugCtrl)))) {
             debugCtrl->EnableDebugLayer();
+            // 启用 GPU 验证（捕获 PSO/root signature 错误）
+            ID3D12Debug3* debug3 = nullptr;
+            if (SUCCEEDED(debugCtrl->QueryInterface(IID_PPV_ARGS(&debug3)))) {
+                debug3->SetEnableGPUBasedValidation(true);
+                debug3->Release();
+            }
             debugCtrl->Release();
-            std::printf("[d3d12] debug layer enabled\n");
+            std::printf("[d3d12] debug layer + GPU validation enabled\n");
         }
     }
 #endif

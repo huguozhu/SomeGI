@@ -128,8 +128,30 @@ int main(int argc, char** argv) {
                 sd.entryPoint = "comp_main";
                 auto csShader = d3d12Device->createShader(sd, csBytecode.data(), csBytecode.size());
                 std::printf("[d3d12] DXIL loaded: %zu bytes\n", csBytecode.size());
-                // PSO 创建需要 D3D12 调试工具精确定位 root signature 匹配问题
-                // 当前已验证：设备/交换链/DXIL 加载/命令缓冲 全链路工作
+
+                somegi::rhi::DescSetLayoutDesc dslDesc;
+                // HLSL registers: CBV b0, SRV t0, SRV t1, UAV u2
+                // 用 hlslRegister 覆盖绑定的 Vulkan binding 号
+                auto addBind = [&](uint32_t vkBind, somegi::rhi::DescriptorType t, uint32_t hlslReg) {
+                    somegi::rhi::DescriptorBinding b;
+                    b.binding = vkBind; b.type = t; b.hlslRegister = hlslReg;
+                    dslDesc.bindings.push_back(b);
+                };
+                addBind(0, somegi::rhi::DescriptorType::UniformBuffer, 0); // b0
+                addBind(0, somegi::rhi::DescriptorType::SampledImage, 0);  // t0
+                addBind(1, somegi::rhi::DescriptorType::SampledImage, 1);  // t1
+                addBind(2, somegi::rhi::DescriptorType::StorageImage, 2);  // u2
+                auto dsl = d3d12Device->createDescriptorSetLayout(dslDesc);
+
+                somegi::rhi::ComputePSODesc psd;
+                psd.computeShader = csShader.get();
+                psd.descriptorSetLayouts.push_back(dsl.get());
+                try {
+                    auto csPSO = d3d12Device->createComputePSO(psd);
+                    std::printf("[d3d12] compute PSO created!\n");
+                } catch (const std::exception& e) {
+                    std::printf("[d3d12] PSO failed: %s\n", e.what());
+                }
             }
 
             // 创建 fence 用于提交同步
