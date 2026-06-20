@@ -63,6 +63,16 @@ D3D12RHICommandBuffer::~D3D12RHICommandBuffer() {
 void D3D12RHICommandBuffer::begin() {
     m_pool.m_allocator->Reset();
     m_cmdList->Reset(m_pool.m_allocator, nullptr);
+
+    // 绑定 GPU 可见描述符堆（CBV_SRV_UAV + Sampler）
+    {
+        ID3D12DescriptorHeap* heaps[] = {
+            m_device.gpuDescriptorHeap(),
+            m_device.gpuSamplerHeap()
+        };
+        m_cmdList->SetDescriptorHeaps(2, heaps);
+    }
+
     m_recording = true;
 }
 
@@ -105,14 +115,23 @@ void D3D12RHICommandBuffer::bindPipelineState(const RHIPipelineState& pso) {
 void D3D12RHICommandBuffer::bindDescriptorSet(uint32_t slot,
                                                const RHIDescriptorSet& set) {
     auto& d3dSet = static_cast<const D3D12RHIDescriptorSet&>(set);
-    // 尝试从上次绑定的 PSO 获取根参数映射
     if (m_boundPSO) {
         uint32_t resParam = m_boundPSO->getResourceParamForSet(slot);
         uint32_t smpParam = m_boundPSO->getSamplerParamForSet(slot);
-        if (resParam != ~0u)
-            m_cmdList->SetComputeRootDescriptorTable(resParam, d3dSet.gpuHandle());
-        // 采样器需要单独的表（暂时不做，待 sampler descriptor heap 管理完善）
-        (void)smpParam;
+        if (resParam != ~0u) {
+            if (m_boundPSO->isCompute())
+                m_cmdList->SetComputeRootDescriptorTable(resParam, d3dSet.gpuHandle());
+            else
+                m_cmdList->SetGraphicsRootDescriptorTable(resParam, d3dSet.gpuHandle());
+        }
+        if (smpParam != ~0u && d3dSet.samplerGpuHandle().ptr != 0) {
+            if (m_boundPSO->isCompute())
+                m_cmdList->SetComputeRootDescriptorTable(smpParam,
+                    d3dSet.samplerGpuHandle());
+            else
+                m_cmdList->SetGraphicsRootDescriptorTable(smpParam,
+                    d3dSet.samplerGpuHandle());
+        }
     } else {
         m_cmdList->SetComputeRootDescriptorTable(slot, d3dSet.gpuHandle());
     }

@@ -14,6 +14,7 @@
 #include "d3d12_query_pool.h"
 #include <d3d12.h>
 #include <dxgi1_6.h>
+#include <cassert>
 #include <stdexcept>
 #include <cstdio>
 
@@ -158,11 +159,30 @@ void D3D12RHIDevice::createDescriptorHeap() {
     m_gpuDescStartCPU = m_gpuDescHeap->GetCPUDescriptorHandleForHeapStart();
     m_gpuDescStartGPU = m_gpuDescHeap->GetGPUDescriptorHandleForHeapStart();
     std::printf("[d3d12] GPU descriptor heap: %u slots\n", kGpuDescHeapSize);
+
+    // ── 创建 GPU 可见采样器描述符堆 ──
+    {
+        D3D12_DESCRIPTOR_HEAP_DESC hdSmp{};
+        hdSmp.Type = D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER;
+        hdSmp.NumDescriptors = kGpuSamplerHeapSize;
+        hdSmp.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+        if (FAILED(m_device->CreateDescriptorHeap(&hdSmp, IID_PPV_ARGS(&m_gpuSamplerHeap)))) {
+            throw std::runtime_error("[d3d12] CreateDescriptorHeap(SAMPLER, SHADER_VISIBLE) failed");
+        }
+        m_gpuSamplerIncrement = m_device->GetDescriptorHandleIncrementSize(
+            D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER);
+        m_gpuSamplerStartCPU = m_gpuSamplerHeap->GetCPUDescriptorHandleForHeapStart();
+        m_gpuSamplerStartGPU = m_gpuSamplerHeap->GetGPUDescriptorHandleForHeapStart();
+        std::printf("[d3d12] GPU sampler heap: %u slots\n", kGpuSamplerHeapSize);
+    }
 }
 
 D3D12RHIDevice::DescAlloc D3D12RHIDevice::allocDescriptors(uint32_t count) {
     uint32_t offset = m_gpuDescOffset;
     m_gpuDescOffset += count;
+
+    // Ensure we don't exceed heap capacity
+    assert(offset + count <= kGpuDescHeapSize);
 
     DescAlloc a;
     a.offset = offset;
@@ -175,6 +195,26 @@ D3D12RHIDevice::DescAlloc D3D12RHIDevice::allocDescriptors(uint32_t count) {
 
 void D3D12RHIDevice::resetDescriptorHeap() {
     m_gpuDescOffset = 0;
+}
+
+D3D12RHIDevice::DescAlloc D3D12RHIDevice::allocSamplerDescriptors(uint32_t count) {
+    uint32_t offset = m_gpuSamplerOffset;
+    m_gpuSamplerOffset += count;
+
+    // Ensure we don't exceed heap capacity
+    assert(offset + count <= kGpuSamplerHeapSize);
+
+    DescAlloc a;
+    a.offset = offset;
+    a.cpu = m_gpuSamplerStartCPU;
+    a.cpu.ptr += static_cast<SIZE_T>(offset) * m_gpuSamplerIncrement;
+    a.gpu = m_gpuSamplerStartGPU;
+    a.gpu.ptr += static_cast<SIZE_T>(offset) * m_gpuSamplerIncrement;
+    return a;
+}
+
+void D3D12RHIDevice::resetSamplerHeap() {
+    m_gpuSamplerOffset = 0;
 }
 
 void D3D12RHIDevice::trackResourceState(ID3D12Resource* res, D3D12_RESOURCE_STATES state) {
@@ -197,6 +237,7 @@ D3D12RHIDevice::~D3D12RHIDevice() {
     if (m_cpuDsvHeap)  { m_cpuDsvHeap->Release(); }
     if (m_cpuSrvHeap)     { m_cpuSrvHeap->Release(); }
     if (m_cpuSamplerHeap) { m_cpuSamplerHeap->Release(); }
+    if (m_gpuSamplerHeap) { m_gpuSamplerHeap->Release(); }
     if (m_queue)   { m_queue->Release(); }
     if (m_device)  { m_device->Release(); }
     if (m_factory) { m_factory->Release(); }
@@ -279,7 +320,8 @@ void D3D12RHIDevice::present(const RHISwapchain& swapchain, const RHISemaphore*)
     // 提交命令队列前先确保所有提交完成
     // Phase 5: 使用 fence 精确同步
     d3dSwap.presentCurrentFrame();
-    resetDescriptorHeap(); // 每帧重置描述符堆
+    resetDescriptorHeap();  // 每帧重置描述符堆
+    resetSamplerHeap();     // 每帧重置采样器堆
 }
 
 void D3D12RHIDevice::waitForFence(const RHIFence& fence, uint64_t timeoutNs) {

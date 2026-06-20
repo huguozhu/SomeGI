@@ -17,6 +17,7 @@ public:
     bool hasSamplerTable() const { return m_samplerParamIdx != ~0u; }
     uint32_t resourceParamIdx() const { return m_resourceParamIdx; }
     uint32_t samplerParamIdx() const { return m_samplerParamIdx; }
+    uint32_t samplerCount() const { return m_samplerCount; }
     void setResourceParam(uint32_t idx) { m_resourceParamIdx = idx; }
     void setSamplerParam(uint32_t idx) { m_samplerParamIdx = idx; }
 private:
@@ -24,6 +25,7 @@ private:
     std::vector<DescriptorBinding> m_bindings;
     uint32_t m_resourceParamIdx = ~0u;
     uint32_t m_samplerParamIdx = ~0u;
+    uint32_t m_samplerCount = 0;
 };
 
 class D3D12RHIDescriptorSet : public RHIDescriptorSet {
@@ -33,11 +35,14 @@ public:
     void write(const std::vector<DescriptorWrite>& writes) override;
     void* nativeHandle() const override { return (void*)(uintptr_t)m_gpuStart.ptr; }
     D3D12_GPU_DESCRIPTOR_HANDLE gpuHandle() const { return m_gpuStart; }
+    D3D12_GPU_DESCRIPTOR_HANDLE samplerGpuHandle() const { return m_samplerGpuStart; }
     uint32_t descriptorCount() const { return m_count; }
 private:
     D3D12RHIDevice& m_device;
     D3D12_GPU_DESCRIPTOR_HANDLE m_gpuStart{};
     uint32_t m_count = 0;
+    D3D12_GPU_DESCRIPTOR_HANDLE m_samplerGpuStart{};
+    uint32_t m_samplerCount = 0;
     std::vector<DescriptorWrite> m_pendingWrites;
 };
 

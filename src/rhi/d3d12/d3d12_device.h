@@ -84,6 +84,13 @@ public:
     ID3D12DescriptorHeap* cpuDsvHeap()    { return m_cpuDsvHeap; }
     ID3D12DescriptorHeap* cpuSrvUavHeap() { return m_cpuSrvHeap; }
     ID3D12DescriptorHeap* cpuSamplerHeap() { return m_cpuSamplerHeap; }
+
+    // GPU 可见采样器描述符堆（与 CBV_SRV_UAV 堆配对绑定）
+    ID3D12DescriptorHeap* gpuSamplerHeap()  { return m_gpuSamplerHeap; }
+    uint32_t gpuSamplerIncrement() const { return m_gpuSamplerIncrement; }
+    DescAlloc allocSamplerDescriptors(uint32_t count);
+    void resetSamplerHeap();
+
     uint32_t cpuRtvIncrement()   const { return m_cpuRtvInc; }
     uint32_t cpuDsvIncrement()   const { return m_cpuDsvInc; }
     uint32_t cpuSrvIncrement()   const { return m_cpuSrvInc; }
@@ -103,6 +110,14 @@ private:
     ID3D12DescriptorHeap* m_cpuSrvHeap = nullptr;
     ID3D12DescriptorHeap* m_cpuSamplerHeap = nullptr;
     uint32_t m_cpuRtvInc = 0, m_cpuDsvInc = 0, m_cpuSrvInc = 0, m_cpuSamplerInc = 0;
+
+    // GPU 可见采样器描述符堆
+    ID3D12DescriptorHeap* m_gpuSamplerHeap = nullptr;
+    uint32_t m_gpuSamplerIncrement = 0;
+    D3D12_CPU_DESCRIPTOR_HANDLE m_gpuSamplerStartCPU{};
+    D3D12_GPU_DESCRIPTOR_HANDLE m_gpuSamplerStartGPU{};
+    uint32_t m_gpuSamplerOffset = 0;
+    static constexpr uint32_t kGpuSamplerHeapSize = 2048;
 
     // 资源状态追踪表
     std::unordered_map<ID3D12Resource*, D3D12_RESOURCE_STATES> m_resourceStates;
