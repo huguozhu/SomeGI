@@ -373,10 +373,13 @@ static void restoreResolveDesc(rhi::RHIDescriptorSet& set, rhi::RHIDevice& rhiDe
 // ════════════════════════════════════════════════════════════════
 
 void ShadowPass::record(rhi::RHICommandBuffer& rhiCmd, const RenderTargets& rt,
-                         VkBuffer frameUbo, const SceneGpu& sceneGpu,
-                         VkBuffer indirectBuf, uint32_t drawCount, uint32_t frameIndex) {
+                         const rhi::RHIBuffer& frameUbo, const SceneGpu& sceneGpu,
+                         const rhi::RHIBuffer& indirectBuf, uint32_t drawCount, uint32_t frameIndex) {
     auto vkCmd = static_cast<rhi::VkRHICommandBuffer&>(rhiCmd).vkCmd();
-    record(vkCmd, rt, frameUbo, sceneGpu, indirectBuf, drawCount, frameIndex);}
+    // 从 RHI 抽象提取 Vulkan 原生句柄，委托到兼容 VkCommandBuffer 路径
+    auto vkFrameUbo = static_cast<VkBuffer>(frameUbo.nativeHandle());
+    auto vkIndirectBuf = static_cast<VkBuffer>(indirectBuf.nativeHandle());
+    record(vkCmd, rt, vkFrameUbo, sceneGpu, vkIndirectBuf, drawCount, frameIndex);}
 
 void ShadowPass::record(VkCommandBuffer cmd, const RenderTargets& rt,
                          VkBuffer frameUbo, const SceneGpu& sceneGpu,

@@ -10,7 +10,7 @@
 
 namespace somegi {
 class Device;
-namespace rhi { class RHIDevice; class RHIDescriptorSetLayout; class RHIPipelineState; class RHIDescriptorSet; class RHICommandBuffer; }
+namespace rhi { class RHIDevice; class RHIDescriptorSetLayout; class RHIPipelineState; class RHIDescriptorSet; class RHICommandBuffer; class RHIBuffer; }
 
 class RsmGeometryPass {
 public:
@@ -22,7 +22,7 @@ public:
     void updateLight(const glm::vec3& aabbMin, const glm::vec3& aabbMax,
                      const glm::vec3& sunDir, const glm::vec3& sunColor, float sunIntensity);
 
-    void record(rhi::RHICommandBuffer& cmd, VkBuffer indirectBuf, uint32_t drawCount, const SceneGpu& gpu);
+    void record(rhi::RHICommandBuffer& cmd, const rhi::RHIBuffer& indirectBuf, uint32_t drawCount, const SceneGpu& gpu);
     void record(VkCommandBuffer cmd, VkBuffer indirectBuf, uint32_t drawCount, const SceneGpu& gpu);
 
     const Image& position() const { return m_position; }

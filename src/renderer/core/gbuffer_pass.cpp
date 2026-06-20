@@ -425,9 +425,10 @@ void GBufferPass::updateFrame(const FrameUBO& ubo) {
 // 因直接使用 RHICommandBuffer 方法存在 segfault（待查）。
 // ──────────────────────────────────────────────────────────────────
 void GBufferPass::record(rhi::RHICommandBuffer& rhiCmd, const RenderTargets& rt,
-                         VkBuffer indirectBuf, uint32_t drawCount, const SceneGpu& gpu) {
+                         const rhi::RHIBuffer& indirectBuf, uint32_t drawCount, const SceneGpu& gpu) {
     auto vkCmd = static_cast<rhi::VkRHICommandBuffer&>(rhiCmd).vkCmd();
-    record(vkCmd, rt, indirectBuf, drawCount, gpu);
+    auto vkIndirectBuf = static_cast<VkBuffer>(indirectBuf.nativeHandle());
+    record(vkCmd, rt, vkIndirectBuf, drawCount, gpu);
 }
 
 void GBufferPass::record(VkCommandBuffer vkCmd, const RenderTargets& rt,

@@ -1,5 +1,4 @@
 // VxgiRelightPass — 体素 bounce relight (Compute, sampler)，已迁移到 RHI。
-// 保留外部 VkDescriptorSet 接口兼容。
 #pragma once
 #include "rhi/base/sampler.h"
 #include "rhi/base/descriptor.h"
@@ -18,9 +17,10 @@ public:
     void destroy();
     void bindResources(const VxgiResources& vxgi, VkImageView dstMip0View);
     void bindResourcesPingPong(const VxgiResources& vxgi, bool swap);
-    void record(rhi::RHICommandBuffer& cmd, VkDescriptorSet set, uint32_t gr, uint32_t ml, float cs, const glm::vec3& gm, float bs);
+    void record(rhi::RHICommandBuffer& cmd, const rhi::RHIDescriptorSet& set, uint32_t gr, uint32_t ml, float cs, const glm::vec3& gm, float bs);
     void record(VkCommandBuffer cmd, VkDescriptorSet set, uint32_t gr, uint32_t ml, float cs, const glm::vec3& gm, float bs);
 
+    // Vk 兼容访问器（迁移期间，调用方仍使用 VkCommandBuffer 路径）
     VkDescriptorSet voxelSet() const { return (VkDescriptorSet)(uintptr_t)m_set->nativeHandle(); }
     VkDescriptorSet pingSet0() const { return (VkDescriptorSet)(uintptr_t)m_setPP0->nativeHandle(); }
     VkDescriptorSet pingSet1() const { return (VkDescriptorSet)(uintptr_t)m_setPP1->nativeHandle(); }

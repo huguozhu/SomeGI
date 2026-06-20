@@ -125,8 +125,8 @@ static void writeFrustumDescriptors(rhi::VkRHIDevice& vkDevice,
 
 // ── RHI record（无 Hi-Z） ──
 void FrustumCullPass::record(rhi::RHICommandBuffer& cmd,
-                              VkBuffer drawBuf, uint32_t drawCount,
-                              VkBuffer indirectOut, VkBuffer countOut,
+                              const rhi::RHIBuffer& drawBuf, uint32_t drawCount,
+                              const rhi::RHIBuffer& indirectOut, const rhi::RHIBuffer& countOut,
                               const glm::mat4& vp, VkExtent2D ss, uint32_t fi) {
     VkImageView nullViews[4] = {};
     record(cmd, drawBuf, drawCount, indirectOut, countOut, vp, ss, fi,
@@ -135,8 +135,8 @@ void FrustumCullPass::record(rhi::RHICommandBuffer& cmd,
 
 // ── RHI record（含 Hi-Z） ──
 void FrustumCullPass::record(rhi::RHICommandBuffer& cmd,
-                              VkBuffer drawBuf, uint32_t drawCount,
-                              VkBuffer indirectOut, VkBuffer countOut,
+                              const rhi::RHIBuffer& drawBuf, uint32_t drawCount,
+                              const rhi::RHIBuffer& indirectOut, const rhi::RHIBuffer& countOut,
                               const glm::mat4& vp, VkExtent2D ss, uint32_t fi,
                               VkImageView hizMip1, VkImageView hizMip2,
                               VkImageView hizMip3, VkImageView hizMip4) {
@@ -144,15 +144,19 @@ void FrustumCullPass::record(rhi::RHICommandBuffer& cmd,
 
     auto& vkDevice = static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
     VkCommandBuffer vkCmd = (VkCommandBuffer)(uintptr_t)cmd.nativeHandle();
+    // 从 RHI 抽象提取 Vulkan 原生句柄
+    auto vkCountOut = static_cast<VkBuffer>(countOut.nativeHandle());
+    auto vkDrawBuf = static_cast<VkBuffer>(drawBuf.nativeHandle());
+    auto vkIndirectOut = static_cast<VkBuffer>(indirectOut.nativeHandle());
 
     // ── 清零 count buffer（暂时通过原生 Vk API） ──
-    vkCmdFillBuffer(vkCmd, countOut, 0, sizeof(uint32_t), 0);
+    vkCmdFillBuffer(vkCmd, vkCountOut, 0, sizeof(uint32_t), 0);
     VkBufferMemoryBarrier2 fb{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2};
     fb.srcStageMask = VK_PIPELINE_STAGE_2_CLEAR_BIT;
     fb.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
     fb.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
     fb.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-    fb.buffer = countOut; fb.size = VK_WHOLE_SIZE;
+    fb.buffer = vkCountOut; fb.size = VK_WHOLE_SIZE;
     VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
     di.bufferMemoryBarrierCount = 1; di.pBufferMemoryBarriers = &fb;
     vkCmdPipelineBarrier2(vkCmd, &di);
@@ -169,7 +173,7 @@ void FrustumCullPass::record(rhi::RHICommandBuffer& cmd,
     // ── 写描述符集 ──
     VkImageView hiz[4] = {hizMip1, hizMip2, hizMip3, hizMip4};
     writeFrustumDescriptors(vkDevice, *m_sets[fi % 2],
-                            drawBuf, m_ubo.handle(), indirectOut, countOut, hiz);
+                            vkDrawBuf, m_ubo.handle(), vkIndirectOut, vkCountOut, hiz);
 
     // ── Dispatch ──
     cmd.bindPipelineState(*m_pipeline);
@@ -183,7 +187,10 @@ void FrustumCullPass::record(VkCommandBuffer vkCmd, VkBuffer drawBuf, uint32_t d
                               const glm::mat4& vp, VkExtent2D screenSize, uint32_t fi) {
     auto& vkDev = static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
     rhi::VkRHICommandBuffer rhiCmd(vkDev, vkCmd);
-    record(rhiCmd, drawBuf, drawCount, indirectOut, countOut, vp, screenSize, fi);
+    auto rhiDrawBuf = rhi::VkRHIBuffer::createNonOwning(vkDev, drawBuf, VK_WHOLE_SIZE);
+    auto rhiIndirectOut = rhi::VkRHIBuffer::createNonOwning(vkDev, indirectOut, VK_WHOLE_SIZE);
+    auto rhiCountOut = rhi::VkRHIBuffer::createNonOwning(vkDev, countOut, VK_WHOLE_SIZE);
+    record(rhiCmd, *rhiDrawBuf, drawCount, *rhiIndirectOut, *rhiCountOut, vp, screenSize, fi);
 }
 
 void FrustumCullPass::record(VkCommandBuffer vkCmd, VkBuffer drawBuf, uint32_t drawCount,
@@ -193,7 +200,10 @@ void FrustumCullPass::record(VkCommandBuffer vkCmd, VkBuffer drawBuf, uint32_t d
                               VkImageView hizMip3, VkImageView hizMip4) {
     auto& vkDev = static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
     rhi::VkRHICommandBuffer rhiCmd(vkDev, vkCmd);
-    record(rhiCmd, drawBuf, drawCount, indirectOut, countOut, vp, screenSize, fi,
+    auto rhiDrawBuf = rhi::VkRHIBuffer::createNonOwning(vkDev, drawBuf, VK_WHOLE_SIZE);
+    auto rhiIndirectOut = rhi::VkRHIBuffer::createNonOwning(vkDev, indirectOut, VK_WHOLE_SIZE);
+    auto rhiCountOut = rhi::VkRHIBuffer::createNonOwning(vkDev, countOut, VK_WHOLE_SIZE);
+    record(rhiCmd, *rhiDrawBuf, drawCount, *rhiIndirectOut, *rhiCountOut, vp, screenSize, fi,
            hizMip1, hizMip2, hizMip3, hizMip4);
 }
 

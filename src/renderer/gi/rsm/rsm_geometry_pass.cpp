@@ -120,7 +120,7 @@ void RsmGeometryPass::updateLight(const glm::vec3& aabbMin, const glm::vec3& aab
     std::memcpy(m_rsmFrameUbo.mapped(),&u,sizeof(u));
 }
 
-void RsmGeometryPass::record(rhi::RHICommandBuffer& cmd, VkBuffer indirectBuf, uint32_t drawCount, const SceneGpu& gpu) {
+void RsmGeometryPass::record(rhi::RHICommandBuffer& cmd, const rhi::RHIBuffer& indirectBuf, uint32_t drawCount, const SceneGpu& gpu) {
     if(!drawCount||!m_pipeline)return;
     VkCommandBuffer vkCmd=(VkCommandBuffer)(uintptr_t)cmd.nativeHandle();
     auto t=[&](VkImage img,VkImageAspectFlags a,VkImageLayout ol,VkImageLayout nl,VkPipelineStageFlags2 ss,VkAccessFlags2 sa,VkPipelineStageFlags2 ds,VkAccessFlags2 da){ transition(vkCmd,img,a,ol,nl,ss,sa,ds,da); };
@@ -143,9 +143,8 @@ void RsmGeometryPass::record(rhi::RHICommandBuffer& cmd, VkBuffer indirectBuf, u
     cmd.bindPipelineState(*m_pipeline); cmd.bindDescriptorSet(0,*m_set);
     auto vb=rhi::VkRHIBuffer::createNonOwning(vkD,gpu.vertexBuffer.handle(),VK_WHOLE_SIZE);
     auto ib=rhi::VkRHIBuffer::createNonOwning(vkD,gpu.indexBuffer.handle(),VK_WHOLE_SIZE);
-    auto cb=rhi::VkRHIBuffer::createNonOwning(vkD,indirectBuf,VK_WHOLE_SIZE);
     cmd.bindVertexBuffer(0,*vb); cmd.bindIndexBuffer(*ib,0,false);
-    cmd.drawIndexedIndirectCount(*cb,0,*cb,0,drawCount,sizeof(VkDrawIndexedIndirectCommand));
+    cmd.drawIndexedIndirectCount(indirectBuf,0,indirectBuf,0,drawCount,sizeof(VkDrawIndexedIndirectCommand));
     cmd.endRendering();
 
     t(m_position.image(),VK_IMAGE_ASPECT_COLOR_BIT,VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
@@ -155,7 +154,9 @@ void RsmGeometryPass::record(rhi::RHICommandBuffer& cmd, VkBuffer indirectBuf, u
 }
 
 void RsmGeometryPass::record(VkCommandBuffer vkCmd, VkBuffer ib, uint32_t dc, const SceneGpu& gpu) {
-    rhi::VkRHICommandBuffer rhiCmd(static_cast<rhi::VkRHIDevice&>(*m_rhiDevice),vkCmd); record(rhiCmd,ib,dc,gpu);
+    rhi::VkRHICommandBuffer rhiCmd(static_cast<rhi::VkRHIDevice&>(*m_rhiDevice),vkCmd);
+    auto rhiIb = rhi::VkRHIBuffer::createNonOwning(static_cast<rhi::VkRHIDevice&>(*m_rhiDevice), ib, VK_WHOLE_SIZE);
+    record(rhiCmd, *rhiIb, dc, gpu);
 }
 
 } // namespace somegi

@@ -181,9 +181,10 @@ void ForwardPass::setNdgiWeights(Device&, VkBuffer w1,VkBuffer b1,VkBuffer w2,Vk
     m_set->write({{4,rhi::DescriptorType::StorageBuffer,nullptr,W1.get()},{5,rhi::DescriptorType::StorageBuffer,nullptr,B1.get()},{6,rhi::DescriptorType::StorageBuffer,nullptr,W2.get()},{7,rhi::DescriptorType::StorageBuffer,nullptr,B2.get()},{8,rhi::DescriptorType::StorageBuffer,nullptr,W3.get()},{9,rhi::DescriptorType::StorageBuffer,nullptr,B3.get()}});
 }
 
-void ForwardPass::record(rhi::RHICommandBuffer& cmd, const RenderTargets& rt, VkBuffer ib, uint32_t dc, const SceneGpu& gpu) {
+void ForwardPass::record(rhi::RHICommandBuffer& cmd, const RenderTargets& rt, const rhi::RHIBuffer& ib, uint32_t dc, const SceneGpu& gpu) {
     auto vkCmd = static_cast<rhi::VkRHICommandBuffer&>(cmd).vkCmd();
-    record(vkCmd, rt, ib, dc, gpu);}
+    auto vkIb = static_cast<VkBuffer>(ib.nativeHandle());
+    record(vkCmd, rt, vkIb, dc, gpu);}
 
 void ForwardPass::record(VkCommandBuffer vkCmd, const RenderTargets& rt, VkBuffer ib, uint32_t dc, const SceneGpu& gpu) {
     if(!m_pipeline||!m_set||!m_iblSet) return;

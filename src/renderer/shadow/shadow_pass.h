@@ -15,7 +15,7 @@ class Device;
 struct RenderTargets;
 struct SceneGpu;
 struct DrawEntry;
-namespace rhi { class RHICommandBuffer; }
+namespace rhi { class RHICommandBuffer; class RHIBuffer; }
 
 enum class ShadowMethod : int {
     None = 0,
@@ -51,8 +51,8 @@ public:
     void destroy();
 
     void record(rhi::RHICommandBuffer& cmd, const RenderTargets& rt,
-                VkBuffer frameUbo, const SceneGpu& sceneGpu,
-                VkBuffer indirectBuf, uint32_t drawCount,
+                const rhi::RHIBuffer& frameUbo, const SceneGpu& sceneGpu,
+                const rhi::RHIBuffer& indirectBuf, uint32_t drawCount,
                 uint32_t frameIndex = 0);
     void record(VkCommandBuffer cmd, const RenderTargets& rt,
                 VkBuffer frameUbo, const SceneGpu& sceneGpu,

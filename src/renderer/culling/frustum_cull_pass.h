@@ -26,13 +26,13 @@ public:
     void destroy();
 
     // RHI 路径（无 Hi-Z）
-    void record(rhi::RHICommandBuffer& cmd, VkBuffer drawBuf, uint32_t drawCount,
-                VkBuffer indirectOut, VkBuffer countOut,
+    void record(rhi::RHICommandBuffer& cmd, const rhi::RHIBuffer& drawBuf, uint32_t drawCount,
+                const rhi::RHIBuffer& indirectOut, const rhi::RHIBuffer& countOut,
                 const glm::mat4& vp, VkExtent2D screenSize, uint32_t flightIdx);
 
     // RHI 路径（含 Hi-Z）
-    void record(rhi::RHICommandBuffer& cmd, VkBuffer drawBuf, uint32_t drawCount,
-                VkBuffer indirectOut, VkBuffer countOut,
+    void record(rhi::RHICommandBuffer& cmd, const rhi::RHIBuffer& drawBuf, uint32_t drawCount,
+                const rhi::RHIBuffer& indirectOut, const rhi::RHIBuffer& countOut,
                 const glm::mat4& vp, VkExtent2D screenSize, uint32_t flightIdx,
                 VkImageView hizMip1, VkImageView hizMip2,
                 VkImageView hizMip3, VkImageView hizMip4);
