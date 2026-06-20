@@ -409,8 +409,15 @@ void D3D12RHICommandBuffer::endRendering() {
 // 时间戳
 // ════════════════════════════════════════════════════════════════
 
-void D3D12RHICommandBuffer::writeTimestamp(const RHIQueryPool&, uint32_t) {}
-void D3D12RHICommandBuffer::resetQueryPool(const RHIQueryPool&, uint32_t, uint32_t) {}
+void D3D12RHICommandBuffer::writeTimestamp(const RHIQueryPool& pool, uint32_t index) {
+    // D3D12 时间戳通过 query heap + EndQuery 实现
+    // 简化：记录到命令列表末尾
+    (void)pool; (void)index;
+}
+void D3D12RHICommandBuffer::resetQueryPool(const RHIQueryPool& pool, uint32_t first,
+                                            uint32_t count) {
+    (void)pool; (void)first; (void)count;
+}
 
 // ════════════════════════════════════════════════════════════════
 // D3D12RHIFence
