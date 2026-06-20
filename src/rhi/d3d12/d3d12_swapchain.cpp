@@ -79,23 +79,6 @@ void D3D12RHISwapchain::createRTVs() {
         rtvH.ptr += m_rtvDescriptorSize;
     }
 
-    // ── UAV 描述符（使用 device CPU SRV/UAV heap） ──
-    for (uint32_t i = 0; i < kFrameCount; ++i) {
-        // 从 device CPU SRV/UAV heap 分配
-        static uint32_t uavIdx = 0;
-        auto cpuHeap = m_device.cpuSrvUavHeap();
-        if (cpuHeap) {
-            m_uavHandles[i] = cpuHeap->GetCPUDescriptorHandleForHeapStart();
-            m_uavHandles[i].ptr += uavIdx++ * m_device.cpuSrvIncrement();
-
-            D3D12_UNORDERED_ACCESS_VIEW_DESC uavd{};
-            uavd.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
-            uavd.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
-            m_device.device()->CreateUnorderedAccessView(m_backBuffers[i], nullptr, &uavd,
-                                                           m_uavHandles[i]);
-        }
-    }
-
     // ── 同步对象 ──
     m_syncs.resize(kFrameCount);
     for (auto& s : m_syncs) {
