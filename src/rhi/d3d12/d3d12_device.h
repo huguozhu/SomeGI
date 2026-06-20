@@ -83,9 +83,11 @@ public:
     ID3D12DescriptorHeap* cpuRtvHeap()    { return m_cpuRtvHeap; }
     ID3D12DescriptorHeap* cpuDsvHeap()    { return m_cpuDsvHeap; }
     ID3D12DescriptorHeap* cpuSrvUavHeap() { return m_cpuSrvHeap; }
+    ID3D12DescriptorHeap* cpuSamplerHeap() { return m_cpuSamplerHeap; }
     uint32_t cpuRtvIncrement()   const { return m_cpuRtvInc; }
     uint32_t cpuDsvIncrement()   const { return m_cpuDsvInc; }
     uint32_t cpuSrvIncrement()   const { return m_cpuSrvInc; }
+    uint32_t cpuSamplerIncrement() const { return m_cpuSamplerInc; }
 
     // 资源状态追踪（用于正确的 barrier StateBefore）
     void trackResourceState(ID3D12Resource* res, D3D12_RESOURCE_STATES state);
@@ -99,7 +101,8 @@ private:
     ID3D12DescriptorHeap* m_cpuRtvHeap = nullptr;
     ID3D12DescriptorHeap* m_cpuDsvHeap = nullptr;
     ID3D12DescriptorHeap* m_cpuSrvHeap = nullptr;
-    uint32_t m_cpuRtvInc = 0, m_cpuDsvInc = 0, m_cpuSrvInc = 0;
+    ID3D12DescriptorHeap* m_cpuSamplerHeap = nullptr;
+    uint32_t m_cpuRtvInc = 0, m_cpuDsvInc = 0, m_cpuSrvInc = 0, m_cpuSamplerInc = 0;
 
     // 资源状态追踪表
     std::unordered_map<ID3D12Resource*, D3D12_RESOURCE_STATES> m_resourceStates;

@@ -5,6 +5,23 @@
 #include "../base/sampler.h"
 #include <d3d12.h>
 
+// 共享 D3D12 映射函数
+namespace somegi { namespace rhi {
+inline D3D12_COMPARISON_FUNC toD3D12Cmp(CompareFunc f) {
+    switch (f) {
+        case CompareFunc::Never:        return D3D12_COMPARISON_FUNC_NEVER;
+        case CompareFunc::Less:         return D3D12_COMPARISON_FUNC_LESS;
+        case CompareFunc::Equal:        return D3D12_COMPARISON_FUNC_EQUAL;
+        case CompareFunc::LessEqual:    return D3D12_COMPARISON_FUNC_LESS_EQUAL;
+        case CompareFunc::Greater:      return D3D12_COMPARISON_FUNC_GREATER;
+        case CompareFunc::NotEqual:     return D3D12_COMPARISON_FUNC_NOT_EQUAL;
+        case CompareFunc::GreaterEqual: return D3D12_COMPARISON_FUNC_GREATER_EQUAL;
+        case CompareFunc::Always:       return D3D12_COMPARISON_FUNC_ALWAYS;
+        default: return D3D12_COMPARISON_FUNC_LESS;
+    }
+}
+}}
+
 namespace somegi {
 namespace rhi {
 
@@ -65,7 +82,7 @@ private:
 // D3D12 采样器
 class D3D12RHISampler : public RHISampler {
 public:
-    D3D12RHISampler(const SamplerDesc& desc);
+    D3D12RHISampler(D3D12RHIDevice& device, const SamplerDesc& desc);
     void* nativeHandle() const override { return (void*)(uintptr_t)m_cpuHandle.ptr; }
     D3D12_CPU_DESCRIPTOR_HANDLE cpuHandle() const { return m_cpuHandle; }
 private:

@@ -34,20 +34,6 @@ static D3D12_CULL_MODE toD3D12Cull(CullMode c) {
     }
 }
 
-static D3D12_COMPARISON_FUNC toD3D12Cmp(CompareFunc f) {
-    switch (f) {
-        case CompareFunc::Never:        return D3D12_COMPARISON_FUNC_NEVER;
-        case CompareFunc::Less:         return D3D12_COMPARISON_FUNC_LESS;
-        case CompareFunc::Equal:        return D3D12_COMPARISON_FUNC_EQUAL;
-        case CompareFunc::LessEqual:    return D3D12_COMPARISON_FUNC_LESS_EQUAL;
-        case CompareFunc::Greater:      return D3D12_COMPARISON_FUNC_GREATER;
-        case CompareFunc::NotEqual:     return D3D12_COMPARISON_FUNC_NOT_EQUAL;
-        case CompareFunc::GreaterEqual: return D3D12_COMPARISON_FUNC_GREATER_EQUAL;
-        case CompareFunc::Always:       return D3D12_COMPARISON_FUNC_ALWAYS;
-        default: return D3D12_COMPARISON_FUNC_LESS;
-    }
-}
-
 static DXGI_FORMAT toD3D12VertexFormat(VertexFormat f) {
     switch (f) {
         case VertexFormat::Float:  return DXGI_FORMAT_R32_FLOAT;

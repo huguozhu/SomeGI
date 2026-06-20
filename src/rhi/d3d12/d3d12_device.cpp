@@ -128,6 +128,13 @@ D3D12RHIDevice::D3D12RHIDevice() {
         hdSrv.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
         m_device->CreateDescriptorHeap(&hdSrv, IID_PPV_ARGS(&m_cpuSrvHeap));
         m_cpuSrvInc = m_device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+
+        D3D12_DESCRIPTOR_HEAP_DESC hdSmp{};
+        hdSmp.Type = D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER;
+        hdSmp.NumDescriptors = 64;
+        hdSmp.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
+        m_device->CreateDescriptorHeap(&hdSmp, IID_PPV_ARGS(&m_cpuSamplerHeap));
+        m_cpuSamplerInc = m_device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER);
     }
 }
 
@@ -181,7 +188,8 @@ D3D12RHIDevice::~D3D12RHIDevice() {
     if (m_gpuDescHeap) { m_gpuDescHeap->Release(); }
     if (m_cpuRtvHeap)  { m_cpuRtvHeap->Release(); }
     if (m_cpuDsvHeap)  { m_cpuDsvHeap->Release(); }
-    if (m_cpuSrvHeap)  { m_cpuSrvHeap->Release(); }
+    if (m_cpuSrvHeap)     { m_cpuSrvHeap->Release(); }
+    if (m_cpuSamplerHeap) { m_cpuSamplerHeap->Release(); }
     if (m_queue)   { m_queue->Release(); }
     if (m_device)  { m_device->Release(); }
     if (m_factory) { m_factory->Release(); }
@@ -207,7 +215,7 @@ std::unique_ptr<RHIShader> D3D12RHIDevice::createShader(const ShaderDesc& desc, 
     return std::make_unique<D3D12RHIShader>(desc, bytecode, size);
 }
 std::unique_ptr<RHISampler> D3D12RHIDevice::createSampler(const SamplerDesc& desc) {
-    return std::make_unique<D3D12RHISampler>(desc);
+    return std::make_unique<D3D12RHISampler>(*this, desc);
 }
 std::unique_ptr<RHISwapchain> D3D12RHIDevice::createSwapchain(void* nativeWindow, uint32_t w, uint32_t h) {
     return std::unique_ptr<RHISwapchain>(new D3D12RHISwapchain(*this, nativeWindow, w, h));

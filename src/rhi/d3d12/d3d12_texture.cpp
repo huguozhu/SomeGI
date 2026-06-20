@@ -162,10 +162,27 @@ static D3D12_TEXTURE_ADDRESS_MODE toD3D12Addr(SamplerAddressMode m) {
     }
 }
 
-D3D12RHISampler::D3D12RHISampler(const SamplerDesc& desc) {
-    // D3D12 sampler 在 root signature 中是静态的，此处仅存储配置
-    // 完整实现需将 sampler 加入 root signature 或 sampler descriptor heap
-    (void)desc;
+D3D12RHISampler::D3D12RHISampler(D3D12RHIDevice& device, const SamplerDesc& desc) {
+    if (!device.cpuSamplerHeap()) return;
+
+    // 从 CPU sampler heap 分配一个 slot
+    static uint32_t smpIdx = 0;
+    m_cpuHandle = device.cpuSamplerHeap()->GetCPUDescriptorHandleForHeapStart();
+    m_cpuHandle.ptr += smpIdx++ * device.cpuSamplerIncrement();
+
+    D3D12_SAMPLER_DESC sd{};
+    sd.Filter = toD3D12Filter(desc.magFilter, desc.minFilter, desc.mipmapMode);
+    sd.AddressU = toD3D12Addr(desc.addressU);
+    sd.AddressV = toD3D12Addr(desc.addressV);
+    sd.AddressW = toD3D12Addr(desc.addressW);
+    sd.MipLODBias = 0;
+    sd.MaxAnisotropy = 1;
+    sd.ComparisonFunc = desc.compareEnable
+        ? toD3D12Cmp(desc.compareOp) : D3D12_COMPARISON_FUNC_NEVER;
+    sd.MinLOD = 0;
+    sd.MaxLOD = desc.maxLod > 0 ? desc.maxLod : D3D12_FLOAT32_MAX;
+
+    device.device()->CreateSampler(&sd, m_cpuHandle);
 }
 
 // ════════════════════════════════════════════════════════════════
