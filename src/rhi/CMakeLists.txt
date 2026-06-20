@@ -16,5 +16,20 @@ add_library(somegi_rhi OBJECT
     vulkan/vk_fence.cpp
     vulkan/vk_query_pool.cpp
 )
+
+# D3D12 后端（仅 Windows）
+if(WIN32)
+    target_sources(somegi_rhi PRIVATE
+        d3d12/d3d12_device.cpp
+    )
+    # 启用 D3D12 Agility SDK（支持最新 D3D12 特性）
+    target_compile_definitions(somegi_rhi PUBLIC D3D12_SUPPORTED)
+endif()
+
 target_include_directories(somegi_rhi PUBLIC ${CMAKE_SOURCE_DIR}/src)
 target_link_libraries(somegi_rhi PUBLIC somegi_core)
+
+# D3D12 链接库
+if(WIN32)
+    target_link_libraries(somegi_rhi PUBLIC d3d12 dxgi d3dcompiler)
+endif()

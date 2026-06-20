@@ -32,7 +32,12 @@ struct SubmitDesc;
 // ════════════════════════════════════════════════════════════════
 class RHIDevice {
 public:
+    // 枚举工厂：根据 Backend 创建对应设备（Vulkan 需额外参数，见 createVulkan）
+    static std::unique_ptr<RHIDevice> create(Backend backend, void* nativeWindow, bool enableValidation);
+    // Vulkan 特定工厂
     static std::unique_ptr<RHIDevice> createVulkan(void* nativeWindowHandle, bool enableValidation);
+    // D3D12 工厂（Windows only）
+    static std::unique_ptr<RHIDevice> createD3D12();
 
     virtual ~RHIDevice() = default;
     virtual Backend backend() const = 0;
