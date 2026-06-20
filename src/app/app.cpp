@@ -3,6 +3,8 @@
 #include "core/window.h"
 #include "core/device.h"
 #include "core/swapchain.h"
+#include "rhi/vulkan/vk_device.h"
+#include "rhi/vulkan/vk_command.h"
 #include <GLFW/glfw3.h>
 #include "scene/gltf_loader.h"
 #include "scene/scene_gpu.h"
@@ -1388,6 +1390,9 @@ void App::run() {
         VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
         bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
         VK_CHECK(vkBeginCommandBuffer(cmd, &bi));
+        // RHI 包装器：供 RenderPipeline/FG 等通过 executeRHI 消费
+        auto& vkDev = static_cast<rhi::VkRHIDevice&>(*m_renderer.rhiDevice());
+        rhi::VkRHICommandBuffer rhiCmd(vkDev, cmd);
 
         // ---- Timestamp readback from previous frame ----
         // 使用 WITH_AVAILABILITY 而非 WAIT：FrameGraph 路径不会写入旧管线的
@@ -1454,7 +1459,7 @@ void App::run() {
             setupFrameGraph();
             m_fg.compile();
             buildPipelineTable();
-            m_fg.execute(cmd);
+            m_fg.executeRHI(rhiCmd);
             m_fg.applyTimestampsToDebug();
 
             // 将 FG per-pass GPU 耗时映射到 FrameRenderer 的 profiler 槽位
@@ -1480,7 +1485,7 @@ void App::run() {
         } else {
             // 现有 RenderPipeline 路径
             buildPipelineTable();
-            m_renderer.pipeline().execute(cmd);
+            m_renderer.pipeline().executeRHI(rhiCmd);
         }
         ++m_renderer.frameIndex();
 
