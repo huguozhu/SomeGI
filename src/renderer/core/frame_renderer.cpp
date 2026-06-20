@@ -442,7 +442,7 @@ void FrameRenderer::bootstrapAllTargets() {
 }
 
 void FrameRenderer::writeTimestamp(VkCommandBuffer cmd, uint32_t slot) {
-    uint32_t base = (m_frameIndex % kFramesInFlight) * kTimestampSlots;
+    uint32_t base = m_currentFrameInFlight * kTimestampSlots;
     vkCmdWriteTimestamp2(cmd, VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT,
                          m_timestampPool, base + slot);
 }

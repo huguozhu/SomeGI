@@ -214,8 +214,6 @@ private:
     void buildPipelineTable();
     void setupFrameGraph();
     void setupFgImports(VkExtent3D ext, bool aaEnabled);
-    void writeTimestamp(VkCommandBuffer cmd, uint32_t slot);
-
     // Frame loop helpers (extracted from run())
     void buildFrameUBO(FrameUBO& ubo);
     void recordIndirectDraws(VkCommandBuffer cmd, uint32_t frameInFlight, const glm::mat4& viewProj);

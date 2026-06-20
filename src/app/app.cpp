@@ -828,12 +828,6 @@ void App::bootstrapHdrPrev() {
 // RenderPipeline 辅助方法
 // ============================================================
 
-void App::writeTimestamp(VkCommandBuffer cmd, uint32_t slot) {
-    vkCmdWriteTimestamp2(cmd, VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT,
-                         m_renderer.timestampPool(),
-                         m_frameCtx.frameInFlight * m_renderer.kTimestampSlots + slot);
-}
-
 void App::buildPipelineTable() {
     // 仅在管线状态变化时重建执行表，避免每帧无效的 setEnabled + build
     if (!m_pipelineDirty) return;
@@ -926,11 +920,11 @@ void App::registerPipelineSteps() {
                 VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                 VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
 
-            writeTimestamp(cmd, m_renderer.kTsGBuffer);
-            writeTimestamp(cmd, m_renderer.kTsAO);
-            writeTimestamp(cmd, m_renderer.kTsVoxelGI);
-            writeTimestamp(cmd, m_renderer.kTsLighting);
-            writeTimestamp(cmd, m_renderer.kTsSkybox);
+            m_renderer.writeTimestamp(cmd, m_renderer.kTsGBuffer);
+            m_renderer.writeTimestamp(cmd, m_renderer.kTsAO);
+            m_renderer.writeTimestamp(cmd, m_renderer.kTsVoxelGI);
+            m_renderer.writeTimestamp(cmd, m_renderer.kTsLighting);
+            m_renderer.writeTimestamp(cmd, m_renderer.kTsSkybox);
         }
     });
 
@@ -992,7 +986,7 @@ void App::registerPipelineSteps() {
                 VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                 VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
 
-            writeTimestamp(cmd, m_renderer.kTsGBuffer);
+            m_renderer.writeTimestamp(cmd, m_renderer.kTsGBuffer);
         }
     });
 
@@ -1194,7 +1188,7 @@ void App::registerPipelineSteps() {
         .name = "TS-AO",
         .phase = "AO",
         .record = [this](VkCommandBuffer cmd) {
-            writeTimestamp(cmd, m_renderer.kTsAO);
+            m_renderer.writeTimestamp(cmd, m_renderer.kTsAO);
         }
     });
 
@@ -2170,7 +2164,7 @@ void App::registerPipelineSteps() {
         .name = "TS-GI",
         .phase = "GI",
         .record = [this](VkCommandBuffer cmd) {
-            writeTimestamp(cmd, m_renderer.kTsVoxelGI);
+            m_renderer.writeTimestamp(cmd, m_renderer.kTsVoxelGI);
         }
     });
 
@@ -2188,7 +2182,7 @@ void App::registerPipelineSteps() {
                 VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                 VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
             m_renderer.lighting().record(cmd, m_renderer.rt());
-            writeTimestamp(cmd, m_renderer.kTsLighting);
+            m_renderer.writeTimestamp(cmd, m_renderer.kTsLighting);
         }
     });
 
@@ -2251,7 +2245,7 @@ void App::registerPipelineSteps() {
                 VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                 VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
 
-            writeTimestamp(cmd, m_renderer.kTsSkybox);
+            m_renderer.writeTimestamp(cmd, m_renderer.kTsSkybox);
         }
     });
 }
@@ -2462,7 +2456,7 @@ void App::recordPostProcessing(VkCommandBuffer cmd) {
                     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
                 m_renderer.tonemap().bindOutput(m_renderer.rt().aaHdr.view(), m_frameCtx.frameInFlight);
                 m_renderer.tonemap().record(cmd, m_renderer.rt(), m_frameCtx.frameInFlight, true, 1.0f);
-                writeTimestamp(cmd, m_renderer.kTsTonemap);
+                m_renderer.writeTimestamp(cmd, m_renderer.kTsTonemap);
 
                 // aaHdr: Tonemap 写入后布局为 GENERAL → SR_O 供 TAA/SMAA 读取
                 transitionImage(cmd, m_renderer.rt().aaHdr.image(), VK_IMAGE_ASPECT_COLOR_BIT,
@@ -2508,7 +2502,7 @@ void App::recordPostProcessing(VkCommandBuffer cmd) {
                     m_renderer.smaa().bindOutput(m_frameCtx.swapView);
                     m_renderer.smaa().record(cmd, m_renderer.rt());
                 }
-                writeTimestamp(cmd, m_renderer.kTsAA);
+                m_renderer.writeTimestamp(cmd, m_renderer.kTsAA);
             }
         } else {
             // No AA: tonemap writes directly to swapchain
@@ -2518,8 +2512,8 @@ void App::recordPostProcessing(VkCommandBuffer cmd) {
                 VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
             m_renderer.tonemap().bindOutput(m_frameCtx.swapView, m_frameCtx.frameInFlight);
             m_renderer.tonemap().record(cmd, m_renderer.rt(), m_frameCtx.frameInFlight, true, 1.0f);
-            writeTimestamp(cmd, m_renderer.kTsTonemap);
-            writeTimestamp(cmd, m_renderer.kTsAA);
+            m_renderer.writeTimestamp(cmd, m_renderer.kTsTonemap);
+            m_renderer.writeTimestamp(cmd, m_renderer.kTsAA);
         }
 
         // Transition swapchain to COLOR_ATTACHMENT for ImGui
@@ -2539,7 +2533,7 @@ void App::recordPostProcessing(VkCommandBuffer cmd) {
                 VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
             m_renderer.tonemap().bindOutput(m_renderer.rt().aaHdr.view(), m_frameCtx.frameInFlight);
             m_renderer.tonemap().record(cmd, m_renderer.rt(), m_frameCtx.frameInFlight);
-            writeTimestamp(cmd, m_renderer.kTsTonemap);
+            m_renderer.writeTimestamp(cmd, m_renderer.kTsTonemap);
 
             transitionImage(cmd, m_renderer.rt().aaHdr.image(), VK_IMAGE_ASPECT_COLOR_BIT,
                 VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
@@ -2599,7 +2593,7 @@ void App::recordPostProcessing(VkCommandBuffer cmd) {
                 m_renderer.smaa().bindResources(m_renderer.rt());
                 m_renderer.smaa().record(cmd, m_renderer.rt());
             }
-            writeTimestamp(cmd, m_renderer.kTsAA);
+            m_renderer.writeTimestamp(cmd, m_renderer.kTsAA);
 
             // Barrier: ldrTonemap GENERAL → TRANSFER_SRC for blit
             transitionImage(cmd, m_renderer.rt().ldrTonemap.image(), VK_IMAGE_ASPECT_COLOR_BIT,
@@ -2614,8 +2608,8 @@ void App::recordPostProcessing(VkCommandBuffer cmd) {
                 VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
             m_renderer.tonemap().bindOutput(m_renderer.rt().ldrTonemap.view(), m_frameCtx.frameInFlight);
             m_renderer.tonemap().record(cmd, m_renderer.rt(), m_frameCtx.frameInFlight);
-            writeTimestamp(cmd, m_renderer.kTsTonemap);
-            writeTimestamp(cmd, m_renderer.kTsAA);
+            m_renderer.writeTimestamp(cmd, m_renderer.kTsTonemap);
+            m_renderer.writeTimestamp(cmd, m_renderer.kTsAA);
 
             // Barrier: ldrTonemap GENERAL → TRANSFER_SRC for blit
             transitionImage(cmd, m_renderer.rt().ldrTonemap.image(), VK_IMAGE_ASPECT_COLOR_BIT,
@@ -2654,7 +2648,7 @@ void App::recordPostProcessing(VkCommandBuffer cmd) {
         VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT, 0);
 
     // Final timestamp + transition to present
-    writeTimestamp(cmd, m_renderer.kTsEnd);
+    m_renderer.writeTimestamp(cmd, m_renderer.kTsEnd);
     transitionImage(cmd, m_frameCtx.swapImage, VK_IMAGE_ASPECT_COLOR_BIT,
         VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
         VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
@@ -2762,6 +2756,7 @@ void App::run() {
         // ---- Swapchain acquire ----
         auto frame = m_swap->acquireNextFrame();
         if (frame.needsResize) { m_swap->recreate(); onSwapchainResized(); continue; }
+        m_renderer.setFrameInFlight(frame.frameInFlight);
         if (frame.extent.width != m_renderer.rt().extent.width || frame.extent.height != m_renderer.rt().extent.height) {
             onSwapchainResized();
         }

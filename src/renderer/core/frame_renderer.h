@@ -203,6 +203,10 @@ public:
     // Frame state
     uint32_t& frameIndex() { return m_frameIndex; }
 
+    // 当前帧的 swapchain 图像索引（0..kFramesInFlight-1），App 每帧设置
+    void setFrameInFlight(uint32_t fi) { m_currentFrameInFlight = fi; }
+    uint32_t frameInFlight() const { return m_currentFrameInFlight; }
+
     // Benchmark
     bool& benchRunning()    { return m_benchRunning; }
     bool& benchCollecting() { return m_benchCollecting; }
@@ -362,6 +366,7 @@ private:
 
     // Frame state
     uint32_t m_frameIndex = 0;
+    uint32_t m_currentFrameInFlight = 0;
 };
 
 } // namespace somegi
