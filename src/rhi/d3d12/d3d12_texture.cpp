@@ -136,66 +136,6 @@ D3D12RHITextureView::D3D12RHITextureView(D3D12RHIDevice& device,
 D3D12RHITextureView::~D3D12RHITextureView() = default;
 
 // ════════════════════════════════════════════════════════════════
-// D3D12RHIShader
-// ════════════════════════════════════════════════════════════════
-
-// ════════════════════════════════════════════════════════════════
-// D3D12RHISampler
-// ════════════════════════════════════════════════════════════════
-
-static D3D12_FILTER toD3D12Filter(Filter mag, Filter min, SamplerMipmapMode mip) {
-    if (min == Filter::Linear && mag == Filter::Linear && mip == SamplerMipmapMode::Linear)
-        return D3D12_FILTER_MIN_MAG_MIP_LINEAR;
-    if (min == Filter::Linear && mag == Filter::Linear)
-        return D3D12_FILTER_MIN_MAG_LINEAR_MIP_POINT;
-    if (min == Filter::Nearest && mag == Filter::Nearest)
-        return D3D12_FILTER_MIN_MAG_MIP_POINT;
-    return D3D12_FILTER_MIN_MAG_MIP_LINEAR;
-}
-
-static D3D12_TEXTURE_ADDRESS_MODE toD3D12Addr(SamplerAddressMode m) {
-    switch (m) {
-        case SamplerAddressMode::Repeat:         return D3D12_TEXTURE_ADDRESS_MODE_WRAP;
-        case SamplerAddressMode::MirroredRepeat: return D3D12_TEXTURE_ADDRESS_MODE_MIRROR;
-        case SamplerAddressMode::ClampToBorder:  return D3D12_TEXTURE_ADDRESS_MODE_BORDER;
-        default: return D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
-    }
-}
-
-D3D12RHISampler::D3D12RHISampler(D3D12RHIDevice& device, const SamplerDesc& desc) {
-    if (!device.cpuSamplerHeap()) return;
-
-    // 从 CPU sampler heap 分配一个 slot
-    static uint32_t smpIdx = 0;
-    m_cpuHandle = device.cpuSamplerHeap()->GetCPUDescriptorHandleForHeapStart();
-    m_cpuHandle.ptr += smpIdx++ * device.cpuSamplerIncrement();
-
-    D3D12_SAMPLER_DESC sd{};
-    sd.Filter = toD3D12Filter(desc.magFilter, desc.minFilter, desc.mipmapMode);
-    sd.AddressU = toD3D12Addr(desc.addressU);
-    sd.AddressV = toD3D12Addr(desc.addressV);
-    sd.AddressW = toD3D12Addr(desc.addressW);
-    sd.MipLODBias = 0;
-    sd.MaxAnisotropy = 1;
-    sd.ComparisonFunc = desc.compareEnable
-        ? toD3D12Cmp(desc.compareOp) : D3D12_COMPARISON_FUNC_NEVER;
-    sd.MinLOD = 0;
-    sd.MaxLOD = desc.maxLod > 0 ? desc.maxLod : D3D12_FLOAT32_MAX;
-
-    device.device()->CreateSampler(&sd, m_cpuHandle);
-}
-
-// ════════════════════════════════════════════════════════════════
-// D3D12RHIShader
-// ════════════════════════════════════════════════════════════════
-
-D3D12RHIShader::D3D12RHIShader(const ShaderDesc& desc, const void* bytecode, size_t size)
-    : m_stage(desc.stage), m_entryPoint(desc.entryPoint ? desc.entryPoint : "main") {
-    auto* data = static_cast<const uint8_t*>(bytecode);
-    m_bytecode.assign(data, data + size);
-}
-
-D3D12RHIShader::~D3D12RHIShader() = default;
 
 } // namespace rhi
 } // namespace somegi

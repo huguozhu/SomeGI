@@ -1,10 +1,17 @@
 // rhi/d3d12/d3d12_device.cpp — D3D12 设备实现（骨架）
 #include "d3d12_device.h"
+#include "d3d12_shader.h"  // 必须在 D3D12RHIShader 使用之前
+#include "d3d12_sampler.h" // 必须在 D3D12RHISampler 使用之前
 #include "d3d12_buffer.h"
 #include "d3d12_texture.h"
+#include "d3d12_sampler.h"
+#include "d3d12_shader.h"
 #include "d3d12_swapchain.h"
 #include "d3d12_command.h"
+#include "d3d12_fence.h"
 #include "d3d12_pso.h"
+#include "d3d12_descriptor.h"
+#include "d3d12_query_pool.h"
 #include <d3d12.h>
 #include <dxgi1_6.h>
 #include <stdexcept>

@@ -1809,10 +1809,6 @@ void App::runD3D12() {
             auto gbDSL = buildLayoutFromReflect("build/shaders/gbuffer/gbuffer.spv");
             if (gbDSL) {
                 gd.descriptorSetLayouts.push_back(gbDSL.get());
-                auto* d3dL = static_cast<rhi::D3D12RHIDescriptorSetLayout*>(gbDSL.get());
-                std::printf("[d3d12] GBuffer auto-layout: %zu bindings\n", d3dL->bindings().size());
-                for (auto& b : d3dL->bindings())
-                    std::printf("[d3d12]   bind=%u type=%u hlslReg=%u\n", b.binding, (unsigned)b.type, b.hlslRegister);
             }
             try {
                 auto gbPSO = d3dDevice->createGraphicsPSO(gd);

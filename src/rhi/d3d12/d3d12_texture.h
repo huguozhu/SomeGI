@@ -79,32 +79,9 @@ private:
     bool m_isDSV = false;
 };
 
-// D3D12 采样器
-class D3D12RHISampler : public RHISampler {
-public:
-    D3D12RHISampler(D3D12RHIDevice& device, const SamplerDesc& desc);
-    void* nativeHandle() const override { return (void*)(uintptr_t)m_cpuHandle.ptr; }
-    D3D12_CPU_DESCRIPTOR_HANDLE cpuHandle() const { return m_cpuHandle; }
-private:
-    D3D12_CPU_DESCRIPTOR_HANDLE m_cpuHandle{};
-};
+#include "d3d12_sampler.h"
 
-// D3D12 Shader（DXIL bytecode 包装）
-class D3D12RHIShader : public RHIShader {
-public:
-    D3D12RHIShader(const ShaderDesc& desc, const void* bytecode, size_t size);
-    ~D3D12RHIShader() override;
-    ShaderStage stage() const override { return m_stage; }
-    const char* entryPoint() const override { return m_entryPoint.c_str(); }
-    void* nativeHandle() const override { return (void*)m_bytecode.data(); }
-    const void* bytecodeData() const { return m_bytecode.data(); }
-    size_t bytecodeSize() const { return m_bytecode.size(); }
-
-private:
-    ShaderStage m_stage;
-    std::string m_entryPoint;
-    std::vector<uint8_t> m_bytecode;
-};
+#include "d3d12_shader.h"
 
 } // namespace rhi
 } // namespace somegi

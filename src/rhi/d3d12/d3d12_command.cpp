@@ -431,43 +431,6 @@ void D3D12RHICommandBuffer::resetQueryPool(const RHIQueryPool& pool, uint32_t fi
 }
 
 // ════════════════════════════════════════════════════════════════
-// D3D12RHIFence
-// ════════════════════════════════════════════════════════════════
-
-D3D12RHIFence::D3D12RHIFence(D3D12RHIDevice& device, bool signaled) {
-    if (FAILED(device.device()->CreateFence(
-            signaled ? 1 : 0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&m_fence)))) {
-        throw std::runtime_error("[d3d12] CreateFence failed");
-    }
-    m_event = CreateEventEx(nullptr, nullptr, 0, EVENT_ALL_ACCESS);
-    m_value = signaled ? 1 : 0;
-}
-
-D3D12RHIFence::~D3D12RHIFence() {
-    if (m_fence) m_fence->Release();
-    if (m_event) CloseHandle(m_event);
-}
-
-void D3D12RHIFence::wait(uint64_t timeoutNs) {
-    if (m_fence->GetCompletedValue() < m_value) {
-        m_fence->SetEventOnCompletion(m_value, m_event);
-        DWORD ms = (timeoutNs == UINT64_MAX) ? INFINITE
-                   : static_cast<DWORD>(timeoutNs / 1'000'000);
-        WaitForSingleObject(m_event, ms);
-    }
-}
-
-void D3D12RHIFence::reset() {
-    m_value++;
-    m_fence->Signal(m_value);
-}
-
-// ════════════════════════════════════════════════════════════════
-// D3D12RHISemaphore（桩，D3D12 用 fence 代替 semaphore）
-// ════════════════════════════════════════════════════════════════
-
-D3D12RHISemaphore::D3D12RHISemaphore() = default;
-D3D12RHISemaphore::~D3D12RHISemaphore() = default;
 
 } // namespace rhi
 } // namespace somegi
