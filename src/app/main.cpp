@@ -146,6 +146,7 @@ int main(int argc, char** argv) {
         }
 
         somegi::App app;
+        app.setBackend(g_cliConfig.backend);
         app.setScreenshotConfig(
             g_cliConfig.captureInterval,
             g_cliConfig.captureFrame,

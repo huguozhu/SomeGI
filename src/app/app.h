@@ -42,6 +42,11 @@ public:
     void setScreenshotConfig(int interval, int oneFrame, const char* dir);
     void setInitialShadowMethod(int method);   // --shadow-method CLI
     void setExitAfterCapture(bool v) { m_exitAfterCapture = v; }
+
+    // 图形 API 后端（--backend vulkan|d3d12）
+    void setBackend(const char* name);
+    const char* backendName() const { return m_backendName.c_str(); }
+    bool backendIs(const char* name) const { return m_backendName == name; }
     // 回归测试（--capture-ref / --capture-compare）
     void setCaptureRefMode(bool v)      { m_captureRef = v; }
     void setCaptureCompareMode(bool v, double thresh) { m_captureCompare = v; m_refThreshold = thresh; }
@@ -195,6 +200,9 @@ private:
     // ---- Screenshot ----
     ScreenshotCapture m_screenshot;
     bool m_exitAfterCapture = false;  // --exit-after-capture CLI
+
+    // ---- Backend ----
+    std::string m_backendName = "Vulkan";
 
     // ---- Regression test ----
     bool   m_captureRef     = false;  // --capture-ref：生成参考图到 tests/ref/

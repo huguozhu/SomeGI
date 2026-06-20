@@ -1265,6 +1265,11 @@ void App::setScreenshotConfig(int interval, int oneFrame, const char* dir) {
     if (dir && dir[0]) m_screenshot.outputDir = dir;
 }
 
+void App::setBackend(const char* name) {
+    if (name && name[0]) m_backendName = name;
+    std::printf("[init] backend: %s\n", m_backendName.c_str());
+}
+
 void App::setInitialShadowMethod(int method) {
     if (method >= 0 && method < kShadowCount && kShadows[method].implemented) {
         m_currentShadowIndex = method;

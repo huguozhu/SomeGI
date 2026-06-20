@@ -268,6 +268,31 @@ void App::buildUI() {
         }
 
         ImGui::Separator();
+        {
+            // 图形 API 后端选择（需重启生效）
+            const char* backends[] = {"Vulkan", "D3D12"};
+            const char* backendLabels[] = {"Vulkan", "D3D12 (experimental)"};
+            int backendIdx = (m_backendName == "d3d12") ? 1 : 0;
+            ImGui::Text("Graphics API");
+            ImGui::SameLine();
+            if (ImGui::BeginCombo("##backend", backendLabels[backendIdx])) {
+                for (int i = 0; i < 2; ++i) {
+                    bool sel = (backendIdx == i);
+                    if (ImGui::Selectable(backendLabels[i], sel)) {
+                        m_backendName = backends[i];
+                        // 后端切换需要重启应用生效
+                    }
+                    if (sel) ImGui::SetItemDefaultFocus();
+                }
+                ImGui::EndCombo();
+            }
+            if (backendIdx == 1) {
+                ImGui::SameLine();
+                ImGui::TextDisabled("(restart required)");
+            }
+        }
+
+        ImGui::Separator();
         ImGui::Text("Experimental");
         bool useFg = m_useFrameGraph;
         if (ImGui::Checkbox("Use Frame Graph", &useFg)) {
