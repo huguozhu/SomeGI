@@ -1,5 +1,6 @@
 // rhi/d3d12/d3d12_device.cpp — D3D12 设备实现（骨架）
 #include "d3d12_device.h"
+#include "d3d12_swapchain.h"
 #include <d3d12.h>
 #include <dxgi1_6.h>
 #include <stdexcept>
@@ -111,7 +112,9 @@ std::unique_ptr<RHITexture> D3D12RHIDevice::createTexture(const TextureDesc&) { 
 std::unique_ptr<RHITextureView> D3D12RHIDevice::createTextureView(const RHITexture&, const TextureViewDesc&) { NOT_IMPL("createTextureView"); }
 std::unique_ptr<RHIShader> D3D12RHIDevice::createShader(const ShaderDesc&, const void*, size_t) { NOT_IMPL("createShader"); }
 std::unique_ptr<RHISampler> D3D12RHIDevice::createSampler(const SamplerDesc&) { NOT_IMPL("createSampler"); }
-std::unique_ptr<RHISwapchain> D3D12RHIDevice::createSwapchain(void*, uint32_t, uint32_t) { NOT_IMPL("createSwapchain"); }
+std::unique_ptr<RHISwapchain> D3D12RHIDevice::createSwapchain(void* nativeWindow, uint32_t w, uint32_t h) {
+    return std::unique_ptr<RHISwapchain>(new D3D12RHISwapchain(*this, nativeWindow, w, h));
+}
 std::unique_ptr<RHIPipelineState> D3D12RHIDevice::createGraphicsPSO(const GraphicsPSODesc&) { NOT_IMPL("createGraphicsPSO"); }
 std::unique_ptr<RHIPipelineState> D3D12RHIDevice::createComputePSO(const ComputePSODesc&) { NOT_IMPL("createComputePSO"); }
 std::unique_ptr<RHIPipelineState> D3D12RHIDevice::createRayTracingPSO(const RayTracingPSODesc&) { NOT_IMPL("createRayTracingPSO"); }
