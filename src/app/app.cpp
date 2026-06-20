@@ -7,6 +7,7 @@
 #include "rhi/base/shader.h"
 #include "rhi/base/pipeline_state.h"
 #include "rhi/base/descriptor.h"
+#include "rhi/base/buffer.h"
 #define GLFW_EXPOSE_NATIVE_WIN32
 #include <GLFW/glfw3.h>
 #include <GLFW/glfw3native.h>
@@ -1620,34 +1621,52 @@ void App::runD3D12() {
     std::unique_ptr<rhi::RHICommandBuffer> cmdBuf(cmdPool->allocateRaw());
     auto submitFence = d3dDevice->createFence(false);
 
-    // 加载 SSAO DXIL shader 并验证 PSO 创建
+    // 加载 DXIL compute shader
+    std::vector<uint8_t> bytecode;
     {
         std::ifstream f("build/shaders_dxil/ssao/ssao.dxil", std::ios::binary);
-        if (f) {
-            std::vector<uint8_t> bytecode(std::istreambuf_iterator<char>(f), {});
-            rhi::ShaderDesc sd; sd.stage = rhi::ShaderStage::Compute; sd.entryPoint = "comp_main";
-            auto cs = d3dDevice->createShader(sd, bytecode.data(), bytecode.size());
-            std::printf("[d3d12] loaded SSAO shader (%zu bytes)\n", bytecode.size());
-
-            rhi::DescSetLayoutDesc dslDesc;
-            auto add = [&](uint32_t b, rhi::DescriptorType t, uint32_t hlsl) {
-                rhi::DescriptorBinding db; db.binding = b; db.type = t; db.hlslRegister = hlsl;
-                dslDesc.bindings.push_back(db);
-            };
-            add(0, rhi::DescriptorType::UniformBuffer, 0);  // b0
-            add(0, rhi::DescriptorType::SampledImage, 0);   // t0
-            add(1, rhi::DescriptorType::SampledImage, 1);   // t1
-            add(2, rhi::DescriptorType::StorageImage, 2);   // u2
-            auto dsl = d3dDevice->createDescriptorSetLayout(dslDesc);
-
-            rhi::ComputePSODesc psd; psd.computeShader = cs.get();
-            psd.descriptorSetLayouts.push_back(dsl.get());
-            auto pso = d3dDevice->createComputePSO(psd);
-            std::printf("[d3d12] SSAO PSO created — D3D12 pipeline verified!\n");
-        }
+        if (!f) { std::fprintf(stderr, "[d3d12] SSAO shader not found\n"); return; }
+        bytecode.assign(std::istreambuf_iterator<char>(f), {});
+        std::printf("[d3d12] SSAO DXIL: %zu bytes\n", bytecode.size());
     }
 
-    std::printf("[d3d12] clear+present loop: press ESC to exit\n");
+    rhi::ShaderDesc sd; sd.stage = rhi::ShaderStage::Compute; sd.entryPoint = "comp_main";
+    auto csShader = d3dDevice->createShader(sd, bytecode.data(), bytecode.size());
+
+    rhi::DescSetLayoutDesc dslDesc;
+    auto addBind = [&](uint32_t vk, rhi::DescriptorType t, uint32_t hlsl) {
+        rhi::DescriptorBinding b; b.binding = vk; b.type = t; b.hlslRegister = hlsl;
+        dslDesc.bindings.push_back(b);
+    };
+    addBind(0, rhi::DescriptorType::UniformBuffer, 0);
+    addBind(0, rhi::DescriptorType::SampledImage, 0);
+    addBind(1, rhi::DescriptorType::SampledImage, 1);
+    addBind(2, rhi::DescriptorType::StorageImage, 2);
+    auto dsl = d3dDevice->createDescriptorSetLayout(dslDesc);
+
+    rhi::ComputePSODesc psd; psd.computeShader = csShader.get();
+    psd.descriptorSetLayouts.push_back(dsl.get());
+    auto pso = d3dDevice->createComputePSO(psd);
+    std::printf("[d3d12] compute PSO created — ready for dispatch\n");
+
+    // 创建 push constant upload buffer
+    struct SsaoPC { float pad[32]; }; // 128 bytes push constants
+    SsaoPC pcData{};
+    rhi::BufferDesc pcDesc{}; pcDesc.size = sizeof(SsaoPC);
+    pcDesc.usage = rhi::BufferUsage::Uniform;
+    pcDesc.memory = rhi::MemoryType::HostVisible;
+    auto pcBuffer = d3dDevice->createBuffer(pcDesc);
+    std::memcpy(pcBuffer->map(), &pcData, sizeof(pcData));
+    pcBuffer->unmap();
+
+    auto descSet = d3dDevice->createDescriptorSet(*dsl);
+    // 绑定 push constant buffer 到 binding 0 (CBV)
+    descSet->write({{0, rhi::DescriptorType::UniformBuffer, nullptr, pcBuffer.get()}});
+    // 绑定 swapchain UAV 到 binding 2
+    // Phase 5: 创建 swapchain UAV descriptor
+
+    float t = 0;
+    std::printf("[d3d12] compute dispatch loop: press ESC to exit\n");
     while (!m_window->shouldClose()) {
         m_window->pollEvents();
         if (glfwGetKey(m_window->handle(), GLFW_KEY_ESCAPE) == GLFW_PRESS)
@@ -1656,7 +1675,14 @@ void App::runD3D12() {
         auto frame = swapchain->acquireNextFrame();
         if (frame.needsResize) continue;
 
+        // 更新 push constants
+        t += 0.016f;
+        std::memcpy(pcBuffer->map(), &t, sizeof(float)); // offset into pcData
+        pcBuffer->unmap();
+
         cmdBuf->begin();
+
+        // 清除 back buffer
         rhi::RenderingAttachmentInfo colorAttach{};
         colorAttach.view = frame.view.get();
         colorAttach.loadOp = rhi::AttachmentLoadOp::Clear;
@@ -1664,12 +1690,19 @@ void App::runD3D12() {
         colorAttach.clearColor[0] = 0.1f; colorAttach.clearColor[1] = 0.2f;
         colorAttach.clearColor[2] = 0.4f; colorAttach.clearColor[3] = 1.0f;
         cmdBuf->beginRendering(&colorAttach, 1, nullptr, frame.width, frame.height);
+
+        // Compute dispatch (PSO + descriptor + push constants + dispatch)
+        cmdBuf->bindPipelineState(*pso);
+        cmdBuf->bindDescriptorSet(0, *descSet);
+        cmdBuf->pushConstants(rhi::ShaderStage::Compute, &pcData, sizeof(pcData));
+        cmdBuf->dispatch(1, 1, 1);
+
         cmdBuf->endRendering();
         cmdBuf->end();
 
-        rhi::SubmitDesc sd{}; sd.commandBuffer = cmdBuf.get();
-        sd.signalFence = submitFence.get();
-        d3dDevice->submit(sd);
+        rhi::SubmitDesc sub{}; sub.commandBuffer = cmdBuf.get();
+        sub.signalFence = submitFence.get();
+        d3dDevice->submit(sub);
         d3dDevice->waitForFence(*submitFence, UINT64_MAX);
         submitFence->reset();
         swapchain->present(frame);
