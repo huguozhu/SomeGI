@@ -21,6 +21,8 @@ add_library(somegi_rhi OBJECT
 if(WIN32)
     target_sources(somegi_rhi PRIVATE
         d3d12/d3d12_device.cpp
+        d3d12/d3d12_buffer.cpp
+        d3d12/d3d12_texture.cpp
         d3d12/d3d12_swapchain.cpp
         d3d12/d3d12_command.cpp
     )

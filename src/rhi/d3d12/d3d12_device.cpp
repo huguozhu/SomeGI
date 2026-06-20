@@ -1,5 +1,7 @@
 // rhi/d3d12/d3d12_device.cpp — D3D12 设备实现（骨架）
 #include "d3d12_device.h"
+#include "d3d12_buffer.h"
+#include "d3d12_texture.h"
 #include "d3d12_swapchain.h"
 #include "d3d12_command.h"
 #include <d3d12.h>
@@ -108,10 +110,19 @@ D3D12RHIDevice::~D3D12RHIDevice() {
 
 #define NOT_IMPL(msg) throw std::runtime_error("[d3d12] " msg " not implemented")
 
-std::unique_ptr<RHIBuffer> D3D12RHIDevice::createBuffer(const BufferDesc&) { NOT_IMPL("createBuffer"); }
-std::unique_ptr<RHITexture> D3D12RHIDevice::createTexture(const TextureDesc&) { NOT_IMPL("createTexture"); }
-std::unique_ptr<RHITextureView> D3D12RHIDevice::createTextureView(const RHITexture&, const TextureViewDesc&) { NOT_IMPL("createTextureView"); }
-std::unique_ptr<RHIShader> D3D12RHIDevice::createShader(const ShaderDesc&, const void*, size_t) { NOT_IMPL("createShader"); }
+std::unique_ptr<RHIBuffer> D3D12RHIDevice::createBuffer(const BufferDesc& desc) {
+    return std::unique_ptr<RHIBuffer>(new D3D12RHIBuffer(*this, desc));
+}
+std::unique_ptr<RHITexture> D3D12RHIDevice::createTexture(const TextureDesc& desc) {
+    return std::unique_ptr<RHITexture>(new D3D12RHITexture(*this, desc));
+}
+std::unique_ptr<RHITextureView> D3D12RHIDevice::createTextureView(const RHITexture& tex, const TextureViewDesc& desc) {
+    // createView 非 const（因可能创建 descriptor handle），安全的 const_cast
+    return const_cast<D3D12RHITexture&>(static_cast<const D3D12RHITexture&>(tex)).createView(desc);
+}
+std::unique_ptr<RHIShader> D3D12RHIDevice::createShader(const ShaderDesc& desc, const void* bytecode, size_t size) {
+    return std::make_unique<D3D12RHIShader>(desc, bytecode, size);
+}
 std::unique_ptr<RHISampler> D3D12RHIDevice::createSampler(const SamplerDesc&) { NOT_IMPL("createSampler"); }
 std::unique_ptr<RHISwapchain> D3D12RHIDevice::createSwapchain(void* nativeWindow, uint32_t w, uint32_t h) {
     return std::unique_ptr<RHISwapchain>(new D3D12RHISwapchain(*this, nativeWindow, w, h));

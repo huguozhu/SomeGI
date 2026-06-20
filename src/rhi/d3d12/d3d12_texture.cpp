@@ -1,0 +1,115 @@
+// rhi/d3d12/d3d12_texture.cpp — D3D12 纹理/视图/Shader 实现
+#include "d3d12_texture.h"
+#include "d3d12_device.h"
+#include <stdexcept>
+#include <cstdio>
+
+namespace somegi {
+namespace rhi {
+
+// ── Format 映射 ──
+static DXGI_FORMAT toDxgiFormat(Format f) {
+    switch (f) {
+        case Format::R8_UNORM:            return DXGI_FORMAT_R8_UNORM;
+        case Format::R8G8B8A8_UNORM:      return DXGI_FORMAT_R8G8B8A8_UNORM;
+        case Format::R16G16B16A16_SFLOAT: return DXGI_FORMAT_R16G16B16A16_FLOAT;
+        case Format::R32_UINT:            return DXGI_FORMAT_R32_UINT;
+        case Format::R32_SFLOAT:          return DXGI_FORMAT_R32_FLOAT;
+        case Format::R32G32_SFLOAT:       return DXGI_FORMAT_R32G32_FLOAT;
+        case Format::D32_SFLOAT:          return DXGI_FORMAT_D32_FLOAT;
+        case Format::B8G8R8A8_UNORM:      return DXGI_FORMAT_B8G8R8A8_UNORM;
+        default: return DXGI_FORMAT_R8G8B8A8_UNORM;
+    }
+}
+
+// ════════════════════════════════════════════════════════════════
+// D3D12RHITexture
+// ════════════════════════════════════════════════════════════════
+
+D3D12RHITexture::D3D12RHITexture(D3D12RHIDevice& device, const TextureDesc& desc)
+    : m_device(device), m_desc(desc), m_dxgiFormat(toDxgiFormat(desc.format)) {
+
+    // 推断默认状态
+    bool isDS = ((uint32_t)desc.usage & (uint32_t)TextureUsage::DepthStencil) != 0;
+    bool isRT = ((uint32_t)desc.usage & (uint32_t)TextureUsage::ColorAttachment) != 0;
+    m_defaultState = isDS ? D3D12_RESOURCE_STATE_DEPTH_WRITE
+                   : isRT ? D3D12_RESOURCE_STATE_RENDER_TARGET
+                   : D3D12_RESOURCE_STATE_COMMON;
+
+    D3D12_RESOURCE_DESC rd{};
+    rd.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+    rd.Width = desc.width;
+    rd.Height = desc.height;
+    rd.DepthOrArraySize = (UINT16)desc.arrayLayers;
+    rd.MipLevels = (UINT16)desc.mipLevels;
+    rd.Format = m_dxgiFormat;
+    rd.SampleDesc = { (UINT)desc.samples, 0 };
+    rd.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+    rd.Flags = D3D12_RESOURCE_FLAG_NONE;
+
+    if (isDS)
+        rd.Flags |= D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
+    if (isRT || ((uint32_t)desc.usage & (uint32_t)TextureUsage::Storage))
+        rd.Flags |= D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET
+                  | D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+
+    D3D12_HEAP_PROPERTIES heapProps{};
+    heapProps.Type = D3D12_HEAP_TYPE_DEFAULT;
+    heapProps.CPUPageProperty = D3D12_CPU_PAGE_PROPERTY_UNKNOWN;
+    heapProps.MemoryPoolPreference = D3D12_MEMORY_POOL_UNKNOWN;
+    heapProps.CreationNodeMask = 1;
+    heapProps.VisibleNodeMask = 1;
+
+    if (FAILED(device.device()->CreateCommittedResource(
+            &heapProps, D3D12_HEAP_FLAG_NONE, &rd,
+            D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(&m_resource)))) {
+        throw std::runtime_error("[d3d12] CreateCommittedResource(texture) failed");
+    }
+
+    if (desc.debugName) {
+        wchar_t wname[128];
+        MultiByteToWideChar(CP_UTF8, 0, desc.debugName, -1, wname, 128);
+        m_resource->SetName(wname);
+    }
+}
+
+D3D12RHITexture::~D3D12RHITexture() {
+    if (m_resource) m_resource->Release();
+}
+
+std::unique_ptr<RHITextureView> D3D12RHITexture::createView(const TextureViewDesc& desc) {
+    return std::unique_ptr<RHITextureView>(new D3D12RHITextureView(m_device, *this, desc));
+}
+
+// ════════════════════════════════════════════════════════════════
+// D3D12RHITextureView
+// ════════════════════════════════════════════════════════════════
+
+D3D12RHITextureView::D3D12RHITextureView(D3D12RHIDevice& device,
+                                           D3D12RHITexture& texture,
+                                           const TextureViewDesc& desc)
+    : m_device(device) {
+
+    // 简化：创建 SRV descriptor
+    // Phase 3 将实现完整的 descriptor heap 管理，当前仅占位
+    bool isDS = (texture.defaultState() == D3D12_RESOURCE_STATE_DEPTH_WRITE);
+    m_isDSV = isDS;
+    m_isRTV = !isDS && (texture.defaultState() == D3D12_RESOURCE_STATE_RENDER_TARGET);
+}
+
+D3D12RHITextureView::~D3D12RHITextureView() = default;
+
+// ════════════════════════════════════════════════════════════════
+// D3D12RHIShader
+// ════════════════════════════════════════════════════════════════
+
+D3D12RHIShader::D3D12RHIShader(const ShaderDesc& desc, const void* bytecode, size_t size)
+    : m_stage(desc.stage), m_entryPoint(desc.entryPoint ? desc.entryPoint : "main") {
+    auto* data = static_cast<const uint8_t*>(bytecode);
+    m_bytecode.assign(data, data + size);
+}
+
+D3D12RHIShader::~D3D12RHIShader() = default;
+
+} // namespace rhi
+} // namespace somegi
