@@ -84,22 +84,27 @@ int main(int argc, char** argv) {
 
         std::printf("CWD : %s\n", std::filesystem::current_path().string().c_str());
 
-        // 后端选择通过 App::setBackend 传入，App::run() 根据选择分派
-        somegi::App app;
-        app.setBackend(g_cliConfig.backend);
-        app.setScreenshotConfig(
+        // 根据后端选择创建 App（D3D12 跳过 Vulkan 初始化）
+        std::unique_ptr<somegi::App> app;
+        if (std::strcmp(g_cliConfig.backend, "d3d12") == 0) {
+            app.reset(new somegi::App(somegi::App::ForD3D12{}));
+        } else {
+            app.reset(new somegi::App());
+        }
+        app->setBackend(g_cliConfig.backend);
+        app->setScreenshotConfig(
             g_cliConfig.captureInterval,
             g_cliConfig.captureFrame,
             g_cliConfig.captureDir);
         if (g_cliConfig.shadowMethod >= 0)
-            app.setInitialShadowMethod(g_cliConfig.shadowMethod);
+            app->setInitialShadowMethod(g_cliConfig.shadowMethod);
         if (g_cliConfig.exitAfterCapture)
-            app.setExitAfterCapture(true);
+            app->setExitAfterCapture(true);
         if (g_cliConfig.captureRef)
-            app.setCaptureRefMode(true);
+            app->setCaptureRefMode(true);
         if (g_cliConfig.captureCompare)
-            app.setCaptureCompareMode(true, g_cliConfig.refThreshold);
-        app.run();
+            app->setCaptureCompareMode(true, g_cliConfig.refThreshold);
+        app->run();
     } catch (const std::exception& e) {
         std::fprintf(stderr, "Fatal: %s\n", e.what());
         return 1;

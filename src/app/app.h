@@ -35,6 +35,9 @@ struct SceneState {
 class App {
 public:
     App();
+    // D3D12 专用构造标签
+    struct ForD3D12 {};
+    explicit App(ForD3D12);
     ~App();
     void run();
     // D3D12 独立渲染循环（后端为 D3D12 时自动调用）
@@ -49,6 +52,9 @@ public:
     void setBackend(const char* name);
     const char* backendName() const { return m_backendName.c_str(); }
     bool backendIs(const char* name) const { return m_backendName == name; }
+
+    // D3D12 专用构造函数（跳过 Vulkan 初始化）
+    static App createForD3D12();
     // 回归测试（--capture-ref / --capture-compare）
     void setCaptureRefMode(bool v)      { m_captureRef = v; }
     void setCaptureCompareMode(bool v, double thresh) { m_captureCompare = v; m_refThreshold = thresh; }

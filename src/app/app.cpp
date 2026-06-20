@@ -4,6 +4,9 @@
 #include "rhi/base/swapchain.h"
 #include "rhi/base/command_buffer.h"
 #include "rhi/base/fence.h"
+#include "rhi/base/shader.h"
+#include "rhi/base/pipeline_state.h"
+#include "rhi/base/descriptor.h"
 #define GLFW_EXPOSE_NATIVE_WIN32
 #include <GLFW/glfw3.h>
 #include <GLFW/glfw3native.h>
@@ -1598,19 +1601,53 @@ void App::run() {
     }
 }
 
+App::App(ForD3D12) {
+    m_backendName = "d3d12";
+    // 创建简单 GLFW 窗口（无 Vulkan surface）
+    WindowDesc wd; wd.title = "SomeGI D3D12"; wd.width = 800; wd.height = 450;
+    m_window = std::make_unique<Window>(wd);
+    std::printf("[d3d12] App(ForD3D12) — Vulkan init skipped\n");
+}
+
 // D3D12 独立渲染循环（--backend d3d12 时调用）
 void App::runD3D12() {
-    std::printf("[d3d12] App::runD3D12() — clear+present loop\n");
-    // 创建 D3D12 设备和交换链（复用 App 的 GLFW 窗口句柄）
+    std::printf("[d3d12] App::runD3D12() — starting\n");
     HWND hwnd = glfwGetWin32Window(m_window->handle());
     auto d3dDevice = rhi::RHIDevice::create(rhi::Backend::D3D12, hwnd, false);
-    m_d3d12Device = d3dDevice.get(); // 保存原始指针用于 cleanup
+    m_d3d12Device = d3dDevice.get();
     auto swapchain = d3dDevice->createSwapchain(hwnd, 800, 450);
     auto cmdPool = d3dDevice->createCommandPool();
     std::unique_ptr<rhi::RHICommandBuffer> cmdBuf(cmdPool->allocateRaw());
     auto submitFence = d3dDevice->createFence(false);
 
-    std::printf("[d3d12] press ESC or close window to exit\n");
+    // 加载 SSAO DXIL shader 并验证 PSO 创建
+    {
+        std::ifstream f("build/shaders_dxil/ssao/ssao.dxil", std::ios::binary);
+        if (f) {
+            std::vector<uint8_t> bytecode(std::istreambuf_iterator<char>(f), {});
+            rhi::ShaderDesc sd; sd.stage = rhi::ShaderStage::Compute; sd.entryPoint = "comp_main";
+            auto cs = d3dDevice->createShader(sd, bytecode.data(), bytecode.size());
+            std::printf("[d3d12] loaded SSAO shader (%zu bytes)\n", bytecode.size());
+
+            rhi::DescSetLayoutDesc dslDesc;
+            auto add = [&](uint32_t b, rhi::DescriptorType t, uint32_t hlsl) {
+                rhi::DescriptorBinding db; db.binding = b; db.type = t; db.hlslRegister = hlsl;
+                dslDesc.bindings.push_back(db);
+            };
+            add(0, rhi::DescriptorType::UniformBuffer, 0);  // b0
+            add(0, rhi::DescriptorType::SampledImage, 0);   // t0
+            add(1, rhi::DescriptorType::SampledImage, 1);   // t1
+            add(2, rhi::DescriptorType::StorageImage, 2);   // u2
+            auto dsl = d3dDevice->createDescriptorSetLayout(dslDesc);
+
+            rhi::ComputePSODesc psd; psd.computeShader = cs.get();
+            psd.descriptorSetLayouts.push_back(dsl.get());
+            auto pso = d3dDevice->createComputePSO(psd);
+            std::printf("[d3d12] SSAO PSO created — D3D12 pipeline verified!\n");
+        }
+    }
+
+    std::printf("[d3d12] clear+present loop: press ESC to exit\n");
     while (!m_window->shouldClose()) {
         m_window->pollEvents();
         if (glfwGetKey(m_window->handle(), GLFW_KEY_ESCAPE) == GLFW_PRESS)
