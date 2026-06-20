@@ -37,6 +37,8 @@ public:
     App();
     ~App();
     void run();
+    // D3D12 独立渲染循环（后端为 D3D12 时自动调用）
+    void runD3D12();
 
     // 由 main() 在构造后、run() 前调用，传入 CLI 截图配置
     void setScreenshotConfig(int interval, int oneFrame, const char* dir);
@@ -203,6 +205,8 @@ private:
 
     // ---- Backend ----
     std::string m_backendName = "Vulkan";
+    // D3D12 设备（仅 D3D12 路径使用，Vulkan 路径为 nullptr）
+    class rhi::RHIDevice* m_d3d12Device = nullptr;
 
     // ---- Regression test ----
     bool   m_captureRef     = false;  // --capture-ref：生成参考图到 tests/ref/

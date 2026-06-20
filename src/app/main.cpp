@@ -1,23 +1,11 @@
 #include "app.h"
 #include "core/screenshot.h"
 #include "core/shader.h"
-#include "rhi/base/device.h"
-#include "rhi/base/swapchain.h"
-#include "rhi/base/command_buffer.h"
-#include "rhi/base/shader.h"
-#include "rhi/base/pipeline_state.h"
-#include "rhi/base/fence.h"
-#include "rhi/base/descriptor.h"
-#define GLFW_EXPOSE_NATIVE_WIN32
-#include <GLFW/glfw3.h>
-#include <GLFW/glfw3native.h>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <exception>
 #include <filesystem>
-#include <fstream>
-#include <vector>
 
 namespace {
 
@@ -33,7 +21,7 @@ struct CliConfig {
     bool captureCompare = false;      // --capture-compare：截帧对比
     double refThreshold = 40.0;       // --ref-threshold N
     // 后端选择
-    const char* backend = "d3d12";   // --backend vulkan|d3d12
+    const char* backend = "vulkan";   // --backend vulkan|d3d12
 };
 
 CliConfig parseCli(int argc, char** argv) {
@@ -96,113 +84,7 @@ int main(int argc, char** argv) {
 
         std::printf("CWD : %s\n", std::filesystem::current_path().string().c_str());
 
-        // D3D12 测试路径：clear + present 循环
-        if (std::strcmp(g_cliConfig.backend, "d3d12") == 0) {
-            std::printf("[init] D3D12 backend selected — running clear test\n");
-            // 创建独立 GLFW 窗口（不使用 Vulkan）
-            glfwInit();
-            glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-            GLFWwindow* win = glfwCreateWindow(800, 600, "SomeGI D3D12", nullptr, nullptr);
-            if (!win) { std::fprintf(stderr, "GLFW window creation failed\n"); return 1; }
-
-            HWND hwnd = glfwGetWin32Window(win);
-            auto d3d12Device = somegi::rhi::RHIDevice::create(somegi::rhi::Backend::D3D12, hwnd, false);
-            auto swapchain = d3d12Device->createSwapchain(hwnd, 800, 600);
-            auto cmdPool = d3d12Device->createCommandPool();
-            std::unique_ptr<somegi::rhi::RHICommandBuffer> cmdBuf(cmdPool->allocateRaw());
-
-            // 加载 DXIL compute shader（如果有）
-            std::vector<uint8_t> csBytecode;
-            {
-                std::ifstream f("build/shaders_dxil/ssao/ssao.dxil", std::ios::binary);
-                if (f) {
-                    csBytecode.assign(std::istreambuf_iterator<char>(f),
-                                      std::istreambuf_iterator<char>());
-                    std::printf("[d3d12] loaded ssao.dxil (%zu bytes)\n", csBytecode.size());
-                }
-            }
-
-            if (!csBytecode.empty()) {
-                somegi::rhi::ShaderDesc sd;
-                sd.stage = somegi::rhi::ShaderStage::Compute;
-                sd.entryPoint = "comp_main";
-                auto csShader = d3d12Device->createShader(sd, csBytecode.data(), csBytecode.size());
-                std::printf("[d3d12] DXIL loaded: %zu bytes\n", csBytecode.size());
-
-                somegi::rhi::DescSetLayoutDesc dslDesc;
-                // HLSL registers: CBV b0, SRV t0, SRV t1, UAV u2
-                // 用 hlslRegister 覆盖绑定的 Vulkan binding 号
-                auto addBind = [&](uint32_t vkBind, somegi::rhi::DescriptorType t, uint32_t hlslReg) {
-                    somegi::rhi::DescriptorBinding b;
-                    b.binding = vkBind; b.type = t; b.hlslRegister = hlslReg;
-                    dslDesc.bindings.push_back(b);
-                };
-                addBind(0, somegi::rhi::DescriptorType::UniformBuffer, 0); // b0
-                addBind(0, somegi::rhi::DescriptorType::SampledImage, 0);  // t0
-                addBind(1, somegi::rhi::DescriptorType::SampledImage, 1);  // t1
-                addBind(2, somegi::rhi::DescriptorType::StorageImage, 2);  // u2
-                auto dsl = d3d12Device->createDescriptorSetLayout(dslDesc);
-
-                somegi::rhi::ComputePSODesc psd;
-                psd.computeShader = csShader.get();
-                psd.descriptorSetLayouts.push_back(dsl.get());
-                try {
-                    auto csPSO = d3d12Device->createComputePSO(psd);
-                    std::printf("[d3d12] compute PSO created!\n");
-                } catch (const std::exception& e) {
-                    std::printf("[d3d12] PSO failed: %s\n", e.what());
-                }
-            }
-
-            // 创建 fence 用于提交同步
-            auto submitFence = d3d12Device->createFence(false);
-            uint64_t fenceVal = 0;
-
-            std::printf("[d3d12] clear loop: press ESC or close window to exit\n");
-            while (!glfwWindowShouldClose(win)) {
-                glfwPollEvents();
-                if (glfwGetKey(win, GLFW_KEY_ESCAPE) == GLFW_PRESS)
-                    glfwSetWindowShouldClose(win, GLFW_TRUE);
-
-                auto frame = swapchain->acquireNextFrame();
-                if (frame.needsResize) continue;
-
-                cmdBuf->begin();
-
-                // 清除 back buffer（蓝色背景）
-                somegi::rhi::RenderingAttachmentInfo colorAttach{};
-                colorAttach.view = frame.view.get();
-                colorAttach.loadOp = somegi::rhi::AttachmentLoadOp::Clear;
-                colorAttach.storeOp = somegi::rhi::AttachmentStoreOp::Store;
-                colorAttach.clearColor[0] = 0.1f;
-                colorAttach.clearColor[1] = 0.2f;
-                colorAttach.clearColor[2] = 0.4f;
-                colorAttach.clearColor[3] = 1.0f;
-
-                cmdBuf->beginRendering(&colorAttach, 1, nullptr, frame.width, frame.height);
-                cmdBuf->endRendering();
-
-                cmdBuf->end();
-
-                somegi::rhi::SubmitDesc sd{};
-                sd.commandBuffer = cmdBuf.get();
-                sd.signalFence = submitFence.get();
-                d3d12Device->submit(sd);
-
-                // 等待提交完成
-                d3d12Device->waitForFence(*submitFence, UINT64_MAX);
-                submitFence->reset();
-
-                swapchain->present(frame);
-            }
-
-            d3d12Device->waitIdle();
-            glfwDestroyWindow(win);
-            glfwTerminate();
-            std::printf("[d3d12] test complete\n");
-            return 0;
-        }
-
+        // 后端选择通过 App::setBackend 传入，App::run() 根据选择分派
         somegi::App app;
         app.setBackend(g_cliConfig.backend);
         app.setScreenshotConfig(

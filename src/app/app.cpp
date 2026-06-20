@@ -1,5 +1,12 @@
 #include "app.h"
 #include "tests/regression_test.h"
+#include "rhi/base/device.h"
+#include "rhi/base/swapchain.h"
+#include "rhi/base/command_buffer.h"
+#include "rhi/base/fence.h"
+#define GLFW_EXPOSE_NATIVE_WIN32
+#include <GLFW/glfw3.h>
+#include <GLFW/glfw3native.h>
 #include "scene/draw_list.h"
 #include "core/window.h"
 #include "core/device.h"
@@ -1312,6 +1319,10 @@ void App::renderDebugWindow() {
     m_imguiSwap->present(f);
 }
 void App::run() {
+    if (m_backendName == "d3d12") {
+        runD3D12();
+        return;
+    }
     auto last = std::chrono::high_resolution_clock::now();
     float fpsTimer = 0;
     int fpsFrames = 0;
@@ -1587,4 +1598,47 @@ void App::run() {
     }
 }
 
+// D3D12 独立渲染循环（--backend d3d12 时调用）
+void App::runD3D12() {
+    std::printf("[d3d12] App::runD3D12() — clear+present loop\n");
+    // 创建 D3D12 设备和交换链（复用 App 的 GLFW 窗口句柄）
+    HWND hwnd = glfwGetWin32Window(m_window->handle());
+    auto d3dDevice = rhi::RHIDevice::create(rhi::Backend::D3D12, hwnd, false);
+    m_d3d12Device = d3dDevice.get(); // 保存原始指针用于 cleanup
+    auto swapchain = d3dDevice->createSwapchain(hwnd, 800, 450);
+    auto cmdPool = d3dDevice->createCommandPool();
+    std::unique_ptr<rhi::RHICommandBuffer> cmdBuf(cmdPool->allocateRaw());
+    auto submitFence = d3dDevice->createFence(false);
+
+    std::printf("[d3d12] press ESC or close window to exit\n");
+    while (!m_window->shouldClose()) {
+        m_window->pollEvents();
+        if (glfwGetKey(m_window->handle(), GLFW_KEY_ESCAPE) == GLFW_PRESS)
+            glfwSetWindowShouldClose(m_window->handle(), GLFW_TRUE);
+
+        auto frame = swapchain->acquireNextFrame();
+        if (frame.needsResize) continue;
+
+        cmdBuf->begin();
+        rhi::RenderingAttachmentInfo colorAttach{};
+        colorAttach.view = frame.view.get();
+        colorAttach.loadOp = rhi::AttachmentLoadOp::Clear;
+        colorAttach.storeOp = rhi::AttachmentStoreOp::Store;
+        colorAttach.clearColor[0] = 0.1f; colorAttach.clearColor[1] = 0.2f;
+        colorAttach.clearColor[2] = 0.4f; colorAttach.clearColor[3] = 1.0f;
+        cmdBuf->beginRendering(&colorAttach, 1, nullptr, frame.width, frame.height);
+        cmdBuf->endRendering();
+        cmdBuf->end();
+
+        rhi::SubmitDesc sd{}; sd.commandBuffer = cmdBuf.get();
+        sd.signalFence = submitFence.get();
+        d3dDevice->submit(sd);
+        d3dDevice->waitForFence(*submitFence, UINT64_MAX);
+        submitFence->reset();
+        swapchain->present(frame);
+    }
+    d3dDevice->waitIdle();
+    std::printf("[d3d12] loop ended\n");
 }
+
+} // namespace somegi
