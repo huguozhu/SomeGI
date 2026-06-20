@@ -2,6 +2,10 @@ add_executable(SomeGI
     main.cpp
     app.h
     app.cpp
+    app_common.h
+    app_common.cpp
+    app_ui.cpp
+    app_fg.cpp
     benchmark_runner.h
     benchmark_runner.cpp
 )
