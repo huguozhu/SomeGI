@@ -31,6 +31,7 @@ if(WIN32)
         d3d12/d3d12_command.cpp
         d3d12/d3d12_fence.cpp
         d3d12/d3d12_query_pool.cpp
+        d3d12/d3d12_acceleration_structure.cpp
     )
     # 启用 D3D12 Agility SDK（支持最新 D3D12 特性）
     target_compile_definitions(somegi_rhi PUBLIC D3D12_SUPPORTED)
