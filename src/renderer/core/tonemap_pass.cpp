@@ -48,6 +48,28 @@ void TonemapPass::init(rhi::RHIDevice& d, VkSampler linearSampler) {
     m_pipeline = d.createComputePSO(psoDesc);
 }
 
+void TonemapPass::init(rhi::RHIDevice& d, rhi::RHISampler& linearSampler) {
+    m_rhiDevice = &d;
+    // D3D12 路径：直接使用已创建的 RHI sampler
+    m_sampler.reset(static_cast<rhi::RHISampler*>(&linearSampler));
+    m_sampler.release(); // 不拥有所有权
+
+    rhi::DescSetLayoutDesc layoutDesc; layoutDesc.debugName = "Tonemap";
+    layoutDesc.bindings = {
+        {0, rhi::DescriptorType::SampledImage, 1, rhi::ShaderStage::Compute},
+        {1, rhi::DescriptorType::Sampler,       1, rhi::ShaderStage::Compute},
+        {2, rhi::DescriptorType::StorageImage,  1, rhi::ShaderStage::Compute},
+    };
+    m_setLayout = d.createDescriptorSetLayout(layoutDesc);
+    for (auto& s : m_sets) s = d.createDescriptorSet(*m_setLayout);
+
+    // D3D12 shader 加载
+    rhi::ShaderDesc sd; sd.stage = rhi::ShaderStage::Compute; sd.entryPoint = "cs_main";
+    // Phase 5: 加载 DXIL shader（当前 PSO 创建需要 DXIL bytecode）
+    // auto shader = d.createShader(sd, ...);
+    // m_pipeline = d.createComputePSO(...);
+}
+
 void TonemapPass::destroy() {
     for (auto& s : m_sets) s.reset();
     m_pipeline.reset(); m_setLayout.reset(); m_rhiDevice = nullptr;

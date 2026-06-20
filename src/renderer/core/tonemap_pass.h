@@ -16,6 +16,7 @@ class TonemapPass {
 public:
     ~TonemapPass();
     void init(rhi::RHIDevice& d, VkSampler linearSampler);
+    void init(rhi::RHIDevice& d, rhi::RHISampler& linearSampler); // D3D12 路径
     void destroy();
     void bindTargets(const RenderTargets& rt);
     void bindOutput(VkImageView outView, uint32_t frameIdx);
