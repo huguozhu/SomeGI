@@ -1676,6 +1676,9 @@ void App::runD3D12() {
     std::memcpy(vb->map(), triVerts, sizeof(triVerts));
     vb->unmap();
     std::printf("[d3d12] vertex buffer: %zu bytes\n", sizeof(triVerts));
+
+    // TonemapPass PSO 创建成功（见上方日志）
+    // 完整 dispatch 需要 D3D12 descriptor 绑定（Phase 5）
     while (!m_window->shouldClose()) {
         m_window->pollEvents();
         if (glfwGetKey(m_window->handle(), GLFW_KEY_ESCAPE) == GLFW_PRESS)
