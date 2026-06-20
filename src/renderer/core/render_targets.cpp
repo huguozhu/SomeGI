@@ -1,5 +1,7 @@
 #include "renderer/core/render_targets.h"
 #include "core/device.h"
+#include "rhi/base/device.h"
+#include "rhi/base/texture.h"
 
 namespace somegi {
 
@@ -226,4 +228,53 @@ void RenderTargets::destroy() {
     aaHistory.reset();
 }
 
+void RenderTargets::createRHI(rhi::RHIDevice& rhiDev, VkExtent2D ext, VkSampleCountFlagBits) {
+    extent = ext;
+    auto makeTex = [&](rhi::Format fmt, VkImageUsageFlags usage,
+                       std::unique_ptr<rhi::RHITexture>& tex,
+                       std::unique_ptr<rhi::RHITextureView>& view) {
+        rhi::TextureDesc td;
+        td.format = fmt;
+        td.width = ext.width; td.height = ext.height;
+        uint32_t u = (uint32_t)rhi::TextureUsage::Sampled | (uint32_t)rhi::TextureUsage::Storage;
+        if (usage & VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT)
+            u |= (uint32_t)rhi::TextureUsage::ColorAttachment;
+        if (usage & VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT)
+            u = (uint32_t)rhi::TextureUsage::DepthStencil;
+        if (usage & VK_IMAGE_USAGE_TRANSFER_SRC_BIT)
+            u |= (uint32_t)rhi::TextureUsage::TransferSrc;
+        if (usage & VK_IMAGE_USAGE_TRANSFER_DST_BIT)
+            u |= (uint32_t)rhi::TextureUsage::TransferDst;
+        td.usage = (rhi::TextureUsage)u;
+        tex.reset(static_cast<rhi::RHITexture*>(
+            rhiDev.createTexture(td).release()));
+        view = tex->createView({});
+    };
+
+    makeTex(rhi::Format::R16G16B16A16_SFLOAT,
+        VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
+        VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
+        rhi.hdrColor, rhi.hdrColorView);
+
+    makeTex(rhi::Format::D32_SFLOAT,
+        VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+        rhi.depth, rhi.depthView);
+
+    makeTex(rhi::Format::B8G8R8A8_UNORM,
+        VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
+        rhi.ldrTonemap, rhi.ldrTonemapView);
+
+    makeTex(rhi::Format::R8G8B8A8_UNORM,
+        VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+        rhi.gAlbedoMetal, rhi.gAlbedoMetalView);
+
+    makeTex(rhi::Format::R16G16B16A16_SFLOAT,
+        VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+        rhi.gNormalRough, rhi.gNormalRoughView);
+
+    makeTex(rhi::Format::R8G8B8A8_UNORM,
+        VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+        rhi.gEmissiveAO, rhi.gEmissiveAOView);
 }
+
+} // namespace somegi

@@ -1,5 +1,6 @@
 #pragma once
 #include "core/image.h"
+#include <memory>
 
 // 渲染目标集合 —— 所有屏幕分辨率级别的离屏图集中放在这里，create() 一次
 // 全部分配，destroy() 一次全部回收。窗口 resize 时由 App 走"销毁 + 重建"。
@@ -7,6 +8,11 @@
 namespace somegi {
 
 class Device;
+namespace rhi {
+    class RHIDevice;
+    class RHITexture;
+    class RHITextureView;
+}
 
 struct RenderTargets {
     Image hdrColor;       // R16G16B16A16_SFLOAT，主光照输出
@@ -61,10 +67,22 @@ struct RenderTargets {
     void destroy();
     void recreateMsaa(Device& d, VkSampleCountFlagBits samples);
 
+    // D3D12 RHI 纹理创建（与 Vulkan Image 并行）
+    void createRHI(rhi::RHIDevice& rhiDev, VkExtent2D ext, VkSampleCountFlagBits msaaSamples);
+
     void ensureAaResources(Device& d);
     void destroyAaResources();
 
     VkExtent2D extent{};
+
+    // RHI 纹理指针（D3D12 路径使用，Vulkan 为 nullptr）
+    struct RHITargets {
+        std::unique_ptr<rhi::RHITexture> hdrColor, depth, ldrTonemap;
+        std::unique_ptr<rhi::RHITexture> gAlbedoMetal, gNormalRough, gEmissiveAO;
+        std::unique_ptr<rhi::RHITextureView> hdrColorView, depthView, ldrTonemapView;
+        std::unique_ptr<rhi::RHITextureView> gAlbedoMetalView, gNormalRoughView, gEmissiveAOView;
+    };
+    RHITargets rhi{};
 };
 
 }
