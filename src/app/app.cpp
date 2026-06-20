@@ -1647,6 +1647,7 @@ void App::runD3D12() {
     gpsd.renderTargets.sampleCount = 1;
     auto pso = d3dDevice->createGraphicsPSO(gpsd);
     std::printf("[d3d12] graphics PSO created — triangle pipeline\n");
+    // 注: triangle PSO 已被 fullscreen quad 替代，保留用于参考
 
     // 创建 RHI 线性采样器
     rhi::SamplerDesc sampDesc;
