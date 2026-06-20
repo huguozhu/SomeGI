@@ -1677,6 +1677,31 @@ void App::runD3D12() {
     vb->unmap();
     std::printf("[d3d12] vertex buffer: %zu bytes\n", sizeof(triVerts));
 
+    // SSAO compute PSO（多 compute pass 同帧验证）
+    std::unique_ptr<rhi::RHIPipelineState> ssaoPSO;
+    {
+        std::ifstream f("build/shaders_dxil/ssao/ssao.dxil", std::ios::binary);
+        if (f) {
+            std::vector<uint8_t> bc(std::istreambuf_iterator<char>(f), {});
+            rhi::ShaderDesc sd; sd.stage = rhi::ShaderStage::Compute; sd.entryPoint = "comp_main";
+            auto cs = d3dDevice->createShader(sd, bc.data(), bc.size());
+            rhi::DescSetLayoutDesc dslD;
+            auto add = [&](uint32_t vk, rhi::DescriptorType t, uint32_t hlsl) {
+                rhi::DescriptorBinding b; b.binding = vk; b.type = t; b.hlslRegister = hlsl;
+                dslD.bindings.push_back(b);
+            };
+            add(0, rhi::DescriptorType::UniformBuffer, 0);
+            add(0, rhi::DescriptorType::SampledImage, 0);
+            add(1, rhi::DescriptorType::SampledImage, 1);
+            add(2, rhi::DescriptorType::StorageImage, 2);
+            auto sdsl = d3dDevice->createDescriptorSetLayout(dslD);
+            rhi::ComputePSODesc psd; psd.computeShader = cs.get();
+            psd.descriptorSetLayouts.push_back(sdsl.get());
+            ssaoPSO = d3dDevice->createComputePSO(psd);
+            std::printf("[d3d12] SSAO PSO created\n");
+        }
+    }
+
     // 创建渲染目标 + push constant buffer
     rhi::TextureDesc hdrDesc; hdrDesc.format = rhi::Format::R16G16B16A16_SFLOAT;
     hdrDesc.width = 800; hdrDesc.height = 450;
@@ -1747,8 +1772,11 @@ void App::runD3D12() {
             cmdBuf->pushConstants(rhi::ShaderStage::Compute, pc, sizeof(pc));
             cmdBuf->dispatch((800 + 7) / 8, (450 + 7) / 8);
         }
-        // SSAO dispatch (验证第二个 compute PSO)
-        // Phase 5: 创建 SSAO PSO + 绑定
+        // SSAO compute dispatch（第二个 compute pass 同帧运行）
+        if (ssaoPSO) {
+            cmdBuf->bindPipelineState(*ssaoPSO);
+            cmdBuf->dispatch((800 + 7) / 8, (450 + 7) / 8);
+        }
 
         cmdBuf->end();
 
