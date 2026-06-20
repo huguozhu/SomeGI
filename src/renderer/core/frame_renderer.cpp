@@ -203,6 +203,14 @@ void FrameRenderer::init(Device& d, VkCommandPool pool, VkExtent2D extent,
     std::printf("[init] all renderer passes set up.\n");
 }
 
+void FrameRenderer::initD3D12(rhi::RHIDevice& rhiDev, VkExtent2D extent) {
+    // 创建 D3D12 渲染目标（20 纹理）
+    m_rt.createRHI(rhiDev, extent, VK_SAMPLE_COUNT_1_BIT);
+
+    // Phase 5: 逐步接入 Pass（当前需要 core::Device&，D3D12 暂跳过）
+    std::printf("[d3d12] FrameRenderer::initD3D12 — render targets created\n");
+}
+
 void FrameRenderer::destroy() {
     if (!m_device) return;
     m_imgui.destroy();
