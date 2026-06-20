@@ -97,12 +97,23 @@ void D3D12RHICommandBuffer::bindPipelineState(const RHIPipelineState& pso) {
         m_cmdList->SetComputeRootSignature(d3dPso.rootSignature());
     else
         m_cmdList->SetGraphicsRootSignature(d3dPso.rootSignature());
+    m_boundPSO = &d3dPso; // 记录用于 descriptor set 根参数映射
 }
 
 void D3D12RHICommandBuffer::bindDescriptorSet(uint32_t slot,
                                                const RHIDescriptorSet& set) {
     auto& d3dSet = static_cast<const D3D12RHIDescriptorSet&>(set);
-    m_cmdList->SetComputeRootDescriptorTable(slot, d3dSet.gpuHandle());
+    // 尝试从上次绑定的 PSO 获取根参数映射
+    if (m_boundPSO) {
+        uint32_t resParam = m_boundPSO->getResourceParamForSet(slot);
+        uint32_t smpParam = m_boundPSO->getSamplerParamForSet(slot);
+        if (resParam != ~0u)
+            m_cmdList->SetComputeRootDescriptorTable(resParam, d3dSet.gpuHandle());
+        // 采样器需要单独的表（暂时不做，待 sampler descriptor heap 管理完善）
+        (void)smpParam;
+    } else {
+        m_cmdList->SetComputeRootDescriptorTable(slot, d3dSet.gpuHandle());
+    }
 }
 
 void D3D12RHICommandBuffer::bindDescriptorSets(uint32_t firstSlot, uint32_t count,

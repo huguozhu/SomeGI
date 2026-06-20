@@ -29,6 +29,17 @@ public:
     ID3D12RootSignature* rootSignature() const { return m_rootSig; }
     bool isCompute() const { return m_isCompute; }
 
+    // 获取 Vulkan 描述符集 → D3D12 根参数索引映射
+    uint32_t getResourceParamForSet(uint32_t setIdx) const {
+        return setIdx < m_setParamMap.size() ? m_setParamMap[setIdx].first : ~0u;
+    }
+    uint32_t getSamplerParamForSet(uint32_t setIdx) const {
+        return setIdx < m_setParamMap.size() ? m_setParamMap[setIdx].second : ~0u;
+    }
+    void addSetParamMapping(uint32_t resIdx, uint32_t smpIdx) {
+        m_setParamMap.push_back({resIdx, smpIdx});
+    }
+
 private:
     void createRootSignature(const std::vector<RHIDescriptorSetLayout*>& setLayouts,
                              const std::vector<PushConstantRange>& pushConstants);
@@ -40,6 +51,8 @@ private:
     ID3D12RootSignature* m_rootSig = nullptr;
     bool m_isCompute = false;
     D3D12_PRIMITIVE_TOPOLOGY m_topology = D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
+    // {resourceParamIdx, samplerParamIdx} per descriptor set
+    std::vector<std::pair<uint32_t, uint32_t>> m_setParamMap;
 };
 
 // ════════════════════════════════════════════════════════════════
@@ -50,8 +63,16 @@ public:
     D3D12RHIDescriptorSetLayout(const DescSetLayoutDesc& desc);
     void* nativeHandle() const override { return nullptr; }
     const std::vector<DescriptorBinding>& bindings() const { return m_bindings; }
+    // 根参数索引（由 createRootSignature 填充）
+    bool hasSamplerTable() const { return m_samplerParamIdx != ~0u; }
+    uint32_t resourceParamIdx() const { return m_resourceParamIdx; }
+    uint32_t samplerParamIdx() const { return m_samplerParamIdx; }
+    void setResourceParam(uint32_t idx) { m_resourceParamIdx = idx; }
+    void setSamplerParam(uint32_t idx) { m_samplerParamIdx = idx; }
 private:
     std::vector<DescriptorBinding> m_bindings;
+    uint32_t m_resourceParamIdx = ~0u;
+    uint32_t m_samplerParamIdx = ~0u;
 };
 
 // ════════════════════════════════════════════════════════════════

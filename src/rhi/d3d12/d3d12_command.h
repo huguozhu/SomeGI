@@ -10,6 +10,7 @@ namespace somegi {
 namespace rhi {
 
 class D3D12RHIDevice;
+class D3D12RHIPipelineState;
 
 // ════════════════════════════════════════════════════════════════
 // D3D12RHICommandPool
@@ -112,6 +113,7 @@ private:
     D3D12RHICommandPool& m_pool;
     ID3D12GraphicsCommandList* m_cmdList = nullptr;
     bool m_recording = false;
+    const D3D12RHIPipelineState* m_boundPSO = nullptr; // 当前绑定的 PSO
 
     // 缓存的命令签名
     ID3D12CommandSignature* m_drawIndexedSig = nullptr;

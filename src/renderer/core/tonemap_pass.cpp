@@ -8,6 +8,8 @@
 #include "rhi/base/device.h"
 #include "rhi/base/descriptor.h"
 #include "rhi/base/pipeline_state.h"
+#include <fstream>
+#include <vector>
 #include "rhi/base/command_buffer.h"
 #include "rhi/vulkan/vk_device.h"
 #include "rhi/vulkan/vk_shader.h"
@@ -50,24 +52,38 @@ void TonemapPass::init(rhi::RHIDevice& d, VkSampler linearSampler) {
 
 void TonemapPass::init(rhi::RHIDevice& d, rhi::RHISampler& linearSampler) {
     m_rhiDevice = &d;
-    // D3D12 路径：直接使用已创建的 RHI sampler
     m_sampler.reset(static_cast<rhi::RHISampler*>(&linearSampler));
-    m_sampler.release(); // 不拥有所有权
+    m_sampler.release();
 
     rhi::DescSetLayoutDesc layoutDesc; layoutDesc.debugName = "Tonemap";
-    layoutDesc.bindings = {
-        {0, rhi::DescriptorType::SampledImage, 1, rhi::ShaderStage::Compute},
-        {1, rhi::DescriptorType::Sampler,       1, rhi::ShaderStage::Compute},
-        {2, rhi::DescriptorType::StorageImage,  1, rhi::ShaderStage::Compute},
+    // HLSL registers: CBV b0, SRV t0, Sampler s1, UAV u2
+    auto addB = [&](uint32_t vkBind, rhi::DescriptorType t, uint32_t hlslReg) {
+        rhi::DescriptorBinding b; b.binding = vkBind; b.type = t; b.hlslRegister = hlslReg;
+        layoutDesc.bindings.push_back(b);
     };
+    addB(0, rhi::DescriptorType::UniformBuffer, 0); // CBV b0 (push const)
+    addB(1, rhi::DescriptorType::SampledImage, 0);  // SRV t0
+    addB(2, rhi::DescriptorType::Sampler, 1);       // Sampler s1
+    addB(3, rhi::DescriptorType::StorageImage, 2);  // UAV u2
     m_setLayout = d.createDescriptorSetLayout(layoutDesc);
     for (auto& s : m_sets) s = d.createDescriptorSet(*m_setLayout);
 
-    // D3D12 shader 加载
-    rhi::ShaderDesc sd; sd.stage = rhi::ShaderStage::Compute; sd.entryPoint = "cs_main";
-    // Phase 5: 加载 DXIL shader（当前 PSO 创建需要 DXIL bytecode）
-    // auto shader = d.createShader(sd, ...);
-    // m_pipeline = d.createComputePSO(...);
+    // D3D12 DXIL shader 加载
+    rhi::ShaderDesc sd; sd.stage = rhi::ShaderStage::Compute;
+    sd.entryPoint = "cs_main"; sd.format = rhi::ShaderFormat::DXIL;
+    std::ifstream f("build/shaders_dxil/tonemap/tonemap.dxil", std::ios::binary);
+    if (f) {
+        std::vector<uint8_t> bytecode(std::istreambuf_iterator<char>(f), {});
+        auto shader = d.createShader(sd, bytecode.data(), bytecode.size());
+        if (shader) {
+            rhi::ComputePSODesc psoDesc; psoDesc.debugName = "Tonemap";
+            psoDesc.computeShader = shader.get();
+            psoDesc.descriptorSetLayouts = {m_setLayout.get()};
+            psoDesc.pushConstants = {{rhi::ShaderStage::Compute, 0, sizeof(TonemapPC)}};
+            m_pipeline = d.createComputePSO(psoDesc);
+            std::printf("[tonemap] D3D12 PSO created\n");
+        }
+    }
 }
 
 void TonemapPass::destroy() {

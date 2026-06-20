@@ -99,33 +99,53 @@ void D3D12RHIPipelineState::createRootSignature(
     std::vector<D3D12_ROOT_PARAMETER1> params;
     std::vector<std::vector<D3D12_DESCRIPTOR_RANGE1>> rangesPerSet(setLayouts.size());
 
-    // 每个 descriptor set → 一个 descriptor table
-    // D3D12 CBV/SRV/UAV 寄存器独立编号：按 Vulkan binding 的声明顺序，
-    // 同类型 descriptor 从 0 开始累加为 HLSL 寄存器号
+    // 每个 descriptor set → 两个 descriptor table（资源 + 采样器分离）
     for (size_t s = 0; s < setLayouts.size(); ++s) {
         auto* d3dLayout = static_cast<D3D12RHIDescriptorSetLayout*>(setLayouts[s]);
-        auto& ranges = rangesPerSet[s];
+        std::vector<D3D12_DESCRIPTOR_RANGE1> resRanges, smpRanges;
 
         for (auto& b : d3dLayout->bindings()) {
             D3D12_DESCRIPTOR_RANGE1 r{};
             r.RangeType = toD3D12RangeType(b.type);
             r.NumDescriptors = b.count;
-            // hlslRegister 覆盖 Vulkan binding 实现 D3D12 独立寄存器映射
             r.BaseShaderRegister = b.hlslRegister ? b.hlslRegister : b.binding;
             r.RegisterSpace = (UINT)s;
             r.Flags = D3D12_DESCRIPTOR_RANGE_FLAG_NONE;
             r.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
-            ranges.push_back(r);
+
+            // D3D12 要求采样器必须在独立的 descriptor table 中
+            if (r.RangeType == D3D12_DESCRIPTOR_RANGE_TYPE_SAMPLER)
+                smpRanges.push_back(r);
+            else
+                resRanges.push_back(r);
         }
 
-        if (!ranges.empty()) {
+        uint32_t resIdx = ~0u, smpIdx = ~0u;
+        // 资源 table (SRV/CBV/UAV)
+        if (!resRanges.empty()) {
+            rangesPerSet.push_back(resRanges);
             D3D12_ROOT_PARAMETER1 p{};
             p.ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
-            p.DescriptorTable.NumDescriptorRanges = (UINT)ranges.size();
-            p.DescriptorTable.pDescriptorRanges = ranges.data();
+            p.DescriptorTable.NumDescriptorRanges = (UINT)resRanges.size();
+            p.DescriptorTable.pDescriptorRanges = rangesPerSet.back().data();
             p.ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+            resIdx = (uint32_t)params.size();
+            d3dLayout->setResourceParam(resIdx);
             params.push_back(p);
         }
+        // 采样器 table
+        if (!smpRanges.empty()) {
+            rangesPerSet.push_back(smpRanges);
+            D3D12_ROOT_PARAMETER1 p{};
+            p.ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+            p.DescriptorTable.NumDescriptorRanges = (UINT)smpRanges.size();
+            p.DescriptorTable.pDescriptorRanges = rangesPerSet.back().data();
+            p.ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+            smpIdx = (uint32_t)params.size();
+            d3dLayout->setSamplerParam(smpIdx);
+            params.push_back(p);
+        }
+        m_setParamMap.push_back({resIdx, smpIdx});
     }
 
     // push constants → root constants
