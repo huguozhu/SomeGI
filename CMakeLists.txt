@@ -199,6 +199,34 @@ else()
     message(WARNING "glslangValidator not found, mesh shader compilation disabled")
 endif()
 
+# ---- D3D12 Shader 编译（SPIR-V → HLSL → DXIL） ----
+find_package(Python3 COMPONENTS Interpreter QUIET)
+if(NOT Python3_EXECUTABLE)
+    # 回退：直接在 PATH 中查找 python3 / python
+    find_program(Python3_EXECUTABLE NAMES python3 python)
+endif()
+find_program(SPIRV_CROSS_EXE spirv-cross HINTS ${VULKAN_SDK_BIN})
+find_program(DXC_EXE dxc HINTS ${VULKAN_SDK_BIN})
+if(SPIRV_CROSS_EXE AND DXC_EXE AND Python3_EXECUTABLE)
+    message(STATUS "spirv-cross       : ${SPIRV_CROSS_EXE}")
+    message(STATUS "dxc               : ${DXC_EXE}")
+    if(TARGET somegi_shaders)
+        add_custom_target(somegi_shaders_dxil ALL
+            COMMAND ${Python3_EXECUTABLE} "${CMAKE_SOURCE_DIR}/cmake/compile_dxil.py"
+                "${CMAKE_BINARY_DIR}/shaders"
+                "${CMAKE_BINARY_DIR}/shaders_dxil"
+                "${SPIRV_CROSS_EXE}" "${DXC_EXE}"
+            COMMENT "Compiling SPIR-V → DXIL"
+            DEPENDS somegi_shaders
+        )
+        if(TARGET SomeGI)
+            add_dependencies(SomeGI somegi_shaders_dxil)
+        endif()
+    endif()
+else()
+    message(STATUS "D3D12 shader tools not found — DXIL compilation disabled")
+endif()
+
 # ---- Project ----
 add_subdirectory(src/core)
 add_subdirectory(src/scene)
