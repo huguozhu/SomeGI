@@ -389,13 +389,66 @@ void D3D12RHICommandBuffer::textureBarrier(const RHITexture& tex,
     m_device.trackResourceState(d3dTex.resource(), after);
 }
 
+// ════════════════════════════════════════════════════════════════
+// BufferAccess → D3D12_RESOURCE_STATES 映射（用于 bufferBarrier）
+// ════════════════════════════════════════════════════════════════
+static D3D12_RESOURCE_STATES toD3D12BufferState(BufferAccess access) {
+    if (access == BufferAccess::None) return D3D12_RESOURCE_STATE_COMMON;
+
+    D3D12_RESOURCE_STATES state = D3D12_RESOURCE_STATE_COMMON;
+
+    if ((uint32_t)access & (uint32_t)BufferAccess::UniformRead)
+        state |= D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER
+               | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+    if ((uint32_t)access & (uint32_t)BufferAccess::StorageRead)
+        state |= D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+    if ((uint32_t)access & (uint32_t)BufferAccess::StorageWrite)
+        state |= D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+    if ((uint32_t)access & (uint32_t)BufferAccess::IndexRead)
+        state |= D3D12_RESOURCE_STATE_INDEX_BUFFER;
+    if ((uint32_t)access & (uint32_t)BufferAccess::VertexRead)
+        state |= D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER;
+    if ((uint32_t)access & (uint32_t)BufferAccess::IndirectRead)
+        state |= D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT;
+    if ((uint32_t)access & (uint32_t)BufferAccess::TransferRead)
+        state |= D3D12_RESOURCE_STATE_COPY_SOURCE;
+    if ((uint32_t)access & (uint32_t)BufferAccess::TransferWrite)
+        state |= D3D12_RESOURCE_STATE_COPY_DEST;
+
+    return state;
+}
+
 void D3D12RHICommandBuffer::bufferBarrier(const RHIBuffer& buf,
-                                           PipelineStage, PipelineStage,
-                                           BufferAccess, BufferAccess) {
+                                           PipelineStage /*srcStage*/,
+                                           PipelineStage /*dstStage*/,
+                                           BufferAccess srcAccess,
+                                           BufferAccess dstAccess) {
     auto& d3dBuf = static_cast<const D3D12RHIBuffer&>(buf);
+
+    D3D12_RESOURCE_STATES before = m_device.getResourceState(d3dBuf.resource());
+    D3D12_RESOURCE_STATES after  = toD3D12BufferState(dstAccess);
+
+    if (before == after) {
+        // UAV → UAV 特殊处理：TRANSITION barrier 不允许 before == after，
+        // fallback 为 UAV barrier 确保 UAV 写入对其他 pass 可见
+        if (before == D3D12_RESOURCE_STATE_UNORDERED_ACCESS) {
+            D3D12_RESOURCE_BARRIER rb{};
+            rb.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+            rb.UAV.pResource = d3dBuf.resource();
+            m_cmdList->ResourceBarrier(1, &rb);
+        }
+        // 其他相同状态：跳过（无需 barrier）
+        return;
+    }
+
+    m_device.trackResourceState(d3dBuf.resource(), after);
+
     D3D12_RESOURCE_BARRIER rb{};
-    rb.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
-    rb.UAV.pResource = d3dBuf.resource();
+    rb.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+    rb.Transition.pResource   = d3dBuf.resource();
+    rb.Transition.StateBefore = before;
+    rb.Transition.StateAfter  = after;
+    rb.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
     m_cmdList->ResourceBarrier(1, &rb);
 }
 void D3D12RHICommandBuffer::globalBarrier() {
