@@ -302,9 +302,11 @@ void D3D12RHICommandBuffer::textureBarrier(const RHITexture& tex,
                                             TextureLayout oldLayout,
                                             TextureLayout newLayout) {
     auto& d3dTex = static_cast<const D3D12RHITexture&>(tex);
-    // 简化映射（Phase 4 完整实现 ResourceStateTracker）
-    D3D12_RESOURCE_STATES before = D3D12_RESOURCE_STATE_COMMON;
-    D3D12_RESOURCE_STATES after  = D3D12_RESOURCE_STATE_COMMON;
+
+    // 从状态追踪器获取当前状态（而非始终 COMMON）
+    D3D12_RESOURCE_STATES before = m_device.getResourceState(d3dTex.resource());
+    D3D12_RESOURCE_STATES after  = before;
+
     switch (newLayout) {
         case TextureLayout::ColorAttachment: after = D3D12_RESOURCE_STATE_RENDER_TARGET; break;
         case TextureLayout::DepthAttachment: after = D3D12_RESOURCE_STATE_DEPTH_WRITE; break;
@@ -312,8 +314,13 @@ void D3D12RHICommandBuffer::textureBarrier(const RHITexture& tex,
         case TextureLayout::TransferDst:     after = D3D12_RESOURCE_STATE_COPY_DEST; break;
         case TextureLayout::TransferSrc:     after = D3D12_RESOURCE_STATE_COPY_SOURCE; break;
         case TextureLayout::Present:         after = D3D12_RESOURCE_STATE_PRESENT; break;
+        case TextureLayout::General:         after = D3D12_RESOURCE_STATE_UNORDERED_ACCESS; break;
         default: break;
     }
+
+    // 状态未变化则跳过
+    if (before == after) return;
+
     D3D12_RESOURCE_BARRIER rb{};
     rb.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
     rb.Transition.pResource = d3dTex.resource();
@@ -321,6 +328,9 @@ void D3D12RHICommandBuffer::textureBarrier(const RHITexture& tex,
     rb.Transition.StateAfter = after;
     rb.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
     m_cmdList->ResourceBarrier(1, &rb);
+
+    // 更新追踪状态
+    m_device.trackResourceState(d3dTex.resource(), after);
 }
 
 void D3D12RHICommandBuffer::bufferBarrier(const RHIBuffer&,

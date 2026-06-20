@@ -61,13 +61,14 @@ D3D12RHIBuffer::D3D12RHIBuffer(D3D12RHIDevice& device, const BufferDesc& desc)
     }
 
     if (desc.debugName) {
-        // 窄字符转宽字符用于调试名
         wchar_t wname[128];
         MultiByteToWideChar(CP_UTF8, 0, desc.debugName, -1, wname, 128);
         m_resource->SetName(wname);
     }
 
     m_gpuAddr = m_resource->GetGPUVirtualAddress();
+    // 注册初始资源状态
+    device.trackResourceState(m_resource, initialState);
 
     if (desc.memory == MemoryType::HostVisible || desc.memory == MemoryType::HostCached) {
         // UPLOAD/READBACK heap：持久映射
@@ -80,7 +81,10 @@ D3D12RHIBuffer::~D3D12RHIBuffer() {
     if (m_mapped) {
         m_resource->Unmap(0, nullptr);
     }
-    if (m_resource) m_resource->Release();
+    if (m_resource) {
+        m_device.removeResourceState(m_resource);
+        m_resource->Release();
+    }
 }
 
 void* D3D12RHIBuffer::map() {

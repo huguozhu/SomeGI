@@ -139,6 +139,19 @@ void D3D12RHIDevice::resetDescriptorHeap() {
     m_gpuDescOffset = 0;
 }
 
+void D3D12RHIDevice::trackResourceState(ID3D12Resource* res, D3D12_RESOURCE_STATES state) {
+    m_resourceStates[res] = state;
+}
+
+D3D12_RESOURCE_STATES D3D12RHIDevice::getResourceState(ID3D12Resource* res) const {
+    auto it = m_resourceStates.find(res);
+    return (it != m_resourceStates.end()) ? it->second : D3D12_RESOURCE_STATE_COMMON;
+}
+
+void D3D12RHIDevice::removeResourceState(ID3D12Resource* res) {
+    m_resourceStates.erase(res);
+}
+
 D3D12RHIDevice::~D3D12RHIDevice() {
     waitIdle();
     if (m_gpuDescHeap) { m_gpuDescHeap->Release(); }

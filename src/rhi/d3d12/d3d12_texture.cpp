@@ -71,10 +71,15 @@ D3D12RHITexture::D3D12RHITexture(D3D12RHIDevice& device, const TextureDesc& desc
         MultiByteToWideChar(CP_UTF8, 0, desc.debugName, -1, wname, 128);
         m_resource->SetName(wname);
     }
+    // 注册初始资源状态
+    device.trackResourceState(m_resource, D3D12_RESOURCE_STATE_COMMON);
 }
 
 D3D12RHITexture::~D3D12RHITexture() {
-    if (m_resource) m_resource->Release();
+    if (m_resource) {
+        m_device.removeResourceState(m_resource);
+        m_resource->Release();
+    }
 }
 
 std::unique_ptr<RHITextureView> D3D12RHITexture::createView(const TextureViewDesc& desc) {

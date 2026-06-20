@@ -4,6 +4,7 @@
 #include <d3d12.h>
 #include <dxgi1_6.h>
 #include <memory>
+#include <unordered_map>
 
 struct HWND__;
 typedef HWND__* HWND;
@@ -79,8 +80,16 @@ public:
     DescAlloc allocDescriptors(uint32_t count);
     void resetDescriptorHeap();
 
+    // 资源状态追踪（用于正确的 barrier StateBefore）
+    void trackResourceState(ID3D12Resource* res, D3D12_RESOURCE_STATES state);
+    D3D12_RESOURCE_STATES getResourceState(ID3D12Resource* res) const;
+    void removeResourceState(ID3D12Resource* res);
+
 private:
     void createDescriptorHeap();
+
+    // 资源状态追踪表
+    std::unordered_map<ID3D12Resource*, D3D12_RESOURCE_STATES> m_resourceStates;
 
     ID3D12DescriptorHeap* m_gpuDescHeap = nullptr;
     uint32_t m_gpuDescIncrement = 0;
