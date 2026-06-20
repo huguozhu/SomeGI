@@ -1,4 +1,5 @@
 #include "app.h"
+#include "tests/regression_test.h"
 #include "scene/draw_list.h"
 #include "core/window.h"
 #include "core/device.h"
@@ -1529,12 +1530,40 @@ void App::run() {
                           m_screenshot.frameCount);
             m_screenshot.savePng(filename, m_renderer.rt().extent);
 
+            // ---- 回归测试：复制参考图或对比 ----
+            std::string baseName = std::string(m_screenshot.outputPrefix) + "_" +
+                                   std::to_string(m_screenshot.frameCount);
+            if (m_captureRef || m_captureCompare) {
+                // 复制截图到 tests/ref/（参考模式）或留 screenshots/ 后对比
+                if (m_captureRef) {
+                    std::error_code ec;
+                    std::filesystem::create_directories("tests/ref", ec);
+                    std::string srcPath = m_screenshot.outputDir + "/" + filename;
+                    std::string dstPath = "tests/ref/" + baseName + ".png";
+                    std::filesystem::copy_file(srcPath, dstPath,
+                        std::filesystem::copy_options::overwrite_existing, ec);
+                    if (!ec)
+                        std::printf("[regress] ref saved: %s\n", dstPath.c_str());
+                    else
+                        std::fprintf(stderr, "[regress] ref copy failed: %s\n", ec.message().c_str());
+                }
+                if (m_captureCompare) {
+                    RegressionTest regress;
+                    regress.setThreshold(m_refThreshold);
+                    RegressResult r = regress.compare(baseName, baseName);
+                    if (!r.passed) {
+                        std::printf("[regress] FAILED — exiting\n");
+                        glfwSetWindowShouldClose(m_window->handle(), GLFW_TRUE);
+                    }
+                }
+            }
+
             // 清除触发标记
             m_screenshot.manualRequest = false;
             if (m_screenshot.captureOneFrame >= 0 &&
                 m_screenshot.frameCount >= m_screenshot.captureOneFrame) {
                 m_screenshot.captureOneFrame = -1;  // 一次性截图完成
-                if (m_exitAfterCapture) {
+                if (m_exitAfterCapture || m_captureCompare) {
                     glfwSetWindowShouldClose(m_window->handle(), GLFW_TRUE);
                 }
             }

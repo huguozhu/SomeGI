@@ -4,7 +4,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <exception>f
+#include <exception>
 #include <filesystem>
 
 namespace {
@@ -16,6 +16,10 @@ struct CliConfig {
     const char* captureDir = "screenshots";
     int shadowMethod = -1;     // --shadow-method N（-1 表示使用默认值）
     bool exitAfterCapture = false;  // --exit-after-capture
+    // 回归测试
+    bool captureRef = false;          // --capture-ref：生成参考图
+    bool captureCompare = false;      // --capture-compare：截帧对比
+    double refThreshold = 40.0;       // --ref-threshold N
 };
 
 CliConfig parseCli(int argc, char** argv) {
@@ -33,6 +37,12 @@ CliConfig parseCli(int argc, char** argv) {
             cfg.shadowMethod = std::atoi(argv[++i]);
         } else if (std::strcmp(argv[i], "--exit-after-capture") == 0) {
             cfg.exitAfterCapture = true;
+        } else if (std::strcmp(argv[i], "--capture-ref") == 0) {
+            cfg.captureRef = true;
+        } else if (std::strcmp(argv[i], "--capture-compare") == 0) {
+            cfg.captureCompare = true;
+        } else if (std::strcmp(argv[i], "--ref-threshold") == 0 && i + 1 < argc) {
+            cfg.refThreshold = std::atof(argv[++i]);
         } else {
             // 兜底：旧的 gltf 路径参数（已废弃），忽略
         }
@@ -79,6 +89,10 @@ int main(int argc, char** argv) {
             app.setInitialShadowMethod(g_cliConfig.shadowMethod);
         if (g_cliConfig.exitAfterCapture)
             app.setExitAfterCapture(true);
+        if (g_cliConfig.captureRef)
+            app.setCaptureRefMode(true);
+        if (g_cliConfig.captureCompare)
+            app.setCaptureCompareMode(true, g_cliConfig.refThreshold);
         app.run();
     } catch (const std::exception& e) {
         std::fprintf(stderr, "Fatal: %s\n", e.what());

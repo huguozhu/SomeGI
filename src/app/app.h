@@ -42,6 +42,9 @@ public:
     void setScreenshotConfig(int interval, int oneFrame, const char* dir);
     void setInitialShadowMethod(int method);   // --shadow-method CLI
     void setExitAfterCapture(bool v) { m_exitAfterCapture = v; }
+    // 回归测试（--capture-ref / --capture-compare）
+    void setCaptureRefMode(bool v)      { m_captureRef = v; }
+    void setCaptureCompareMode(bool v, double thresh) { m_captureCompare = v; m_refThreshold = thresh; }
 
 private:
     void onSwapchainResized();
@@ -192,6 +195,11 @@ private:
     // ---- Screenshot ----
     ScreenshotCapture m_screenshot;
     bool m_exitAfterCapture = false;  // --exit-after-capture CLI
+
+    // ---- Regression test ----
+    bool   m_captureRef     = false;  // --capture-ref：生成参考图到 tests/ref/
+    bool   m_captureCompare = false;  // --capture-compare：截帧 + 对比回归测试
+    double m_refThreshold   = 40.0;   // PSNR 阈值（dB）
 
     // ---- Stats ----
     float m_fpsAvg = 0.0f;

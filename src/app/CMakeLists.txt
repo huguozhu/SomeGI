@@ -8,6 +8,8 @@ add_executable(SomeGI
     app_fg.cpp
     benchmark_runner.h
     benchmark_runner.cpp
+    ../tests/regression_test.h
+    ../tests/regression_test.cpp
 )
 target_link_libraries(SomeGI PRIVATE somegi_core somegi_scene somegi_gi somegi_renderer)
 target_compile_definitions(SomeGI PRIVATE
