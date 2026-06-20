@@ -6,14 +6,18 @@
 #include <unordered_map>
 
 namespace somegi {
+namespace rhi { class RHICommandBuffer; }
 
 // 单个渲染步骤的完整描述
+// 迁移期间同时支持 VkCommandBuffer 和 RHICommandBuffer 两种录制回调。
+// 设置 recordRHI 后，executeRHI() 优先调用 RHI 路径；否则回退到 record(VkCommandBuffer)。
 struct RenderStep {
     std::string name;                                    // e.g. "GBuffer", "SSAO", "Lighting"
     std::string phase;                                   // 阶段分组: "PrePass", "AO", "GI", "Shading", "PostProcess", "Overlay"
     bool enabled = true;                                 // 运行时开关，build() 时过滤
     uint32_t timestampSlot = UINT32_MAX;                 // GPU timestamp 槽位 (可选)
-    std::function<void(VkCommandBuffer)> record;         // 录制函数
+    std::function<void(VkCommandBuffer)> record;         // 录制函数（Vk 兼容路径）
+    std::function<void(rhi::RHICommandBuffer&)> recordRHI; // 录制函数（RHI 路径，迁移完成后删除 record）
 
     // 调试/可视化用
     float lastMs = 0.0f;                                 // 上一帧 GPU 耗时
@@ -33,8 +37,11 @@ public:
     // 根据 enabled 状态构建执行表 (只含启用的步骤)
     void build();
 
-    // 遍历执行表，依次调用每个步骤的 record
+    // 遍历执行表，依次调用每个步骤的 record（Vk 兼容路径）
     void execute(VkCommandBuffer cmd);
+
+    // RHI 路径：优先调用 recordRHI，未设置则回退到 record（通过 VkRHICommandBuffer 桥接）
+    void executeRHI(rhi::RHICommandBuffer& cmd);
 
     // 运行时动态开关某个步骤 (按 name 查找)
     void setEnabled(const std::string& name, bool enabled);

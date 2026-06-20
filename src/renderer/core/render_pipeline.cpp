@@ -1,4 +1,5 @@
 #include "renderer/core/render_pipeline.h"
+#include "rhi/vulkan/vk_command.h"
 #include <algorithm>
 
 namespace somegi {
@@ -22,6 +23,19 @@ void RenderPipeline::execute(VkCommandBuffer cmd) {
     for (auto* step : m_execTable) {
         if (step->record) {
             step->record(cmd);
+        }
+    }
+}
+
+void RenderPipeline::executeRHI(rhi::RHICommandBuffer& cmd) {
+    for (auto* step : m_execTable) {
+        if (step->recordRHI) {
+            // 优先 RHI 路径
+            step->recordRHI(cmd);
+        } else if (step->record) {
+            // 未迁移的步骤：通过 VkRHICommandBuffer 桥接
+            auto vkCmd = static_cast<rhi::VkRHICommandBuffer&>(cmd).vkCmd();
+            step->record(vkCmd);
         }
     }
 }
