@@ -119,6 +119,5 @@ int main() {
     }
 
     rhiDevice.waitIdle();
-    std::printf("[triangle] done (%u frames)\n", frameIdx);
     return 0;
 }
