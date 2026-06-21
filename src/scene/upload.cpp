@@ -1,5 +1,7 @@
 #include "upload.h"
 #include "core/device.h"
+#include "rhi/vulkan/vk_device.h"
+#include "rhi/vulkan/vk_command.h"
 
 namespace somegi {
 
@@ -25,6 +27,15 @@ void oneShotSubmit(Device& d, VkCommandPool pool, std::function<void(VkCommandBu
     VK_CHECK(vkQueueSubmit2(d.graphicsQueue(), 1, &si, VK_NULL_HANDLE));
     vkQueueWaitIdle(d.graphicsQueue());
     vkFreeCommandBuffers(d.device(), pool, 1, &cmd);
+}
+
+void oneShotSubmitRHI(rhi::RHIDevice& rhiDevice, Device& d, VkCommandPool pool,
+                      std::function<void(rhi::RHICommandBuffer&)> body) {
+    auto& vkDev = static_cast<rhi::VkRHIDevice&>(rhiDevice);
+    oneShotSubmit(d, pool, [&](VkCommandBuffer cmd) {
+        rhi::VkRHICommandBuffer rhiCmd(vkDev, cmd);
+        body(rhiCmd);
+    });
 }
 
 }

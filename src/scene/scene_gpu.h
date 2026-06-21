@@ -5,6 +5,9 @@
 namespace somegi {
 class Device;
 
+// 前向声明 RHI 类型（somegi::rhi 命名空间）
+namespace rhi { class RHIDevice; }
+
 struct MaterialGpu {
     glm::vec4 baseColorFactor;
     glm::vec3 emissiveFactor;
@@ -19,7 +22,8 @@ struct MaterialGpu {
     uint32_t _pad0;
 };
 
-void uploadScene(Device& d, VkCommandPool pool, const SceneCpu& cpu, SceneGpu& out, bool useMipmaps = true);
+void uploadScene(Device& d, VkCommandPool pool, const SceneCpu& cpu, SceneGpu& out, bool useMipmaps = true,
+                 rhi::RHIDevice* rhiDevice = nullptr);
 void destroySceneSamplers(Device& d, SceneGpu& gpu);
 
 }

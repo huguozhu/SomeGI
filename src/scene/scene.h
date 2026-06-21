@@ -3,8 +3,12 @@
 #include "core/image.h"
 #include <glm/glm.hpp>
 #include <vector>
+#include <memory>
 
 namespace somegi {
+
+// 前向声明 RHI 类型（somegi::rhi 命名空间）
+namespace rhi { class RHIBuffer; class RHIDevice; }
 
 struct Vertex {
     glm::vec3 position;
@@ -74,6 +78,17 @@ struct SceneGpu {
     VkSampler linearSampler = VK_NULL_HANDLE;
     Buffer drawDataBuffer;
     uint32_t drawCount = 0;
+
+    // RHI 缓冲包装（由 populateRHIWrappers 填充）
+    void populateRHIWrappers(rhi::RHIDevice& rhiDevice);
+    rhi::RHIBuffer* rhiVertexBuffer()  const { return m_rhiVertexBuffer.get(); }
+    rhi::RHIBuffer* rhiIndexBuffer()   const { return m_rhiIndexBuffer.get(); }
+    rhi::RHIBuffer* rhiMaterialBuffer() const { return m_rhiMaterialBuffer.get(); }
+
+private:
+    std::unique_ptr<rhi::RHIBuffer> m_rhiVertexBuffer;
+    std::unique_ptr<rhi::RHIBuffer> m_rhiIndexBuffer;
+    std::unique_ptr<rhi::RHIBuffer> m_rhiMaterialBuffer;
 };
 
 }

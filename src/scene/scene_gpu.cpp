@@ -2,6 +2,8 @@
 #include "core/device.h"
 #include "core/buffer.h"
 #include "upload.h"
+#include "rhi/vulkan/vk_device.h"
+#include "rhi/vulkan/vk_buffer.h"
 #include <cstring>
 
 namespace somegi {
@@ -151,7 +153,8 @@ static Image makeSolid1x1(Device& d, VkCommandPool pool, uint8_t r, uint8_t g, u
     return img;
 }
 
-void uploadScene(Device& d, VkCommandPool pool, const SceneCpu& cpu, SceneGpu& out, bool useMipmaps) {
+void uploadScene(Device& d, VkCommandPool pool, const SceneCpu& cpu, SceneGpu& out, bool useMipmaps,
+                 rhi::RHIDevice* rhiDevice) {
     VkBufferUsageFlags asInput = 0;
     if (d.features().accelStruct)
         asInput = VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR;
@@ -212,11 +215,23 @@ void uploadScene(Device& d, VkCommandPool pool, const SceneCpu& cpu, SceneGpu& o
     s.maxLod = VK_LOD_CLAMP_NONE;
     s.anisotropyEnable = VK_FALSE;
     VK_CHECK(vkCreateSampler(d.device(), &s, nullptr, &out.linearSampler));
+
+    // 如果提供了 RHI 设备，填充 RHI 缓冲包装
+    if (rhiDevice) {
+        out.populateRHIWrappers(*rhiDevice);
+    }
 }
 
 void destroySceneSamplers(Device& d, SceneGpu& gpu) {
     if (gpu.linearSampler) vkDestroySampler(d.device(), gpu.linearSampler, nullptr);
     gpu.linearSampler = VK_NULL_HANDLE;
+}
+
+void SceneGpu::populateRHIWrappers(rhi::RHIDevice& rhiDevice) {
+    auto& vkDev = static_cast<rhi::VkRHIDevice&>(rhiDevice);
+    m_rhiVertexBuffer = rhi::VkRHIBuffer::createNonOwning(vkDev, vertexBuffer.handle(), vertexBuffer.size());
+    m_rhiIndexBuffer  = rhi::VkRHIBuffer::createNonOwning(vkDev, indexBuffer.handle(), indexBuffer.size());
+    m_rhiMaterialBuffer = rhi::VkRHIBuffer::createNonOwning(vkDev, materialBuffer.handle(), materialBuffer.size());
 }
 
 }
