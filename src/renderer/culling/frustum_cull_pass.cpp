@@ -6,7 +6,6 @@
 //   4-7: hizMip1-4 (sampled image, 可选)
 
 #include "renderer/culling/frustum_cull_pass.h"
-#include "core/device.h"
 #include "rhi/base/device.h"
 #include "rhi/base/descriptor.h"
 #include "rhi/base/pipeline_state.h"
@@ -15,7 +14,6 @@
 #include "rhi/vulkan/vk_shader.h"
 #include "rhi/vulkan/vk_texture.h"
 #include "rhi/vulkan/vk_buffer.h"
-#include "rhi/vulkan/vk_command.h"
 #include "core/shader.h"
 #include <array>
 #include <cstring>
@@ -39,9 +37,8 @@ void extractFrustumPlanes(const glm::mat4& vp, glm::vec4 f[6]) {
 
 FrustumCullPass::~FrustumCullPass() = default;
 
-void FrustumCullPass::init(Device& d, rhi::RHIDevice& rhiDevice, uint32_t maxDraws) {
-    m_device = &d;
-    m_rhiDevice = &rhiDevice;
+void FrustumCullPass::init(rhi::RHIDevice& d, uint32_t maxDraws) {
+    m_rhiDevice = &d;
     m_maxDraws = maxDraws;
 
     // ── Descriptor Set Layout（8 bindings） ──
@@ -59,14 +56,14 @@ void FrustumCullPass::init(Device& d, rhi::RHIDevice& rhiDevice, uint32_t maxDra
         {6, DS::SampledImage,  1, SS::Compute},
         {7, DS::SampledImage,  1, SS::Compute},
     };
-    m_dsl = rhiDevice.createDescriptorSetLayout(layoutDesc);
+    m_dsl = d.createDescriptorSetLayout(layoutDesc);
 
     // ── kFramesInFlight 描述符集 ──
     for (auto& s : m_sets)
-        s = rhiDevice.createDescriptorSet(*m_dsl);
+        s = d.createDescriptorSet(*m_dsl);
 
     // ── Compute PSO ──
-    auto& vkDevice = static_cast<rhi::VkRHIDevice&>(rhiDevice);
+    auto& vkDevice = static_cast<rhi::VkRHIDevice&>(d);
     rhi::ShaderDesc shaderDesc;
     shaderDesc.stage = rhi::ShaderStage::Compute;
     shaderDesc.entryPoint = "cs_main";
@@ -77,12 +74,14 @@ void FrustumCullPass::init(Device& d, rhi::RHIDevice& rhiDevice, uint32_t maxDra
     psoDesc.debugName = "FrustumCull";
     psoDesc.computeShader = shader.get();
     psoDesc.descriptorSetLayouts = {m_dsl.get()};
-    m_pipeline = rhiDevice.createComputePSO(psoDesc);
+    m_pipeline = d.createComputePSO(psoDesc);
 
-    // ── Uniform buffer（仍使用 core::Buffer） ──
-    m_ubo = Buffer(d, sizeof(CullUbo),
-        VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
-        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    // ── Uniform buffer（纯 RHI，HostVisible） ──
+    rhi::BufferDesc uboDesc;
+    uboDesc.size = sizeof(CullUbo);
+    uboDesc.usage = rhi::BufferUsage::Uniform;
+    uboDesc.memory = rhi::MemoryType::HostVisible;
+    m_ubo = d.createBuffer(uboDesc);
 }
 
 void FrustumCullPass::destroy() {
@@ -90,7 +89,6 @@ void FrustumCullPass::destroy() {
     m_pipeline.reset();
     m_dsl.reset();
     m_ubo.reset();
-    m_device = nullptr;
     m_rhiDevice = nullptr;
 }
 
@@ -143,23 +141,16 @@ void FrustumCullPass::record(rhi::RHICommandBuffer& cmd,
     if (drawCount == 0 || !m_pipeline) return;
 
     auto& vkDevice = static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
-    VkCommandBuffer vkCmd = (VkCommandBuffer)(uintptr_t)cmd.nativeHandle();
-    // 从 RHI 抽象提取 Vulkan 原生句柄
+    // 从 RHI 抽象提取 Vulkan 原生句柄（仅用于描述符写入）
     auto vkCountOut = static_cast<VkBuffer>(countOut.nativeHandle());
     auto vkDrawBuf = static_cast<VkBuffer>(drawBuf.nativeHandle());
     auto vkIndirectOut = static_cast<VkBuffer>(indirectOut.nativeHandle());
 
-    // ── 清零 count buffer（暂时通过原生 Vk API） ──
-    vkCmdFillBuffer(vkCmd, vkCountOut, 0, sizeof(uint32_t), 0);
-    VkBufferMemoryBarrier2 fb{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2};
-    fb.srcStageMask = VK_PIPELINE_STAGE_2_CLEAR_BIT;
-    fb.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
-    fb.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-    fb.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-    fb.buffer = vkCountOut; fb.size = VK_WHOLE_SIZE;
-    VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-    di.bufferMemoryBarrierCount = 1; di.pBufferMemoryBarriers = &fb;
-    vkCmdPipelineBarrier2(vkCmd, &di);
+    // ── 清零 count buffer（纯 RHI fillBuffer + barrier） ──
+    cmd.fillBuffer(countOut, 0, sizeof(uint32_t), 0);
+    cmd.bufferBarrier(countOut,
+        rhi::PipelineStage::Transfer, rhi::PipelineStage::ComputeShader,
+        rhi::BufferAccess::TransferWrite, rhi::BufferAccess::StorageWrite);
 
     // ── 更新 UBO ──
     CullUbo u{};
@@ -168,43 +159,21 @@ void FrustumCullPass::record(rhi::RHICommandBuffer& cmd,
     u.screenSize = glm::vec2(ss.width, ss.height);
     u.drawCount = drawCount;
     u.hizMaxMip = (hizMip1 != VK_NULL_HANDLE) ? 4u : 0u;
-    std::memcpy(m_ubo.mapped(), &u, sizeof(u));
+    {
+        void* ptr = m_ubo->map();
+        std::memcpy(ptr, &u, sizeof(u));
+        m_ubo->unmap();
+    }
 
     // ── 写描述符集 ──
     VkImageView hiz[4] = {hizMip1, hizMip2, hizMip3, hizMip4};
     writeFrustumDescriptors(vkDevice, *m_sets[fi % 2],
-                            vkDrawBuf, m_ubo.handle(), vkIndirectOut, vkCountOut, hiz);
+                            vkDrawBuf, static_cast<VkBuffer>(m_ubo->nativeHandle()), vkIndirectOut, vkCountOut, hiz);
 
     // ── Dispatch ──
     cmd.bindPipelineState(*m_pipeline);
     cmd.bindDescriptorSet(0, *m_sets[fi % 2]);
     cmd.dispatch((drawCount + 255) / 256, 1, 1);
-}
-
-// ── 兼容 VkCommandBuffer 重载 ──
-void FrustumCullPass::record(VkCommandBuffer vkCmd, VkBuffer drawBuf, uint32_t drawCount,
-                              VkBuffer indirectOut, VkBuffer countOut,
-                              const glm::mat4& vp, VkExtent2D screenSize, uint32_t fi) {
-    auto& vkDev = static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
-    rhi::VkRHICommandBuffer rhiCmd(vkDev, vkCmd);
-    auto rhiDrawBuf = rhi::VkRHIBuffer::createNonOwning(vkDev, drawBuf, VK_WHOLE_SIZE);
-    auto rhiIndirectOut = rhi::VkRHIBuffer::createNonOwning(vkDev, indirectOut, VK_WHOLE_SIZE);
-    auto rhiCountOut = rhi::VkRHIBuffer::createNonOwning(vkDev, countOut, VK_WHOLE_SIZE);
-    record(rhiCmd, *rhiDrawBuf, drawCount, *rhiIndirectOut, *rhiCountOut, vp, screenSize, fi);
-}
-
-void FrustumCullPass::record(VkCommandBuffer vkCmd, VkBuffer drawBuf, uint32_t drawCount,
-                              VkBuffer indirectOut, VkBuffer countOut,
-                              const glm::mat4& vp, VkExtent2D screenSize, uint32_t fi,
-                              VkImageView hizMip1, VkImageView hizMip2,
-                              VkImageView hizMip3, VkImageView hizMip4) {
-    auto& vkDev = static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
-    rhi::VkRHICommandBuffer rhiCmd(vkDev, vkCmd);
-    auto rhiDrawBuf = rhi::VkRHIBuffer::createNonOwning(vkDev, drawBuf, VK_WHOLE_SIZE);
-    auto rhiIndirectOut = rhi::VkRHIBuffer::createNonOwning(vkDev, indirectOut, VK_WHOLE_SIZE);
-    auto rhiCountOut = rhi::VkRHIBuffer::createNonOwning(vkDev, countOut, VK_WHOLE_SIZE);
-    record(rhiCmd, *rhiDrawBuf, drawCount, *rhiIndirectOut, *rhiCountOut, vp, screenSize, fi,
-           hizMip1, hizMip2, hizMip3, hizMip4);
 }
 
 } // namespace somegi
