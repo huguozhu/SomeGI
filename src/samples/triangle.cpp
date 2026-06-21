@@ -4,6 +4,7 @@
 #include "rhi/vulkan/vk_shader.h"
 #include "rhi/vulkan/vk_command.h"
 #include "rhi/vulkan/vk_pso.h"
+#include "rhi/vulkan/vk_descriptor.h"
 #include "rhi/vulkan/vk_texture.h"
 #include "rhi/vulkan/vk_fence.h"
 #include "core/window.h"
@@ -39,11 +40,16 @@ int main() {
     sd.stage = rhi::ShaderStage::Fragment;
     auto fs = rhiDevice.createShader(sd, fragSpv.data(), fragSpv.size() * 4);
 
+    rhi::DescSetLayoutDesc ld; ld.debugName = "Triangle";
+    auto setLayout = rhiDevice.createDescriptorSetLayout(ld); // 需要至少一个 layout（即使为空），避免 pSetLayouts=nullptr
+    auto emptySet = rhiDevice.createDescriptorSet(*setLayout);
+
     rhi::GraphicsPSODesc pd; pd.debugName = "Triangle";
     pd.vertexShader = vs.get(); pd.fragmentShader = fs.get();
     pd.topology = rhi::PrimitiveTopology::TriangleList;
     pd.rasterization = {rhi::FillMode::Solid, rhi::CullMode::None, false};
     pd.renderTargets.colorFormats = {pSwapchain->format()};
+    pd.descriptorSetLayouts = {setLayout.get()};
     auto pso = rhiDevice.createGraphicsPSO(pd);
 
     auto cmdPool = rhiDevice.createCommandPool();
@@ -77,6 +83,7 @@ int main() {
         color.clearColor[0] = 0.1f; color.clearColor[2] = 0.3f;
         cmd.beginRendering(&color, 1, nullptr, frame.width, frame.height);
         cmd.bindPipelineState(*pso);
+        cmd.bindDescriptorSet(0, *emptySet);
         cmd.setViewport(0, 0, (float)frame.width, (float)frame.height);
         cmd.setScissor(0, 0, frame.width, frame.height);
         cmd.draw(3, 0, 0);
