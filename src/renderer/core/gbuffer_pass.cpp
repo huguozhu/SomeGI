@@ -1,4 +1,5 @@
 #include "core/path_util.h"
+#include "core/shader.h"
 // GBufferPass RHI — VS 路径 MRT Graphics PSO。Mesh Shader 保留 Vk。
 #include "renderer/core/gbuffer_pass.h"
 #include "core/device.h"
