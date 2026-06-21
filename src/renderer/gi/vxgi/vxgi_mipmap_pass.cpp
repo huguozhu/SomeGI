@@ -42,6 +42,11 @@ void VxgiMipmapPass::bindResources(const VxgiResources& vxgi) {
             {1,rhi::DescriptorType::StorageImage,vxgi.mipView(lv)},
         });
     }
+    // 保存 non‑owning 纹理包装，供 record() 中插入 per‑mip barrier
+    auto& vkD = static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
+    m_voxelTex = rhi::VkRHITexture::createNonOwning(vkD, vxgi.image().image(),
+        rhi::toRhiFormat(vxgi.image().format()), vxgi.resolution(), vxgi.resolution(),
+        m_mipLevels);
 }
 
 void VxgiMipmapPass::record(rhi::RHICommandBuffer& cmd, const VxgiResources& vxgi) {
@@ -49,6 +54,14 @@ void VxgiMipmapPass::record(rhi::RHICommandBuffer& cmd, const VxgiResources& vxg
     cmd.bindPipelineState(*m_pipeline);
     uint32_t res=vxgi.resolution();
     for(uint32_t lv=1;lv<m_mipLevels;++lv){
+        // 将源 mip 从 General 转为 ShaderReadOnly，满足 SampledImage 描述符布局
+        if (m_voxelTex) {
+            rhi::RHICommandBuffer::TextureBarrierRange br;
+            br.baseMip = lv - 1; br.mipCount = 1;
+            cmd.textureBarrier(*m_voxelTex,
+                rhi::TextureLayout::General, rhi::TextureLayout::ShaderReadOnly, br);
+        }
+        // 确保上一 mip 的写入对本次 dispatch 可见
         cmd.globalBarrier();
         cmd.bindDescriptorSet(0,*m_sets[lv-1]); uint32_t ds=res>>lv; if(!ds)ds=1;
         MipmapPC pc{ds}; cmd.pushConstants(rhi::ShaderStage::Compute,&pc,sizeof(pc));

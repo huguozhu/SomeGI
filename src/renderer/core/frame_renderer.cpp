@@ -749,9 +749,15 @@ void FrameRenderer::registerPipelineSteps() {
             // 4. Mipmap: iterate src mip i → dst mip i+1
             vxgiMipmap().record(cmd, vxgi());
 
-            // 5. Final mip → SHADER_READ_ONLY
-            cmd.textureBarrier(*wrapImage(vxgiImg.image(), vxgiImg.format(), vxgiImg.extent().width, vxgiImg.extent().height, vxgi().mipLevels()),
-                               rhi::TextureLayout::General, rhi::TextureLayout::ShaderReadOnly);
+            // 5. Mipmap 内部已将 src mip 转为 ShaderReadOnly；
+            //    最后一级 dst mip 仍在 General，单独转为 ShaderReadOnly
+            {
+                rhi::RHICommandBuffer::TextureBarrierRange br;
+                br.baseMip = vxgi().mipLevels() - 1;
+                br.mipCount = 1;
+                cmd.textureBarrier(*wrapImage(vxgiImg.image(), vxgiImg.format(), vxgiImg.extent().width, vxgiImg.extent().height, vxgi().mipLevels()),
+                                   rhi::TextureLayout::General, rhi::TextureLayout::ShaderReadOnly, br);
+            }
 
             // 6. Aniso alpha mipchain: UNDEFINED → SHADER_READ_ONLY
             auto& anisoImg = vxgi().aniso();

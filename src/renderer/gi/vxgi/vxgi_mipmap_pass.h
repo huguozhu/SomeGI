@@ -6,7 +6,7 @@
 #include <vulkan/vulkan.h>
 
 namespace somegi {
-namespace rhi { class RHIDevice; class RHIDescriptorSetLayout; class RHIPipelineState; class RHIDescriptorSet; class RHICommandBuffer; }
+namespace rhi { class RHIDevice; class RHIDescriptorSetLayout; class RHIPipelineState; class RHIDescriptorSet; class RHICommandBuffer; class RHITexture; }
 
 class VxgiMipmapPass {
 public:
@@ -22,6 +22,8 @@ private:
     std::unique_ptr<rhi::RHIDescriptorSetLayout> m_setLayout;
     std::unique_ptr<rhi::RHIPipelineState> m_pipeline;
     std::vector<std::unique_ptr<rhi::RHIDescriptorSet>> m_sets;
+    // 纹理包装（用于在 record 中插入 per‑mip barrier）
+    std::unique_ptr<rhi::RHITexture> m_voxelTex;
 };
 
 } // namespace somegi

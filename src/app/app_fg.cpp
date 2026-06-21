@@ -260,9 +260,15 @@ void App::setupFrameGraph() {
                     m_renderer.vxgiMipmap().record(rhiCmd, m_renderer.vxgi());
                 }
 
-                // 5. Final mip → SHADER_READ_ONLY
-                rhiCmd.textureBarrier(*vxgiTex,
-                    rhi::TextureLayout::General, rhi::TextureLayout::ShaderReadOnly);
+                // 5. Mipmap 内部已将 src mip 转为 ShaderReadOnly；
+                //    最后一级 dst mip 仍在 General，单独转为 ShaderReadOnly
+                {
+                    rhi::RHICommandBuffer::TextureBarrierRange br;
+                    br.baseMip = m_renderer.vxgi().mipLevels() - 1;
+                    br.mipCount = 1;
+                    rhiCmd.textureBarrier(*vxgiTex,
+                        rhi::TextureLayout::General, rhi::TextureLayout::ShaderReadOnly, br);
+                }
 
                 // 6. Aniso alpha mipchain: UNDEFINED → SHADER_READ_ONLY
                 auto anisoTex = rhi::VkRHITexture::createNonOwning(vkDev,
