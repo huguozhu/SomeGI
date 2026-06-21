@@ -19,6 +19,7 @@ enum class Format : uint32_t {
     Unknown = 0,
     R8_UNORM,
     R8G8B8A8_UNORM,
+    R16G16_SFLOAT,
     R16G16B16A16_SFLOAT,
     R32_UINT,
     R32_SFLOAT,

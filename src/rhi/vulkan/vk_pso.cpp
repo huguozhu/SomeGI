@@ -11,6 +11,7 @@ static VkFormat toVkFormatRHI(Format f) {
     switch (f) {
         case Format::R8_UNORM:          return VK_FORMAT_R8_UNORM;
         case Format::R8G8B8A8_UNORM:    return VK_FORMAT_R8G8B8A8_UNORM;
+        case Format::R16G16_SFLOAT:       return VK_FORMAT_R16G16_SFLOAT;
         case Format::R16G16B16A16_SFLOAT: return VK_FORMAT_R16G16B16A16_SFLOAT;
         case Format::R32_UINT:          return VK_FORMAT_R32_UINT;
         case Format::R32_SFLOAT:        return VK_FORMAT_R32_SFLOAT;

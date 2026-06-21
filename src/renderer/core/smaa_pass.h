@@ -1,23 +1,20 @@
-// SmaaPass —— SMAA (Compute)，已迁移到 RHI。双 Pass: edge detection + blending。
+// SmaaPass —— SMAA (Compute)，已迁移到纯 RHI。双 Pass: edge detection + blending。
 #pragma once
-#include "core/image.h"
 #include <memory>
 #include <vulkan/vulkan.h>
 
 namespace somegi {
-class Device;
 struct RenderTargets;
-namespace rhi { class RHIDevice; class RHIDescriptorSetLayout; class RHIPipelineState; class RHIDescriptorSet; class RHICommandBuffer; }
+namespace rhi { class RHIDevice; class RHIDescriptorSetLayout; class RHIPipelineState; class RHIDescriptorSet; class RHICommandBuffer; class RHITexture; class RHITextureView; }
 
 class SmaaPass {
 public:
     ~SmaaPass();
-    void init(Device& dev, rhi::RHIDevice& d, VkExtent2D ext);
+    void init(rhi::RHIDevice& d, VkExtent2D ext);
     void destroy();
     void bindResources(const RenderTargets& rt);
     void bindOutput(VkImageView outView);
     void record(rhi::RHICommandBuffer& cmd, const RenderTargets& rt);
-    void record(VkCommandBuffer cmd, const RenderTargets& rt);
 
 private:
     rhi::RHIDevice* m_rhiDevice = nullptr;
@@ -32,8 +29,8 @@ private:
     std::unique_ptr<rhi::RHIPipelineState>       m_blendPipeline;
     std::unique_ptr<rhi::RHIDescriptorSet>        m_blendSet;
 
-    Image m_edgeTex;
-    VkImageLayout m_edgeLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    std::unique_ptr<rhi::RHITexture>     m_edgeTex;
+    std::unique_ptr<rhi::RHITextureView> m_edgeView;
 };
 
 } // namespace somegi
