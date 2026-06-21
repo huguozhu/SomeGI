@@ -74,25 +74,21 @@ void SmaaPass::destroy() {
 }
 
 void SmaaPass::bindResources(const RenderTargets& rt) {
-    auto& vkD = static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
 
     // Edge set
     {
-        auto in = rhi::VkRHITextureView::createNonOwning(vkD, rt.aaHdr.view());
         m_edgeSet->write({
-            {0, rhi::DescriptorType::SampledImage, in.get()},
+            {0, rhi::DescriptorType::SampledImage, rt.rhiAaHdrView()},
             {1, rhi::DescriptorType::StorageImage, m_edgeView.get()},
         });
     }
 
     // Blend set
     {
-        auto in = rhi::VkRHITextureView::createNonOwning(vkD, rt.aaHdr.view());
-        auto out = rhi::VkRHITextureView::createNonOwning(vkD, rt.ldrTonemap.view());
         m_blendSet->write({
-            {0, rhi::DescriptorType::SampledImage, in.get()},
+            {0, rhi::DescriptorType::SampledImage, rt.rhiAaHdrView()},
             {1, rhi::DescriptorType::SampledImage, m_edgeView.get()},
-            {2, rhi::DescriptorType::StorageImage, out.get()},
+            {2, rhi::DescriptorType::StorageImage, rt.rhiLdrTonemapView()},
         });
     }
 }

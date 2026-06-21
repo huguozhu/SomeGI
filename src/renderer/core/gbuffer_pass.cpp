@@ -442,10 +442,10 @@ void GBufferPass::record(rhi::RHICommandBuffer& cmd, const RenderTargets& rt,
         useMsaa ? rt.depthMs.view() : rt.depth.view());
 
     // MSAA resolve 视图
-    auto res0 = useMsaa ? rhi::VkRHITextureView::createNonOwning(vkDev, rt.gAlbedoMetal.view()) : nullptr;
-    auto res1 = useMsaa ? rhi::VkRHITextureView::createNonOwning(vkDev, rt.gNormalRough.view()) : nullptr;
-    auto res2 = useMsaa ? rhi::VkRHITextureView::createNonOwning(vkDev, rt.gEmissiveAO.view()) : nullptr;
-    auto dres = useMsaa ? rhi::VkRHITextureView::createNonOwning(vkDev, rt.depth.view()) : nullptr;
+    auto res0 = useMsaa ? rt.rhiGAlbedoMetalView() : nullptr;
+    auto res1 = useMsaa ? rt.rhiGNormalRoughView() : nullptr;
+    auto res2 = useMsaa ? rt.rhiGEmissiveAOView() : nullptr;
+    auto dres = useMsaa ? rt.rhiDepthView() : nullptr;
 
     // 颜色附件
     rhi::RenderingAttachmentInfo cAttach[3]{};
@@ -455,9 +455,9 @@ void GBufferPass::record(rhi::RHICommandBuffer& cmd, const RenderTargets& rt,
         cAttach[i].storeOp = rhi::AttachmentStoreOp::Store;
     }
     if (useMsaa) {
-        cAttach[0].resolveView = res0.get(); cAttach[0].resolveMode = rhi::ResolveMode::Average;
-        cAttach[1].resolveView = res1.get(); cAttach[1].resolveMode = rhi::ResolveMode::Average;
-        cAttach[2].resolveView = res2.get(); cAttach[2].resolveMode = rhi::ResolveMode::Average;
+        cAttach[0].resolveView = res0; cAttach[0].resolveMode = rhi::ResolveMode::Average;
+        cAttach[1].resolveView = res1; cAttach[1].resolveMode = rhi::ResolveMode::Average;
+        cAttach[2].resolveView = res2; cAttach[2].resolveMode = rhi::ResolveMode::Average;
     }
 
     // 深度附件
@@ -467,7 +467,7 @@ void GBufferPass::record(rhi::RHICommandBuffer& cmd, const RenderTargets& rt,
     dAttach.storeOp = rhi::AttachmentStoreOp::Store;
     dAttach.clearDepth = 1.0f;
     if (useMsaa) {
-        dAttach.resolveView = dres.get();
+        dAttach.resolveView = dres;
         dAttach.resolveMode = rhi::ResolveMode::Min;
     }
 

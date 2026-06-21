@@ -186,16 +186,13 @@ void ForwardPass::record(rhi::RHICommandBuffer& cmd, const RenderTargets& rt, co
     if(!m_pipeline||!m_set||!m_iblSet) return;
     auto& vkDev = static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
 
-    auto cv = rhi::VkRHITextureView::createNonOwning(vkDev, rt.hdrColor.view());
-    auto dv = rhi::VkRHITextureView::createNonOwning(vkDev, rt.depth.view());
-
     rhi::RenderingAttachmentInfo cAttach{};
-    cAttach.view = cv.get();
+    cAttach.view = rt.rhiHdrColorView();
     cAttach.loadOp = rhi::AttachmentLoadOp::Clear;
     cAttach.storeOp = rhi::AttachmentStoreOp::Store;
 
     rhi::RenderingAttachmentInfo dAttach{};
-    dAttach.view = dv.get();
+    dAttach.view = rt.rhiDepthView();
     dAttach.loadOp = rhi::AttachmentLoadOp::Clear;
     dAttach.storeOp = rhi::AttachmentStoreOp::Store;
     dAttach.clearDepth = 1.0f;

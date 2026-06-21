@@ -142,9 +142,7 @@ void App::setupFrameGraph() {
                 auto& vkDev = static_cast<rhi::VkRHIDevice&>(*m_renderer.rhiDevice());
                 rhi::VkRHICommandBuffer rhiCmd(vkDev, cmd);
                 auto& rt = m_renderer.rt();
-                auto tex = rhi::VkRHITexture::createNonOwning(vkDev, rt.ssao.image(),
-                    rhi::toRhiFormat(rt.ssao.format()), rt.extent.width, rt.extent.height, 1);
-                rhiCmd.clearColor(*tex, 1.0f, 1.0f, 1.0f, 1.0f);
+                rhiCmd.clearColor(*rt.rhiSsao(), 1.0f, 1.0f, 1.0f, 1.0f);
             });
         });
     } else {
@@ -176,9 +174,7 @@ void App::setupFrameGraph() {
                 auto& vkDev = static_cast<rhi::VkRHIDevice&>(*m_renderer.rhiDevice());
                 rhi::VkRHICommandBuffer rhiCmd(vkDev, cmd);
                 auto& rt = m_renderer.rt();
-                auto tex = rhi::VkRHITexture::createNonOwning(vkDev, rt.ssr.image(),
-                    rhi::toRhiFormat(rt.ssr.format()), rt.extent.width, rt.extent.height, 1);
-                rhiCmd.clearColor(*tex, 0.0f, 0.0f, 0.0f, 0.0f);
+                rhiCmd.clearColor(*rt.rhiSsr(), 0.0f, 0.0f, 0.0f, 0.0f);
             });
         });
     }
@@ -200,35 +196,20 @@ void App::setupFrameGraph() {
                     rhi::VkRHICommandBuffer rhiCmd(vkDev, vkCmd);
                     auto& rt = m_renderer.rt();
                 // Copy ssgi → ssgiPrev for temporal history
-                auto transImg = [&](VkImage img, VkFormat fmt,
-                                    rhi::TextureLayout oldL, rhi::TextureLayout newL) {
-                    auto tex = rhi::VkRHITexture::createNonOwning(vkDev, img,
-                        rhi::toRhiFormat(fmt), rt.extent.width, rt.extent.height, 1);
-                    rhiCmd.textureBarrier(*tex, oldL, newL);
-                };
-                transImg(rt.ssgi.image(), rt.ssgi.format(),
-                    rhi::TextureLayout::Undefined, rhi::TextureLayout::TransferSrc);
-                transImg(rt.ssgiPrev.image(), rt.ssgiPrev.format(),
-                    rhi::TextureLayout::Undefined, rhi::TextureLayout::TransferDst);
+                rhiCmd.textureBarrier(*rt.rhiSsgi(), rhi::TextureLayout::Undefined, rhi::TextureLayout::TransferSrc);
+                rhiCmd.textureBarrier(*rt.rhiSsgiPrev(), rhi::TextureLayout::Undefined, rhi::TextureLayout::TransferDst);
 
-                auto srcTex = rhi::VkRHITexture::createNonOwning(vkDev, rt.ssgi.image(),
-                    rhi::toRhiFormat(rt.ssgi.format()), rt.extent.width, rt.extent.height, 1);
-                auto dstTex = rhi::VkRHITexture::createNonOwning(vkDev, rt.ssgiPrev.image(),
-                    rhi::toRhiFormat(rt.ssgiPrev.format()), rt.extent.width, rt.extent.height, 1);
-                rhiCmd.copyTexture(*srcTex, *dstTex);
+                rhiCmd.copyTexture(*rt.rhiSsgi(), *rt.rhiSsgiPrev());
 
                 // ssgiPrev → SHADER_READ_ONLY for sampling
-                transImg(rt.ssgiPrev.image(), rt.ssgiPrev.format(),
-                    rhi::TextureLayout::TransferDst, rhi::TextureLayout::ShaderReadOnly);
+                rhiCmd.textureBarrier(*rt.rhiSsgiPrev(), rhi::TextureLayout::TransferDst, rhi::TextureLayout::ShaderReadOnly);
                 // ssgi → GENERAL for writing new value
-                transImg(rt.ssgi.image(), rt.ssgi.format(),
-                    rhi::TextureLayout::TransferSrc, rhi::TextureLayout::General);
+                rhiCmd.textureBarrier(*rt.rhiSsgi(), rhi::TextureLayout::TransferSrc, rhi::TextureLayout::General);
 
                 if (m_renderer.ssgi().enabled) m_renderer.ssgi().record(rhiCmd, rt);
                 else m_renderer.gtgi().record(rhiCmd, rt);
 
-                transImg(rt.ssgi.image(), rt.ssgi.format(),
-                    rhi::TextureLayout::General, rhi::TextureLayout::ShaderReadOnly);
+                rhiCmd.textureBarrier(*rt.rhiSsgi(), rhi::TextureLayout::General, rhi::TextureLayout::ShaderReadOnly);
             });
         });
     } else if (!fwd) {
@@ -239,9 +220,7 @@ void App::setupFrameGraph() {
                 auto& vkDev = static_cast<rhi::VkRHIDevice&>(*m_renderer.rhiDevice());
                 rhi::VkRHICommandBuffer rhiCmd(vkDev, cmd);
                 auto& rt = m_renderer.rt();
-                auto tex = rhi::VkRHITexture::createNonOwning(vkDev, rt.ssgi.image(),
-                    rhi::toRhiFormat(rt.ssgi.format()), rt.extent.width, rt.extent.height, 1);
-                rhiCmd.clearColor(*tex, 0.0f, 0.0f, 0.0f, 0.0f);
+                rhiCmd.clearColor(*rt.rhiSsgi(), 0.0f, 0.0f, 0.0f, 0.0f);
             });
         });
     }
@@ -500,9 +479,7 @@ void App::setupFrameGraph() {
                 auto& vkDev = static_cast<rhi::VkRHIDevice&>(*m_renderer.rhiDevice());
                 rhi::VkRHICommandBuffer rhiCmd(vkDev, cmd);
                 auto& rt = m_renderer.rt();
-                auto tex = rhi::VkRHITexture::createNonOwning(vkDev, rt.rtGI.image(),
-                    rhi::toRhiFormat(rt.rtGI.format()), rt.extent.width, rt.extent.height, 1);
-                rhiCmd.clearColor(*tex, 0.0f, 0.0f, 0.0f, 0.0f);
+                rhiCmd.clearColor(*rt.rhiRtGI(), 0.0f, 0.0f, 0.0f, 0.0f);
             });
         });
     }
@@ -566,9 +543,7 @@ void App::setupFrameGraph() {
                 auto& vkDev = static_cast<rhi::VkRHIDevice&>(*m_renderer.rhiDevice());
                 rhi::VkRHICommandBuffer rhiCmd(vkDev, cmd);
                 auto& rt = m_renderer.rt();
-                auto tex = rhi::VkRHITexture::createNonOwning(vkDev, rt.restir.image(),
-                    rhi::toRhiFormat(rt.restir.format()), rt.extent.width, rt.extent.height, 1);
-                rhiCmd.clearColor(*tex, 0.0f, 0.0f, 0.0f, 0.0f);
+                rhiCmd.clearColor(*rt.rhiRestir(), 0.0f, 0.0f, 0.0f, 0.0f);
             });
         });
     }
@@ -730,9 +705,7 @@ void App::setupFrameGraph() {
                 auto& vkDev = static_cast<rhi::VkRHIDevice&>(*m_renderer.rhiDevice());
                 rhi::VkRHICommandBuffer rhiCmd(vkDev, cmd);
                 auto& rt = m_renderer.rt();
-                auto tex = rhi::VkRHITexture::createNonOwning(vkDev, rt.lumenGI.image(),
-                    rhi::toRhiFormat(rt.lumenGI.format()), rt.extent.width, rt.extent.height, 1);
-                rhiCmd.clearColor(*tex, 0.0f, 0.0f, 0.0f, 0.0f);
+                rhiCmd.clearColor(*rt.rhiLumenGI(), 0.0f, 0.0f, 0.0f, 0.0f);
             });
         });
     }
@@ -818,9 +791,7 @@ void App::setupFrameGraph() {
                 auto& vkDev = static_cast<rhi::VkRHIDevice&>(*m_renderer.rhiDevice());
                 rhi::VkRHICommandBuffer rhiCmd(vkDev, cmd);
                 auto& rt = m_renderer.rt();
-                auto tex = rhi::VkRHITexture::createNonOwning(vkDev, rt.rsmGI.image(),
-                    rhi::toRhiFormat(rt.rsmGI.format()), rt.extent.width, rt.extent.height, 1);
-                rhiCmd.clearColor(*tex, 0.0f, 0.0f, 0.0f, 0.0f);
+                rhiCmd.clearColor(*rt.rhiRsmGI(), 0.0f, 0.0f, 0.0f, 0.0f);
             });
         });
     }
@@ -916,11 +887,7 @@ void App::setupFrameGraph() {
             auto& vkDev = static_cast<rhi::VkRHIDevice&>(*m_renderer.rhiDevice());
             rhi::VkRHICommandBuffer rhiCmd(vkDev, cmd);
             auto& rt = m_renderer.rt();
-            auto srcTex = rhi::VkRHITexture::createNonOwning(vkDev, rt.hdrColor.image(),
-                rhi::toRhiFormat(rt.hdrColor.format()), rt.extent.width, rt.extent.height, 1);
-            auto dstTex = rhi::VkRHITexture::createNonOwning(vkDev, rt.hdrPrev.image(),
-                rhi::toRhiFormat(rt.hdrPrev.format()), rt.extent.width, rt.extent.height, 1);
-            rhiCmd.copyTexture(*srcTex, *dstTex);
+            rhiCmd.copyTexture(*rt.rhiHdrColor(), *rt.rhiHdrPrev());
         });
     });
 
@@ -965,11 +932,7 @@ void App::setupFrameGraph() {
                     auto& vkDev = static_cast<rhi::VkRHIDevice&>(*m_renderer.rhiDevice());
                     rhi::VkRHICommandBuffer rhiCmd(vkDev, cmd);
                     auto& rt = m_renderer.rt();
-                    auto srcTex = rhi::VkRHITexture::createNonOwning(vkDev, rt.aaHdr.image(),
-                        rhi::toRhiFormat(rt.aaHdr.format()), rt.extent.width, rt.extent.height, 1);
-                    auto dstTex = rhi::VkRHITexture::createNonOwning(vkDev, rt.aaHistory.image(),
-                        rhi::toRhiFormat(rt.aaHistory.format()), rt.extent.width, rt.extent.height, 1);
-                    rhiCmd.copyTexture(*srcTex, *dstTex);
+                    rhiCmd.copyTexture(*rt.rhiAaHdr(), *rt.rhiAaHistory());
                 });
             });
         } else {

@@ -47,14 +47,14 @@ void RsmSamplePass::bindFrame(const RenderTargets& rt, VkBuffer frameUbo, VkBuff
     if(!m_set)return; auto& vkD=static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
     m_set->write({
         {0,rhi::DescriptorType::UniformBuffer,nullptr,rhi::VkRHIBuffer::createNonOwning(vkD,frameUbo,VK_WHOLE_SIZE).get()},
-        {1,rhi::DescriptorType::SampledImage,rhi::VkRHITextureView::createNonOwning(vkD,rt.gNormalRough.view()).get()},
-        {2,rhi::DescriptorType::SampledImage,rhi::VkRHITextureView::createNonOwning(vkD,rt.depth.view()).get()},
+        {1,rhi::DescriptorType::SampledImage,rt.rhiGNormalRoughView()},
+        {2,rhi::DescriptorType::SampledImage,rt.rhiDepthView()},
         {3,rhi::DescriptorType::SampledImage,rhi::VkRHITextureView::createNonOwning(vkD,rsmPos).get()},
         {4,rhi::DescriptorType::SampledImage,rhi::VkRHITextureView::createNonOwning(vkD,rsmN).get()},
         {5,rhi::DescriptorType::SampledImage,rhi::VkRHITextureView::createNonOwning(vkD,rsmFlux).get()},
         {6,rhi::DescriptorType::Sampler,nullptr,nullptr,0,0,m_linearClamp.get()},
         {7,rhi::DescriptorType::UniformBuffer,nullptr,rhi::VkRHIBuffer::createNonOwning(vkD,rsmUbo,VK_WHOLE_SIZE).get()},
-        {8,rhi::DescriptorType::StorageImage,rhi::VkRHITextureView::createNonOwning(vkD,rt.rsmGI.view()).get()},
+        {8,rhi::DescriptorType::StorageImage,rt.rhiRsmGIView()},
     });
 }
 

@@ -51,16 +51,11 @@ void TaaPass::destroy() {
 
 void TaaPass::bindResources(const RenderTargets& rt, uint32_t fi) {
     if (!m_sets[fi]) return;
-    auto& vkD = static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
-    auto cv = rhi::VkRHITextureView::createNonOwning(vkD, rt.aaHdr.view());
-    auto hv = rhi::VkRHITextureView::createNonOwning(vkD, rt.aaHistory.view());
-    auto dv = rhi::VkRHITextureView::createNonOwning(vkD, rt.depth.view());
-    auto ov = rhi::VkRHITextureView::createNonOwning(vkD, rt.ldrTonemap.view());
     m_sets[fi]->write({
-        {0, rhi::DescriptorType::SampledImage, cv.get()},
-        {1, rhi::DescriptorType::SampledImage, hv.get()},
-        {2, rhi::DescriptorType::SampledImage, dv.get()},
-        {3, rhi::DescriptorType::StorageImage, ov.get()},
+        {0, rhi::DescriptorType::SampledImage, rt.rhiAaHdrView()},
+        {1, rhi::DescriptorType::SampledImage, rt.rhiAaHistoryView()},
+        {2, rhi::DescriptorType::SampledImage, rt.rhiDepthView()},
+        {3, rhi::DescriptorType::StorageImage, rt.rhiLdrTonemapView()},
     });
 }
 

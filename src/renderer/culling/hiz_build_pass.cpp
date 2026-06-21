@@ -92,13 +92,9 @@ void HiZBuildPass::destroy() {
 
 void HiZBuildPass::record(rhi::RHICommandBuffer& cmd, const RenderTargets& rt) {
     if (!m_set || !m_pipeline) return;
-    auto& vkDevice = static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
-
-    // ── 写描述符集（深度需要非拥有型包装，mip 直接用成员 view） ──
-    auto depthView = rhi::VkRHITextureView::createNonOwning(vkDevice, rt.depth.view());
-
+    // ── 写描述符集 ──
     m_set->write({
-        {0, rhi::DescriptorType::SampledImage, depthView.get()},
+        {0, rhi::DescriptorType::SampledImage, rt.rhiDepthView()},
         {1, rhi::DescriptorType::StorageImage, m_mipView1.get()},
         {2, rhi::DescriptorType::StorageImage, m_mipView2.get()},
         {3, rhi::DescriptorType::StorageImage, m_mipView3.get()},
@@ -107,9 +103,7 @@ void HiZBuildPass::record(rhi::RHICommandBuffer& cmd, const RenderTargets& rt) {
 
     // ── Depth execution barrier（确保上一阶段的深度写入对 compute 可见）──
     {
-        auto depthRHI = rhi::VkRHITexture::createNonOwning(vkDevice, rt.depth.image(),
-            rhi::Format::D32_SFLOAT, m_extent.width, m_extent.height);
-        cmd.textureBarrier(*depthRHI, rhi::TextureLayout::ShaderReadOnly, rhi::TextureLayout::ShaderReadOnly);
+        cmd.textureBarrier(*rt.rhiDepth(), rhi::TextureLayout::ShaderReadOnly, rhi::TextureLayout::ShaderReadOnly);
     }
 
     // ── Dispatch ──

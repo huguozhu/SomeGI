@@ -86,17 +86,11 @@ void SsaoPass::destroy() {
 
 void SsaoPass::bindFrame(const RenderTargets& rt) {
     if (!m_rhiDevice || !m_set) return;
-    auto& vkDevice = static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
-
-    // 为非拥有型 RHI 视图包装创建临时对象
-    auto nrView = rhi::VkRHITextureView::createNonOwning(vkDevice, rt.gNormalRough.view());
-    auto dpView = rhi::VkRHITextureView::createNonOwning(vkDevice, rt.depth.view());
-    auto aoView = rhi::VkRHITextureView::createNonOwning(vkDevice, rt.ssao.view());
 
     m_set->write({
-        {0, rhi::DescriptorType::SampledImage, nrView.get()},
-        {1, rhi::DescriptorType::SampledImage, dpView.get()},
-        {2, rhi::DescriptorType::StorageImage, aoView.get()},
+        {0, rhi::DescriptorType::SampledImage, rt.rhiGNormalRoughView()},
+        {1, rhi::DescriptorType::SampledImage, rt.rhiDepthView()},
+        {2, rhi::DescriptorType::StorageImage, rt.rhiSsaoView()},
     });
 }
 

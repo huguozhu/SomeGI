@@ -41,15 +41,15 @@ void SdfgiPass::destroy(){ m_linearClamp.reset();
     m_traceSet.reset();m_finB.reset();m_finA.reset();m_jfaBA.reset();m_jfaAB.reset();m_seedSet.reset(); m_tracePipe.reset();m_finPipe.reset();m_jfaPipe.reset();m_seedPipe.reset(); m_traceDsl.reset();m_finDsl.reset();m_jfaDsl.reset();m_seedDsl.reset(); m_rhiDevice=nullptr; }
 void SdfgiPass::bindResources(const SdfgiResources& sf,const VxgiResources& vx,const RenderTargets& rt,VkBuffer fb){ auto& vkD=static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
     auto vox=rhi::VkRHITextureView::createNonOwning(vkD,vx.fullView()); auto aniso=rhi::VkRHITextureView::createNonOwning(vkD,vx.anisoFullView());
-    auto nr=rhi::VkRHITextureView::createNonOwning(vkD,rt.gNormalRough.view()); auto dp=rhi::VkRHITextureView::createNonOwning(vkD,rt.depth.view());
-    auto out=rhi::VkRHITextureView::createNonOwning(vkD,rt.ssgi.view()); auto ubo=rhi::VkRHIBuffer::createNonOwning(vkD,fb,VK_WHOLE_SIZE);
+    auto nr=rt.rhiGNormalRoughView(); auto dp=rt.rhiDepthView();
+    auto out=rt.rhiSsgiView(); auto ubo=rhi::VkRHIBuffer::createNonOwning(vkD,fb,VK_WHOLE_SIZE);
     auto sa=rhi::VkRHITextureView::createNonOwning(vkD,sf.seedA().view()); auto sb=rhi::VkRHITextureView::createNonOwning(vkD,sf.seedB().view());
     auto udf=rhi::VkRHITextureView::createNonOwning(vkD,sf.udf().view());
     m_seedSet->write({{0,rhi::DescriptorType::SampledImage,vox.get()},{1,rhi::DescriptorType::StorageImage,sa.get()}});
     m_jfaAB->write({{0,rhi::DescriptorType::SampledImage,sa.get()},{1,rhi::DescriptorType::StorageImage,sb.get()}});
     m_jfaBA->write({{0,rhi::DescriptorType::SampledImage,sb.get()},{1,rhi::DescriptorType::StorageImage,sa.get()}});
     m_finA->write({{0,rhi::DescriptorType::SampledImage,sa.get()},{1,rhi::DescriptorType::StorageImage,udf.get()}}); m_finB->write({{0,rhi::DescriptorType::SampledImage,sb.get()},{1,rhi::DescriptorType::StorageImage,udf.get()}});
-    m_traceSet->write({{0,rhi::DescriptorType::UniformBuffer,nullptr,ubo.get()},{1,rhi::DescriptorType::SampledImage,nr.get()},{2,rhi::DescriptorType::SampledImage,dp.get()},{3,rhi::DescriptorType::SampledImage,vox.get()},{4,rhi::DescriptorType::SampledImage,aniso.get()},{5,rhi::DescriptorType::Sampler,nullptr,nullptr,0,0,m_linearClamp.get()},{6,rhi::DescriptorType::StorageImage,out.get()}});
+    m_traceSet->write({{0,rhi::DescriptorType::UniformBuffer,nullptr,ubo.get()},{1,rhi::DescriptorType::SampledImage,nr},{2,rhi::DescriptorType::SampledImage,dp},{3,rhi::DescriptorType::SampledImage,vox.get()},{4,rhi::DescriptorType::SampledImage,aniso.get()},{5,rhi::DescriptorType::Sampler,nullptr,nullptr,0,0,m_linearClamp.get()},{6,rhi::DescriptorType::StorageImage,out}});
 }
 // RHI 路径：SDFGI seed + JFA + finalize + trace
 void SdfgiPass::record(rhi::RHICommandBuffer& cmd,const SdfgiResources& sf,const RenderTargets& rt,uint32_t fi,float st,float md,uint32_t nr,uint32_t ms,float rm,float he){

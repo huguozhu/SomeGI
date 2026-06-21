@@ -75,19 +75,14 @@ void SsgiPass::bindFrame(const RenderTargets& rt, VkBuffer frameUbo) {
     if (!m_set) return;
     auto& vkD = static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
     auto ubo = rhi::VkRHIBuffer::createNonOwning(vkD, frameUbo, VK_WHOLE_SIZE);
-    auto nr  = rhi::VkRHITextureView::createNonOwning(vkD, rt.gNormalRough.view());
-    auto dp  = rhi::VkRHITextureView::createNonOwning(vkD, rt.depth.view());
-    auto hp  = rhi::VkRHITextureView::createNonOwning(vkD, rt.hdrPrev.view());
-    auto gi  = rhi::VkRHITextureView::createNonOwning(vkD, rt.ssgi.view());
-    auto gp  = rhi::VkRHITextureView::createNonOwning(vkD, rt.ssgiPrev.view());
     m_set->write({
         {0, rhi::DescriptorType::UniformBuffer, nullptr, ubo.get()},
-        {1, rhi::DescriptorType::SampledImage,  nr.get()},
-        {2, rhi::DescriptorType::SampledImage,  dp.get()},
-        {3, rhi::DescriptorType::SampledImage,  hp.get()},
+        {1, rhi::DescriptorType::SampledImage,  rt.rhiGNormalRoughView()},
+        {2, rhi::DescriptorType::SampledImage,  rt.rhiDepthView()},
+        {3, rhi::DescriptorType::SampledImage,  rt.rhiHdrPrevView()},
         {4, rhi::DescriptorType::Sampler, nullptr, nullptr, 0, 0, m_linearClamp.get()},
-        {5, rhi::DescriptorType::StorageImage,  gi.get()},
-        {6, rhi::DescriptorType::SampledImage,  gp.get()},
+        {5, rhi::DescriptorType::StorageImage,  rt.rhiSsgiView()},
+        {6, rhi::DescriptorType::SampledImage,  rt.rhiSsgiPrevView()},
     });
 }
 

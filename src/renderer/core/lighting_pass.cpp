@@ -164,15 +164,15 @@ void LightingPass::bindFrame(const RenderTargets& rt, VkBuffer frameUbo,
     auto& vkD = static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
 
     auto uboF = rhi::VkRHIBuffer::createNonOwning(vkD, frameUbo, VK_WHOLE_SIZE);
-    auto nrV  = rhi::VkRHITextureView::createNonOwning(vkD, rt.gNormalRough.view());
-    auto abV  = rhi::VkRHITextureView::createNonOwning(vkD, rt.gAlbedoMetal.view());
-    auto emV  = rhi::VkRHITextureView::createNonOwning(vkD, rt.gEmissiveAO.view());
-    auto dpV  = rhi::VkRHITextureView::createNonOwning(vkD, rt.depth.view());
-    auto outV = rhi::VkRHITextureView::createNonOwning(vkD, rt.hdrColor.view());
-    auto aoV  = rhi::VkRHITextureView::createNonOwning(vkD, rt.ssao.view());
-    auto srV  = rhi::VkRHITextureView::createNonOwning(vkD, rt.ssr.view());
-    auto sgV  = rhi::VkRHITextureView::createNonOwning(vkD, rt.ssgi.view());
-    auto rmV  = rhi::VkRHITextureView::createNonOwning(vkD, rt.rsmGI.view());
+    auto nrV  = rt.rhiGNormalRoughView();
+    auto abV  = rt.rhiGAlbedoMetalView();
+    auto emV  = rt.rhiGEmissiveAOView();
+    auto dpV  = rt.rhiDepthView();
+    auto outV = rt.rhiHdrColorView();
+    auto aoV  = rt.rhiSsaoView();
+    auto srV  = rt.rhiSsrView();
+    auto sgV  = rt.rhiSsgiView();
+    auto rmV  = rt.rhiRsmGIView();
 
     auto lpvRV = rhi::VkRHITextureView::createNonOwning(vkD, lpv0.lpvR.view());
     auto lpvGV = rhi::VkRHITextureView::createNonOwning(vkD, lpv0.lpvG.view());
@@ -187,23 +187,23 @@ void LightingPass::bindFrame(const RenderTargets& rt, VkBuffer frameUbo,
     auto prC   = rhi::VkRHITextureView::createNonOwning(vkD, prt.viewC());
     auto prD   = rhi::VkRHITextureView::createNonOwning(vkD, prt.viewD());
     auto prE   = rhi::VkRHITextureView::createNonOwning(vkD, prt.viewE());
-    auto rsV   = rhi::VkRHITextureView::createNonOwning(vkD, rt.restir.view());
-    auto rtV   = rhi::VkRHITextureView::createNonOwning(vkD, rt.rtGI.view());
+    auto rsV   = rt.rhiRestirView();
+    auto rtV   = rt.rhiRtGIView();
     auto lpS   = rhi::VkRHISampler::createNonOwning(vkD, (VkSampler)(uintptr_t)m_lpvSampler->nativeHandle());
 
     // NDGI 权重（6 SSBO），b27-32 初始占位
     auto dumB  = rhi::VkRHIBuffer::createNonOwning(vkD, (VkBuffer)(uintptr_t)m_dummyBuf->nativeHandle(), 4);
     m_set->write({
         {0, rhi::DescriptorType::UniformBuffer, nullptr, uboF.get()},
-        {1, rhi::DescriptorType::SampledImage, abV.get()},
-        {2, rhi::DescriptorType::SampledImage, nrV.get()},
-        {3, rhi::DescriptorType::SampledImage, emV.get()},
-        {4, rhi::DescriptorType::SampledImage, dpV.get()},
-        {5, rhi::DescriptorType::StorageImage, outV.get()},
-        {6, rhi::DescriptorType::SampledImage, aoV.get()},
-        {7, rhi::DescriptorType::SampledImage, srV.get()},
-        {8, rhi::DescriptorType::SampledImage, sgV.get()},
-        {9, rhi::DescriptorType::SampledImage, rmV.get()},
+        {1, rhi::DescriptorType::SampledImage, abV},
+        {2, rhi::DescriptorType::SampledImage, nrV},
+        {3, rhi::DescriptorType::SampledImage, emV},
+        {4, rhi::DescriptorType::SampledImage, dpV},
+        {5, rhi::DescriptorType::StorageImage, outV},
+        {6, rhi::DescriptorType::SampledImage, aoV},
+        {7, rhi::DescriptorType::SampledImage, srV},
+        {8, rhi::DescriptorType::SampledImage, sgV},
+        {9, rhi::DescriptorType::SampledImage, rmV},
         {10, rhi::DescriptorType::SampledImage, lpvRV.get()},
         {11, rhi::DescriptorType::SampledImage, lpvGV.get()},
         {12, rhi::DescriptorType::SampledImage, lpvBV.get()},
@@ -218,9 +218,9 @@ void LightingPass::bindFrame(const RenderTargets& rt, VkBuffer frameUbo,
         {21, rhi::DescriptorType::SampledImage, prC.get()},
         {22, rhi::DescriptorType::SampledImage, prD.get()},
         {23, rhi::DescriptorType::SampledImage, prE.get()},
-        {24, rhi::DescriptorType::SampledImage, rsV.get()},
-        {25, rhi::DescriptorType::SampledImage, rtV.get()},
-        {26, rhi::DescriptorType::SampledImage, nrV.get()}, // duplicate: shader unused
+        {24, rhi::DescriptorType::SampledImage, rsV},
+        {25, rhi::DescriptorType::SampledImage, rtV},
+        {26, rhi::DescriptorType::SampledImage, nrV}, // duplicate: shader unused
         {27, rhi::DescriptorType::StorageBuffer, nullptr, dumB.get()},
         {28, rhi::DescriptorType::StorageBuffer, nullptr, dumB.get()},
         {29, rhi::DescriptorType::StorageBuffer, nullptr, dumB.get()},

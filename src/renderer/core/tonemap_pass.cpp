@@ -99,14 +99,11 @@ void TonemapPass::bindOutput(VkImageView outView, uint32_t frameIdx) {
 }
 
 void TonemapPass::bindTargets(const RenderTargets& rt) {
-    auto& vkD = static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
-    auto hdrView = rhi::VkRHITextureView::createNonOwning(vkD, rt.hdrColor.view());
-    auto ldrView = rhi::VkRHITextureView::createNonOwning(vkD, rt.ldrTonemap.view());
     for (uint32_t fi = 0; fi < 2; ++fi)
         m_sets[fi]->write({
-            {0, rhi::DescriptorType::SampledImage, hdrView.get()},
+            {0, rhi::DescriptorType::SampledImage, rt.rhiHdrColorView()},
             {1, rhi::DescriptorType::Sampler, nullptr, nullptr, 0, 0, m_sampler.get()},
-            {2, rhi::DescriptorType::StorageImage, ldrView.get()},
+            {2, rhi::DescriptorType::StorageImage, rt.rhiLdrTonemapView()},
         });
 }
 

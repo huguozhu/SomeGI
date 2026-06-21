@@ -69,14 +69,10 @@ void GtaoPass::destroy() {
 
 void GtaoPass::bindFrame(const RenderTargets& rt) {
     if (!m_set) return;
-    auto& vkDevice = static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
-    auto nrView = rhi::VkRHITextureView::createNonOwning(vkDevice, rt.gNormalRough.view());
-    auto dpView = rhi::VkRHITextureView::createNonOwning(vkDevice, rt.depth.view());
-    auto aoView = rhi::VkRHITextureView::createNonOwning(vkDevice, rt.ssao.view());
     m_set->write({
-        {0, rhi::DescriptorType::SampledImage, nrView.get()},
-        {1, rhi::DescriptorType::SampledImage, dpView.get()},
-        {2, rhi::DescriptorType::StorageImage, aoView.get()},
+        {0, rhi::DescriptorType::SampledImage, rt.rhiGNormalRoughView()},
+        {1, rhi::DescriptorType::SampledImage, rt.rhiDepthView()},
+        {2, rhi::DescriptorType::StorageImage, rt.rhiSsaoView()},
     });
 }
 

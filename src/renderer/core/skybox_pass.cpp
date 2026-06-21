@@ -113,14 +113,10 @@ void SkyboxPass::updateFrame(const glm::mat4& invViewProj, const glm::vec3& came
 
 void SkyboxPass::record(rhi::RHICommandBuffer& cmd, const RenderTargets& rt) {
     if (!m_pipeline || !m_set) return;
-    auto& vkDevice = static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
 
     // ── beginRendering ──
-    auto colorView = rhi::VkRHITextureView::createNonOwning(vkDevice, rt.hdrColor.view());
-    auto depthView = rhi::VkRHITextureView::createNonOwning(vkDevice, rt.depth.view());
-    const rhi::RHITextureView* cv = colorView.get();
-    rhi::RenderingAttachmentInfo cAttach{}; cAttach.view=cv; cAttach.loadOp=rhi::AttachmentLoadOp::Load;
-    rhi::RenderingAttachmentInfo dAttach{}; dAttach.view=depthView.get(); dAttach.loadOp=rhi::AttachmentLoadOp::Load;
+    rhi::RenderingAttachmentInfo cAttach{}; cAttach.view=rt.rhiHdrColorView(); cAttach.loadOp=rhi::AttachmentLoadOp::Load;
+    rhi::RenderingAttachmentInfo dAttach{}; dAttach.view=rt.rhiDepthView(); dAttach.loadOp=rhi::AttachmentLoadOp::Load;
     cmd.beginRendering(&cAttach, 1, &dAttach, rt.extent.width, rt.extent.height);
 
     cmd.setViewport(0, 0, (float)rt.extent.width, (float)rt.extent.height);

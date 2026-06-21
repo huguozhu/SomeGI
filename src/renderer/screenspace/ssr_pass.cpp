@@ -88,18 +88,13 @@ void SsrPass::bindFrame(const RenderTargets& rt, VkBuffer frameUbo) {
     auto& vkDevice = static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
 
     auto uboRHI = rhi::VkRHIBuffer::createNonOwning(vkDevice, frameUbo, VK_WHOLE_SIZE);
-    auto nrView = rhi::VkRHITextureView::createNonOwning(vkDevice, rt.gNormalRough.view());
-    auto dpView = rhi::VkRHITextureView::createNonOwning(vkDevice, rt.depth.view());
-    auto hpView = rhi::VkRHITextureView::createNonOwning(vkDevice, rt.hdrPrev.view());
-    auto srView = rhi::VkRHITextureView::createNonOwning(vkDevice, rt.ssr.view());
-
     m_set->write({
         {0, rhi::DescriptorType::UniformBuffer, nullptr, uboRHI.get()},
-        {1, rhi::DescriptorType::SampledImage,  nrView.get()},
-        {2, rhi::DescriptorType::SampledImage,  dpView.get()},
-        {3, rhi::DescriptorType::SampledImage,  hpView.get()},
+        {1, rhi::DescriptorType::SampledImage,  rt.rhiGNormalRoughView()},
+        {2, rhi::DescriptorType::SampledImage,  rt.rhiDepthView()},
+        {3, rhi::DescriptorType::SampledImage,  rt.rhiHdrPrevView()},
         {4, rhi::DescriptorType::Sampler, nullptr, nullptr, 0, 0, m_linearClamp.get()},
-        {5, rhi::DescriptorType::StorageImage,  srView.get()},
+        {5, rhi::DescriptorType::StorageImage,  rt.rhiSsrView()},
     });
 }
 
