@@ -194,7 +194,7 @@ void App::bakeEnvIbl() {
         makeFallbackSky(env);
     }
     IblBaker baker;
-    baker.bake(*m_device, m_pool, env, m_renderer.envIbl());
+    baker.bake(*m_device, m_pool, env, m_renderer.envIbl(), m_renderer.rhiDevice());
 }
 
 bool App::loadAndUploadScene(const std::filesystem::path& gltfPath, std::string& outErr) {
