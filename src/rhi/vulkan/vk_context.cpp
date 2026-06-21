@@ -62,7 +62,7 @@ RHICommandBuffer& VkContext::beginFrame(uint32_t frameIndex) {
     fr.fenceSignaled = false;
 
     // 重置 + 开始命令缓冲区
-    VK_CHECK(vkResetCommandBuffer(fr.cmd, 0));
+    VK_CHECK(vkResetCommandBuffer(fr.cmd, VK_COMMAND_BUFFER_RESET_RELEASE_RESOURCES_BIT));
     VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
     bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     VK_CHECK(vkBeginCommandBuffer(fr.cmd, &bi));
