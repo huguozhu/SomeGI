@@ -332,7 +332,10 @@ void App::setupFrameGraph() {
                     adi.imageMemoryBarrierCount = 1; adi.pImageMemoryBarriers = &ab;
                     vkCmdPipelineBarrier2(cmd, &adi);
                 }
-                m_renderer.vxgiAniso().record(cmd, m_renderer.vxgi());
+                {
+                    rhi::VkRHICommandBuffer rhiCmd(static_cast<rhi::VkRHIDevice&>(*m_renderer.rhiDevice()), cmd);
+                    m_renderer.vxgiAniso().record(rhiCmd, m_renderer.vxgi());
+                }
             });
         });
 

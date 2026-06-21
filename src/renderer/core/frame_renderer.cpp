@@ -943,7 +943,10 @@ void FrameRenderer::registerPipelineSteps() {
                 adi.imageMemoryBarrierCount = 1; adi.pImageMemoryBarriers = &ab;
                 vkCmdPipelineBarrier2(cmd, &adi);
             }
-            vxgiAniso().record(cmd, vxgi());
+            {
+                rhi::VkRHICommandBuffer rhiCmd(static_cast<rhi::VkRHIDevice&>(*rhiDevice()), cmd);
+                vxgiAniso().record(rhiCmd, vxgi());
+            }
         }
     });
 

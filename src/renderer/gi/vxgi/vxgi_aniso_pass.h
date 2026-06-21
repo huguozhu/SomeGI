@@ -15,7 +15,6 @@ public:
     void destroy();
     void bindResources(const VxgiResources& vxgi);
     void record(rhi::RHICommandBuffer& cmd, const VxgiResources& vxgi);
-    void record(VkCommandBuffer cmd, const VxgiResources& vxgi);
 private:
     rhi::RHIDevice* m_rhiDevice = nullptr; uint32_t m_mipLevels = 0;
     std::unique_ptr<rhi::RHIDescriptorSetLayout> m_setLayout;

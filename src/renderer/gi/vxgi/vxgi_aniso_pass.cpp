@@ -28,15 +28,24 @@ void VxgiAnisoPass::bindResources(const VxgiResources& vxgi){ auto& vkD=static_c
     m_sets[0]->write({{0,rhi::DescriptorType::SampledImage,rhi::VkRHITextureView::createNonOwning(vkD,vxgi.mipView(0)).get()},{1,rhi::DescriptorType::SampledImage,rhi::VkRHITextureView::createNonOwning(vkD,vxgi.mipView(0)).get()},{2,rhi::DescriptorType::StorageImage,rhi::VkRHITextureView::createNonOwning(vkD,vxgi.anisoMipView(1)).get()}});
     for(uint32_t lv=2;lv<m_mipLevels;++lv) m_sets[lv-1]->write({{0,rhi::DescriptorType::SampledImage,rhi::VkRHITextureView::createNonOwning(vkD,vxgi.mipView(0)).get()},{1,rhi::DescriptorType::SampledImage,rhi::VkRHITextureView::createNonOwning(vkD,vxgi.anisoMipView(lv-1)).get()},{2,rhi::DescriptorType::StorageImage,rhi::VkRHITextureView::createNonOwning(vkD,vxgi.anisoMipView(lv)).get()}});
 }
-void VxgiAnisoPass::record(rhi::RHICommandBuffer& cmd,const VxgiResources& vxgi){ if(!m_pipeline)return; VkCommandBuffer vkCmd=(VkCommandBuffer)(uintptr_t)cmd.nativeHandle();
-    auto bm=[&](VkImage img,uint32_t mip,VkImageLayout ol,VkImageLayout nl,VkPipelineStageFlags2 ss,VkAccessFlags2 sa,VkPipelineStageFlags2 ds,VkAccessFlags2 da){ VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};b.srcStageMask=ss;b.srcAccessMask=sa;b.dstStageMask=ds;b.dstAccessMask=da;b.oldLayout=ol;b.newLayout=nl;b.image=img;b.subresourceRange={VK_IMAGE_ASPECT_COLOR_BIT,mip,1,0,1};VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};di.imageMemoryBarrierCount=1;di.pImageMemoryBarriers=&b;vkCmdPipelineBarrier2(vkCmd,&di);};
-    VkImage anisoImg=vxgi.aniso().image(); uint32_t res=vxgi.resolution(); cmd.bindPipelineState(*m_pipeline);
-    { bm(anisoImg,1,VK_IMAGE_LAYOUT_UNDEFINED,VK_IMAGE_LAYOUT_GENERAL,VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT,0,VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
-        cmd.bindDescriptorSet(0,*m_sets[0]); AnisoPC pc{res>>1,0,0}; cmd.pushConstants(rhi::ShaderStage::Compute,&pc,sizeof(pc)); cmd.dispatch(((res>>1)+3)/4,((res>>1)+3)/4,((res>>1)+3)/4);
-        bm(anisoImg,1,VK_IMAGE_LAYOUT_GENERAL,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,VK_ACCESS_2_SHADER_SAMPLED_READ_BIT); }
-    for(uint32_t lv=2;lv<m_mipLevels;++lv){ uint32_t ds=res>>lv; if(!ds)ds=1; bm(anisoImg,lv,VK_IMAGE_LAYOUT_UNDEFINED,VK_IMAGE_LAYOUT_GENERAL,VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT,0,VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
-        cmd.bindDescriptorSet(0,*m_sets[lv-1]); AnisoPC pc{ds,1,lv-1}; cmd.pushConstants(rhi::ShaderStage::Compute,&pc,sizeof(pc)); cmd.dispatch((ds+3)/4,(ds+3)/4,(ds+3)/4);
-        bm(anisoImg,lv,VK_IMAGE_LAYOUT_GENERAL,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,VK_ACCESS_2_SHADER_SAMPLED_READ_BIT); }
+void VxgiAnisoPass::record(rhi::RHICommandBuffer& cmd,const VxgiResources& vxgi){
+    if(!m_pipeline)return;
+    uint32_t res=vxgi.resolution();
+    cmd.bindPipelineState(*m_pipeline);
+    cmd.globalBarrier();
+    cmd.bindDescriptorSet(0,*m_sets[0]);
+    AnisoPC pc{res>>1,0,0};
+    cmd.pushConstants(rhi::ShaderStage::Compute,&pc,sizeof(pc));
+    cmd.dispatch(((res>>1)+3)/4,((res>>1)+3)/4,((res>>1)+3)/4);
+    cmd.globalBarrier();
+    for(uint32_t lv=2;lv<m_mipLevels;++lv){
+        uint32_t ds=res>>lv; if(!ds)ds=1;
+        cmd.globalBarrier();
+        cmd.bindDescriptorSet(0,*m_sets[lv-1]);
+        AnisoPC pc2{ds,1,lv-1};
+        cmd.pushConstants(rhi::ShaderStage::Compute,&pc2,sizeof(pc2));
+        cmd.dispatch((ds+3)/4,(ds+3)/4,(ds+3)/4);
+        cmd.globalBarrier();
+    }
 }
-void VxgiAnisoPass::record(VkCommandBuffer vkCmd,const VxgiResources& vxgi){ rhi::VkRHICommandBuffer rhiCmd(static_cast<rhi::VkRHIDevice&>(*m_rhiDevice),vkCmd); record(rhiCmd,vxgi); }
 } // namespace somegi
