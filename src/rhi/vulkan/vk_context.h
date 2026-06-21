@@ -1,6 +1,11 @@
 // rhi/vulkan/vk_context.h
 #pragma once
 #include "../base/context.h"
+#include "../base/descriptor.h"
+#include "../base/pipeline_state.h"
+#include "../base/sampler.h"         // RHISampler, SamplerDesc
+#include "../base/shader.h"          // RHIShader, ShaderDesc
+#include "../base/command_buffer.h"  // RHIQueryPool
 #include "vk_device.h"
 #include <vulkan/vulkan.h>
 #include <vector>
@@ -17,6 +22,7 @@ public:
     VkContext(VkRHIDevice& device, uint32_t framesInFlight);
     ~VkContext() override;
 
+    // ── 帧生命周期 ──
     RHICommandBuffer& beginFrame(uint32_t frameIndex) override;
     void endFrame(uint32_t frameIndex,
                   const RHISemaphore* waitSemaphore,
@@ -25,9 +31,33 @@ public:
     void waitIdle() override;
     RHIDevice& device() override { return m_device; }
 
+    // ── 资源工厂（委托给 VkRHIDevice，统一入口）──
+    std::unique_ptr<RHIDescriptorSetLayout> createDescriptorSetLayout(const DescSetLayoutDesc& desc) {
+        return m_device.createDescriptorSetLayout(desc);
+    }
+    std::unique_ptr<RHIDescriptorSet> createDescriptorSet(const RHIDescriptorSetLayout& layout) {
+        return m_device.createDescriptorSet(layout);
+    }
+    std::unique_ptr<RHIPipelineState> createGraphicsPSO(const GraphicsPSODesc& desc) {
+        return m_device.createGraphicsPSO(desc);
+    }
+    std::unique_ptr<RHIPipelineState> createComputePSO(const ComputePSODesc& desc) {
+        return m_device.createComputePSO(desc);
+    }
+    std::unique_ptr<RHIShader> createShader(const ShaderDesc& desc, const void* bytecode, size_t size) {
+        return m_device.createShader(desc, bytecode, size);
+    }
+    std::unique_ptr<RHISampler> createSampler(const SamplerDesc& desc) {
+        return m_device.createSampler(desc);
+    }
+    std::unique_ptr<RHIQueryPool> createQueryPool(uint32_t count) {
+        return m_device.createQueryPool(count);
+    }
+
     // Vulkan 专用访问器（ImGui 等需要原生句柄 / 尚未迁移到 RHI 的调用方）
     VkCommandBuffer vkCommandBuffer(uint32_t frameIndex) const;
     VkCommandPool vkCommandPool() const { return m_pool; }
+    VkRHIDevice& vkDevice() { return m_device; }
     // 直接使用 VkSemaphore 的 endFrame 重载（swapchain 尚未迁移到 RHI）
     void endFrame(uint32_t frameIndex, VkSemaphore waitSem, VkSemaphore signalSem);
 
