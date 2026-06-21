@@ -5,7 +5,6 @@
 
 #include "renderer/culling/hiz_build_pass.h"
 #include "renderer/core/render_targets.h"
-#include "core/device.h"
 #include "rhi/base/device.h"
 #include "rhi/base/descriptor.h"
 #include "rhi/base/pipeline_state.h"
@@ -20,27 +19,34 @@
 
 namespace somegi {
 
-static Image mkHiZMip(Device& d, uint32_t w, uint32_t h) {
-    ImageDesc id{};
-    id.format = VK_FORMAT_R32_SFLOAT;
-    id.extent = {w, h, 1};
-    id.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
-    return Image(d, id);
+static std::unique_ptr<rhi::RHITexture> mkHiZMip(rhi::RHIDevice& d, uint32_t w, uint32_t h) {
+    rhi::TextureDesc td{};
+    td.format = rhi::Format::R32_SFLOAT;
+    td.width = w; td.height = h; td.depth = 1;
+    td.usage = static_cast<rhi::TextureUsage>(
+        static_cast<uint32_t>(rhi::TextureUsage::Storage) |
+        static_cast<uint32_t>(rhi::TextureUsage::Sampled));
+    return d.createTexture(td);
 }
 
 HiZBuildPass::~HiZBuildPass() = default;
 
-void HiZBuildPass::init(Device& d, rhi::RHIDevice& rhiDevice, VkExtent2D extent) {
-    m_device = &d;
-    m_rhiDevice = &rhiDevice;
+void HiZBuildPass::init(rhi::RHIDevice& d, VkExtent2D extent) {
+    m_rhiDevice = &d;
     m_extent = extent;
 
-    // Hi-Z mip 图像（仍使用 core::Image 管理 GPU 内存）
+    // Hi-Z mip 纹理（通过 RHI 创建）
     uint32_t w = extent.width, h = extent.height;
-    m_mip1 = mkHiZMip(d, std::max(1u, w/2), std::max(1u, h/2));
-    m_mip2 = mkHiZMip(d, std::max(1u, w/4), std::max(1u, h/4));
-    m_mip3 = mkHiZMip(d, std::max(1u, w/8), std::max(1u, h/8));
-    m_mip4 = mkHiZMip(d, std::max(1u, w/16), std::max(1u, h/16));
+    auto createMip = [&](uint32_t mw, uint32_t mh,
+                         std::unique_ptr<rhi::RHITexture>& tex,
+                         std::unique_ptr<rhi::RHITextureView>& view) {
+        tex = mkHiZMip(d, mw, mh);
+        view = d.createTextureView(*tex, {});
+    };
+    createMip(std::max(1u, w/2),  std::max(1u, h/2),  m_mipTex1, m_mipView1);
+    createMip(std::max(1u, w/4),  std::max(1u, h/4),  m_mipTex2, m_mipView2);
+    createMip(std::max(1u, w/8),  std::max(1u, h/8),  m_mipTex3, m_mipView3);
+    createMip(std::max(1u, w/16), std::max(1u, h/16), m_mipTex4, m_mipView4);
 
     // ── Descriptor Set Layout ──
     rhi::DescSetLayoutDesc layoutDesc;
@@ -52,13 +58,13 @@ void HiZBuildPass::init(Device& d, rhi::RHIDevice& rhiDevice, VkExtent2D extent)
         {3, rhi::DescriptorType::StorageImage, 1, rhi::ShaderStage::Compute},  // mip3
         {4, rhi::DescriptorType::StorageImage, 1, rhi::ShaderStage::Compute},  // mip4
     };
-    m_dsl = rhiDevice.createDescriptorSetLayout(layoutDesc);
+    m_dsl = d.createDescriptorSetLayout(layoutDesc);
 
     // ── Descriptor Set ──
-    m_set = rhiDevice.createDescriptorSet(*m_dsl);
+    m_set = d.createDescriptorSet(*m_dsl);
 
     // ── Compute PSO ──
-    auto& vkDevice = static_cast<rhi::VkRHIDevice&>(rhiDevice);
+    auto& vkDevice = static_cast<rhi::VkRHIDevice&>(d);
     rhi::ShaderDesc shaderDesc;
     shaderDesc.stage = rhi::ShaderStage::Compute;
     shaderDesc.entryPoint = "cs_main";
@@ -72,15 +78,15 @@ void HiZBuildPass::init(Device& d, rhi::RHIDevice& rhiDevice, VkExtent2D extent)
     psoDesc.pushConstants = {
         {rhi::ShaderStage::Compute, 0, 8}  // {uint32_t w, h}
     };
-    m_pipeline = rhiDevice.createComputePSO(psoDesc);
+    m_pipeline = d.createComputePSO(psoDesc);
 }
 
 void HiZBuildPass::destroy() {
     m_set.reset();
     m_pipeline.reset();
     m_dsl.reset();
-    m_mip1.reset(); m_mip2.reset(); m_mip3.reset(); m_mip4.reset();
-    m_device = nullptr;
+    m_mipView1.reset(); m_mipView2.reset(); m_mipView3.reset(); m_mipView4.reset();
+    m_mipTex1.reset(); m_mipTex2.reset(); m_mipTex3.reset(); m_mipTex4.reset();
     m_rhiDevice = nullptr;
 }
 
@@ -88,35 +94,22 @@ void HiZBuildPass::record(rhi::RHICommandBuffer& cmd, const RenderTargets& rt) {
     if (!m_set || !m_pipeline) return;
     auto& vkDevice = static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
 
-    // ── 写描述符集（非拥有型视图包装） ──
+    // ── 写描述符集（深度需要非拥有型包装，mip 直接用成员 view） ──
     auto depthView = rhi::VkRHITextureView::createNonOwning(vkDevice, rt.depth.view());
-    auto m1View    = rhi::VkRHITextureView::createNonOwning(vkDevice, m_mip1.view());
-    auto m2View    = rhi::VkRHITextureView::createNonOwning(vkDevice, m_mip2.view());
-    auto m3View    = rhi::VkRHITextureView::createNonOwning(vkDevice, m_mip3.view());
-    auto m4View    = rhi::VkRHITextureView::createNonOwning(vkDevice, m_mip4.view());
 
     m_set->write({
         {0, rhi::DescriptorType::SampledImage, depthView.get()},
-        {1, rhi::DescriptorType::StorageImage, m1View.get()},
-        {2, rhi::DescriptorType::StorageImage, m2View.get()},
-        {3, rhi::DescriptorType::StorageImage, m3View.get()},
-        {4, rhi::DescriptorType::StorageImage, m4View.get()},
+        {1, rhi::DescriptorType::StorageImage, m_mipView1.get()},
+        {2, rhi::DescriptorType::StorageImage, m_mipView2.get()},
+        {3, rhi::DescriptorType::StorageImage, m_mipView3.get()},
+        {4, rhi::DescriptorType::StorageImage, m_mipView4.get()},
     });
 
-    // ── Depth barrier（执行同步，无需 layout 转换） ──
+    // ── Depth execution barrier（确保上一阶段的深度写入对 compute 可见）──
     {
-        VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
-        b.srcStageMask = VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
-        b.srcAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-        b.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-        b.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
-        b.oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        b.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        b.image = rt.depth.image();
-        b.subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1};
-        VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-        di.imageMemoryBarrierCount = 1; di.pImageMemoryBarriers = &b;
-        vkCmdPipelineBarrier2((VkCommandBuffer)(uintptr_t)cmd.nativeHandle(), &di);
+        auto depthRHI = rhi::VkRHITexture::createNonOwning(vkDevice, rt.depth.image(),
+            rhi::Format::D32_SFLOAT, m_extent.width, m_extent.height);
+        cmd.textureBarrier(*depthRHI, rhi::TextureLayout::ShaderReadOnly, rhi::TextureLayout::ShaderReadOnly);
     }
 
     // ── Dispatch ──
@@ -125,13 +118,6 @@ void HiZBuildPass::record(rhi::RHICommandBuffer& cmd, const RenderTargets& rt) {
     struct { uint32_t w, h; } pc{m_extent.width, m_extent.height};
     cmd.pushConstants(rhi::ShaderStage::Compute, &pc, 8);
     cmd.dispatch((m_extent.width + 15) / 16, (m_extent.height + 15) / 16, 1);
-}
-
-// 兼容 VkCommandBuffer 重载
-void HiZBuildPass::record(VkCommandBuffer vkCmd, const RenderTargets& rt) {
-    auto& vkDev = static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
-    rhi::VkRHICommandBuffer rhiCmd(vkDev, vkCmd);
-    record(rhiCmd, rt);
 }
 
 } // namespace somegi

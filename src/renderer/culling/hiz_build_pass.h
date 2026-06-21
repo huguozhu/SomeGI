@@ -1,6 +1,6 @@
-// HiZBuildPass —— 构建深度层级金字塔，已迁移到 RHI。
+// HiZBuildPass —— 构建深度层级金字塔，已迁移到纯 RHI。
 #pragma once
-#include "core/image.h"
+#include "rhi/base/texture.h"
 #include "core/buffer.h"
 #include <glm/glm.hpp>
 #include <memory>
@@ -8,7 +8,6 @@
 
 namespace somegi {
 
-class Device;
 struct RenderTargets;
 
 namespace rhi {
@@ -22,27 +21,24 @@ class RHICommandBuffer;
 class HiZBuildPass {
 public:
     ~HiZBuildPass();
-    void init(Device& d, rhi::RHIDevice& rhiDevice, VkExtent2D screenExtent);
+    void init(rhi::RHIDevice& d, VkExtent2D screenExtent);
     void destroy();
 
-    // RHI 路径
     void record(rhi::RHICommandBuffer& cmd, const RenderTargets& rt);
-    // 兼容 VkCommandBuffer（迁移期间）
-    void record(VkCommandBuffer cmd, const RenderTargets& rt);
 
-    VkImageView mip1View() const { return m_mip1.view(); }
-    VkImageView mip2View() const { return m_mip2.view(); }
-    VkImageView mip3View() const { return m_mip3.view(); }
-    VkImageView mip4View() const { return m_mip4.view(); }
+    VkImageView mip1View() const { return (VkImageView)(uintptr_t)m_mipView1->nativeHandle(); }
+    VkImageView mip2View() const { return (VkImageView)(uintptr_t)m_mipView2->nativeHandle(); }
+    VkImageView mip3View() const { return (VkImageView)(uintptr_t)m_mipView3->nativeHandle(); }
+    VkImageView mip4View() const { return (VkImageView)(uintptr_t)m_mipView4->nativeHandle(); }
 
     VkExtent2D mipExtent(uint32_t level) const;
 
 private:
-    Device* m_device = nullptr;
     rhi::RHIDevice* m_rhiDevice = nullptr;
     VkExtent2D m_extent{};
 
-    Image m_mip1, m_mip2, m_mip3, m_mip4;
+    std::unique_ptr<rhi::RHITexture> m_mipTex1, m_mipTex2, m_mipTex3, m_mipTex4;
+    std::unique_ptr<rhi::RHITextureView> m_mipView1, m_mipView2, m_mipView3, m_mipView4;
 
     std::unique_ptr<rhi::RHIDescriptorSetLayout> m_dsl;
     std::unique_ptr<rhi::RHIPipelineState>       m_pipeline;
