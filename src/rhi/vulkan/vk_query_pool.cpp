@@ -15,9 +15,12 @@ std::unique_ptr<RHIQueryPool> VkRHIQueryPool::create(VkRHIDevice& device, uint32
 }
 VkRHIQueryPool::~VkRHIQueryPool() { if (m_pool) vkDestroyQueryPool(m_device.vkDevice(), m_pool, nullptr); }
 void VkRHIQueryPool::getResults(uint32_t first, uint32_t count, uint64_t* data) {
-    vkGetQueryPoolResults(m_device.vkDevice(), m_pool, first, count,
+    VkResult r = vkGetQueryPoolResults(m_device.vkDevice(), m_pool, first, count,
         count * sizeof(uint64_t), data, sizeof(uint64_t),
-        VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT);
+        VK_QUERY_RESULT_64_BIT);  // 不用 WAIT_BIT 避免 fence 时序不确定时挂死
+    if (r != VK_SUCCESS) {
+        std::memset(data, 0, count * sizeof(uint64_t));
+    }
 }
 
 } // namespace rhi
