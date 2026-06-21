@@ -1,10 +1,11 @@
-// DdgiPass RHI — 4 pipelines, 3 layouts, record 通过 VkCompat 保留复杂 barrier。
+// DdgiPass RHI — 4 pipelines, 3 layouts, 纯 RHI record()。
 #include "renderer/gi/ddgi/ddgi_pass.h"
 #include "renderer/gi/ddgi/ddgi_resources.h"
 #include "renderer/gi/vxgi/vxgi_resources.h"
 #include "rhi/base/device.h"
 #include "rhi/base/descriptor.h"
 #include "rhi/base/pipeline_state.h"
+#include "rhi/base/command_buffer.h"
 #include "rhi/vulkan/vk_device.h"
 #include "rhi/vulkan/vk_shader.h"
 #include "rhi/vulkan/vk_texture.h"
@@ -55,28 +56,40 @@ void DdgiPass::bindResources(const DdgiResources& ddgi,const VxgiResources& vxgi
     m_setBlend->write({{0,rhi::DescriptorType::StorageBuffer,nullptr,rb.get()},{1,rhi::DescriptorType::StorageImage,irr.get()},{2,rhi::DescriptorType::StorageImage,dist.get()}});
     m_setClassify->write({{0,rhi::DescriptorType::StorageBuffer,nullptr,rb.get()},{1,rhi::DescriptorType::StorageBuffer,nullptr,ps.get()}});
 }
-// record 保留 VkCompat（复杂 barrier + 多 dispatch）
-void DdgiPass::record(VkCommandBuffer vkCmd,const DdgiResources&,const glm::vec3& dO,const glm::vec3& dS,const glm::vec3& vM,float vC,uint32_t vR,float rR,uint32_t){
-    auto hnd=[&](auto& pso)->VkPipeline{return (VkPipeline)(uintptr_t)pso->nativeHandle();};
-    auto lay=[&](auto& pso)->VkPipelineLayout{return static_cast<rhi::VkRHIPipelineState&>(*pso).layout();};
-    VkDescriptorSet setU=(VkDescriptorSet)(uintptr_t)m_setUpdate->nativeHandle();
-    VkDescriptorSet setB=(VkDescriptorSet)(uintptr_t)m_setBlend->nativeHandle();
-    VkDescriptorSet setC=(VkDescriptorSet)(uintptr_t)m_setClassify->nativeHandle();
-    vkCmdBindPipeline(vkCmd,VK_PIPELINE_BIND_POINT_COMPUTE,hnd(m_pipelineUpdate));
-    vkCmdBindDescriptorSets(vkCmd,VK_PIPELINE_BIND_POINT_COMPUTE,lay(m_pipelineUpdate),0,1,&setU,0,nullptr);
-    UpdatePC upc{};upc.ddgiOriginX=dO.x;upc.ddgiOriginY=dO.y;upc.ddgiOriginZ=dO.z;upc.ddgiSpacingX=dS.x;upc.ddgiSpacingY=dS.y;upc.ddgiSpacingZ=dS.z;upc.probesX=DdgiResources::kProbesX;upc.probesY=DdgiResources::kProbesY;upc.probesZ=DdgiResources::kProbesZ;upc.raysPerProbe=DdgiResources::kRaysPerProbe;upc.randomRotation=rR;upc.vxgiCellSize=vC;upc.vxgiResolution=vR;upc.vxgiGridMinX=vM.x;upc.vxgiGridMinY=vM.y;upc.vxgiGridMinZ=vM.z;upc.voxelGridDim=vC*(float)vR;
-    vkCmdPushConstants(vkCmd,lay(m_pipelineUpdate),VK_SHADER_STAGE_COMPUTE_BIT,0,sizeof(upc),&upc);
-    vkCmdDispatch(vkCmd,(DdgiResources::kProbeCount*DdgiResources::kRaysPerProbe+63)/64,1,1);
-    VkMemoryBarrier2 mb{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};mb.srcStageMask=VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;mb.srcAccessMask=VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;mb.dstStageMask=VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;mb.dstAccessMask=VK_ACCESS_2_SHADER_STORAGE_READ_BIT;
-    VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};di.memoryBarrierCount=1;di.pMemoryBarriers=&mb;vkCmdPipelineBarrier2(vkCmd,&di);
-    {ClassifyPC cpc{DdgiResources::kProbeCount,DdgiResources::kRaysPerProbe,vC*0.5f,0.7f}; vkCmdBindPipeline(vkCmd,VK_PIPELINE_BIND_POINT_COMPUTE,hnd(m_pipelineClassify)); vkCmdBindDescriptorSets(vkCmd,VK_PIPELINE_BIND_POINT_COMPUTE,lay(m_pipelineClassify),0,1,&setC,0,nullptr);
-        vkCmdPushConstants(vkCmd,lay(m_pipelineClassify),VK_SHADER_STAGE_COMPUTE_BIT,0,sizeof(cpc),&cpc); vkCmdDispatch(vkCmd,(DdgiResources::kProbeCount+63)/64,1,1); vkCmdPipelineBarrier2(vkCmd,&di);}
-    BlendPC bpc{DdgiResources::kProbesX,DdgiResources::kProbesY,DdgiResources::kProbesZ,DdgiResources::kRaysPerProbe,DdgiResources::kOctaIrr,DdgiResources::kOctaDist,0.92f,vC*(float)vR};
-    vkCmdBindDescriptorSets(vkCmd,VK_PIPELINE_BIND_POINT_COMPUTE,lay(m_pipelineBlendIrr),0,1,&setB,0,nullptr);
-    vkCmdPushConstants(vkCmd,lay(m_pipelineBlendIrr),VK_SHADER_STAGE_COMPUTE_BIT,0,sizeof(bpc),&bpc);
-    vkCmdBindPipeline(vkCmd,VK_PIPELINE_BIND_POINT_COMPUTE,hnd(m_pipelineBlendIrr));
-    {uint32_t aw=DdgiResources::irradianceAtlasW(),ah=DdgiResources::irradianceAtlasH(); vkCmdDispatch(vkCmd,(aw+7)/8,(ah+7)/8,1);}
-    vkCmdBindPipeline(vkCmd,VK_PIPELINE_BIND_POINT_COMPUTE,hnd(m_pipelineBlendDist));
-    {uint32_t aw=DdgiResources::distanceAtlasW(),ah=DdgiResources::distanceAtlasH(); vkCmdDispatch(vkCmd,(aw+7)/8,(ah+7)/8,1);}
+// record — 纯 RHI，不依赖 VkCompat
+void DdgiPass::record(rhi::RHICommandBuffer& cmd, const DdgiResources&, const glm::vec3& dO, const glm::vec3& dS, const glm::vec3& vM, float vC, uint32_t vR, float rR, uint32_t) {
+    // 1. Update dispatch
+    cmd.bindPipelineState(*m_pipelineUpdate);
+    cmd.bindDescriptorSet(0, *m_setUpdate);
+    UpdatePC upc{};
+    upc.ddgiOriginX = dO.x; upc.ddgiOriginY = dO.y; upc.ddgiOriginZ = dO.z;
+    upc.ddgiSpacingX = dS.x; upc.ddgiSpacingY = dS.y; upc.ddgiSpacingZ = dS.z;
+    upc.probesX = DdgiResources::kProbesX; upc.probesY = DdgiResources::kProbesY; upc.probesZ = DdgiResources::kProbesZ;
+    upc.raysPerProbe = DdgiResources::kRaysPerProbe; upc.randomRotation = rR;
+    upc.vxgiCellSize = vC; upc.vxgiResolution = vR;
+    upc.vxgiGridMinX = vM.x; upc.vxgiGridMinY = vM.y; upc.vxgiGridMinZ = vM.z;
+    upc.voxelGridDim = vC * (float)vR;
+    cmd.pushConstants(rhi::ShaderStage::Compute, &upc, sizeof(upc));
+    cmd.dispatch((DdgiResources::kProbeCount * DdgiResources::kRaysPerProbe + 63) / 64, 1, 1);
+    cmd.globalBarrier();
+
+    // 2. Classify dispatch
+    cmd.bindPipelineState(*m_pipelineClassify);
+    cmd.bindDescriptorSet(0, *m_setClassify);
+    {ClassifyPC cpc{DdgiResources::kProbeCount, DdgiResources::kRaysPerProbe, vC * 0.5f, 0.7f};
+        cmd.pushConstants(rhi::ShaderStage::Compute, &cpc, sizeof(cpc));
+        cmd.dispatch((DdgiResources::kProbeCount + 63) / 64, 1, 1);}
+    cmd.globalBarrier();
+
+    // 3. BlendIrr dispatch
+    BlendPC bpc{DdgiResources::kProbesX, DdgiResources::kProbesY, DdgiResources::kProbesZ, DdgiResources::kRaysPerProbe, DdgiResources::kOctaIrr, DdgiResources::kOctaDist, 0.92f, vC * (float)vR};
+    cmd.bindDescriptorSet(0, *m_setBlend);
+    cmd.pushConstants(rhi::ShaderStage::Compute, &bpc, sizeof(bpc));
+    cmd.bindPipelineState(*m_pipelineBlendIrr);
+    {uint32_t aw = DdgiResources::irradianceAtlasW(), ah = DdgiResources::irradianceAtlasH(); cmd.dispatch((aw + 7) / 8, (ah + 7) / 8, 1);}
+
+    // 4. BlendDist dispatch
+    cmd.bindPipelineState(*m_pipelineBlendDist);
+    {uint32_t aw = DdgiResources::distanceAtlasW(), ah = DdgiResources::distanceAtlasH(); cmd.dispatch((aw + 7) / 8, (ah + 7) / 8, 1);}
 }
 } // namespace somegi
