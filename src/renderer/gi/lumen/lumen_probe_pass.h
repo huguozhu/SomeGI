@@ -27,8 +27,6 @@ public:
 
     void record(rhi::RHICommandBuffer& cmd, const LumenResources& res,
                 uint32_t frameIndex, bool useSixAxis);
-    void record(VkCommandBuffer cmd, const LumenResources& res,
-                uint32_t frameIndex, bool useSixAxis);
 
 private:
     rhi::RHIDevice* m_rhiDevice = nullptr;

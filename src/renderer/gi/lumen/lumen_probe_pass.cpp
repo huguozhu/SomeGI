@@ -1,12 +1,10 @@
-// LumenProbePass RHI — 2 compute dispatches (generateRays + projectSH), RHI 管理资源。
+// LumenProbePass RHI — 2 compute dispatches (generateRays + projectSH), 纯 RHI record()。
 #include "renderer/gi/lumen/lumen_probe_pass.h"
 #include "rhi/vulkan/vk_device.h"
 #include "rhi/vulkan/vk_shader.h"
 #include "rhi/vulkan/vk_texture.h"
 #include "rhi/vulkan/vk_buffer.h"
-#include "rhi/vulkan/vk_sampler.h"
 #include "rhi/vulkan/vk_acceleration_structure.h"
-#include "rhi/vulkan/vk_pso.h"
 #include "rhi/base/command_buffer.h"
 #include "core/device.h"
 #include "core/shader.h"
@@ -16,11 +14,6 @@
 #include <array>
 
 namespace somegi {
-
-// Bridge helpers
-static VkDescriptorSet VkSet(auto& p) { return (VkDescriptorSet)(uintptr_t)p->nativeHandle(); }
-static VkPipelineLayout VkLay(auto& p) { return static_cast<rhi::VkRHIPipelineState&>(*p).layout(); }
-static VkPipeline VkPipe(auto& p) { return (VkPipeline)(uintptr_t)p->nativeHandle(); }
 
 namespace {
 struct ProbePC {
@@ -146,50 +139,6 @@ void LumenProbePass::record(rhi::RHICommandBuffer& cmd, const LumenResources& re
     cmd.bindPipelineState(*m_pipelineSH);
     cmd.pushConstants(rhi::ShaderStage::Compute, &upc, sizeof(upc));
     cmd.dispatch((pc + 63) / 64, 1, 1);
-}
-
-void LumenProbePass::record(VkCommandBuffer cmd, const LumenResources& res,
-                             uint32_t, bool useSixAxis) {
-    uint32_t pw = res.probeGridW();
-    uint32_t ph = res.probeGridH();
-    uint32_t pc = res.probeCount();
-
-    // 1. cs_generateRays
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, VkPipe(m_pipelineRays));
-    VkDescriptorSet ds = VkSet(m_set);
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, VkLay(m_pipelineRays), 0, 1, &ds, 0, nullptr);
-
-    ProbePC upc{};
-    upc.screenSizeX    = (float)(pw * LumenResources::kProbeTileSize);
-    upc.screenSizeY    = (float)(ph * LumenResources::kProbeTileSize);
-    upc.invScreenSizeX = 1.0f / upc.screenSizeX;
-    upc.invScreenSizeY = 1.0f / upc.screenSizeY;
-    upc.probeGridW     = pw;
-    upc.probeGridH     = ph;
-    upc.probeTileSize  = LumenResources::kProbeTileSize;
-    upc.raysPerProbe   = LumenResources::kRaysPerProbe;
-    upc.totalProbes    = pc;
-    upc.randomSeed     = 0.0f;
-    upc.useSixAxis     = useSixAxis ? 1u : 0u;
-    vkCmdPushConstants(cmd, VkLay(m_pipelineRays), VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(upc), &upc);
-
-    uint32_t totalRays = pc * LumenResources::kRaysPerProbe;
-    vkCmdDispatch(cmd, (totalRays + 63) / 64, 1, 1);
-
-    // Barrier
-    VkMemoryBarrier2 mb{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
-    mb.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-    mb.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-    mb.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-    mb.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT;
-    VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-    di.memoryBarrierCount = 1; di.pMemoryBarriers = &mb;
-    vkCmdPipelineBarrier2(cmd, &di);
-
-    // 2. cs_projectSH
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, VkPipe(m_pipelineSH));
-    vkCmdPushConstants(cmd, VkLay(m_pipelineSH), VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(upc), &upc);
-    vkCmdDispatch(cmd, (pc + 63) / 64, 1, 1);
 }
 
 } // namespace somegi
