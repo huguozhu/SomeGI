@@ -1,5 +1,18 @@
 #include "app.h"
 #include "tests/regression_test.h"
+#include "rhi/base/device.h"
+#include "rhi/base/swapchain.h"
+#include "rhi/base/command_buffer.h"
+#include "rhi/base/fence.h"
+#include "rhi/base/shader.h"
+#include "rhi/base/pipeline_state.h"
+#include "rhi/base/descriptor.h"
+#include "rhi/base/buffer.h"
+#include "renderer/core/render_targets.h"
+#include "renderer/core/tonemap_pass.h"
+#define GLFW_EXPOSE_NATIVE_WIN32
+#include <GLFW/glfw3.h>
+#include <GLFW/glfw3native.h>
 #include "scene/draw_list.h"
 #include "core/window.h"
 #include "core/device.h"
@@ -1265,6 +1278,11 @@ void App::setScreenshotConfig(int interval, int oneFrame, const char* dir) {
     if (dir && dir[0]) m_screenshot.outputDir = dir;
 }
 
+void App::setBackend(const char* name) {
+    if (name && name[0]) m_backendName = name;
+    std::printf("[init] backend: %s\n", m_backendName.c_str());
+}
+
 void App::setInitialShadowMethod(int method) {
     if (method >= 0 && method < kShadowCount && kShadows[method].implemented) {
         m_currentShadowIndex = method;
@@ -1307,6 +1325,10 @@ void App::renderDebugWindow() {
     m_imguiSwap->present(f);
 }
 void App::run() {
+    if (m_backendName == "d3d12") {
+        runD3D12();
+        return;
+    }
     auto last = std::chrono::high_resolution_clock::now();
     float fpsTimer = 0;
     int fpsFrames = 0;
@@ -1582,4 +1604,299 @@ void App::run() {
     }
 }
 
+App::App(ForD3D12) {
+    m_backendName = "d3d12";
+    // 创建简单 GLFW 窗口（无 Vulkan surface）
+    WindowDesc wd; wd.title = "SomeGI D3D12"; wd.width = 800; wd.height = 450;
+    m_window = std::make_unique<Window>(wd);
+    std::printf("[d3d12] App(ForD3D12) — Vulkan init skipped\n");
 }
+
+// D3D12 独立渲染循环（--backend d3d12 时调用）
+void App::runD3D12() {
+    std::printf("[d3d12] App::runD3D12() — starting\n");
+    HWND hwnd = glfwGetWin32Window(m_window->handle());
+    auto d3dDevice = rhi::RHIDevice::create(rhi::Backend::D3D12, hwnd, false);
+    m_d3d12Device = d3dDevice.get();
+    auto swapchain = d3dDevice->createSwapchain(hwnd, 800, 450);
+    auto cmdPool = d3dDevice->createCommandPool();
+    std::unique_ptr<rhi::RHICommandBuffer> cmdBuf(cmdPool->allocateRaw());
+    auto submitFence = d3dDevice->createFence(false);
+
+    // 加载简单三角形 shader（验证图形管线）
+    };
+
+    auto loadShader = [&](const char* path, rhi::ShaderStage stage, const char* entry) {
+        std::ifstream f(path, std::ios::binary);
+        if (!f) { std::fprintf(stderr, "[d3d12] shader not found: %s\n", path); return std::unique_ptr<rhi::RHIShader>(); }
+        std::vector<uint8_t> code(std::istreambuf_iterator<char>(f), {});
+        rhi::ShaderDesc sd; sd.stage = stage; sd.entryPoint = entry;
+        return d3dDevice->createShader(sd, code.data(), code.size());
+    };
+    auto vs = loadShader("build/shaders_dxil/tri_vs.dxil", rhi::ShaderStage::Vertex, "main");
+    auto ps = loadShader("build/shaders_dxil/tri_ps.dxil", rhi::ShaderStage::Fragment, "main");
+    if (!vs || !ps) { std::fprintf(stderr, "[d3d12] triangle shaders missing\n"); return; }
+
+    // Graphics PSO（无 descriptor set，仅光栅化三角形）
+    rhi::VertexInputState vis;
+    vis.bindings = {{0, 20, false}}; // pos(8) + color(12) = 20 bytes
+    vis.attributes = {{0, rhi::VertexFormat::Float2, 0, 0}, {1, rhi::VertexFormat::Float3, 8, 0}};
+    rhi::GraphicsPSODesc gpsd;
+    gpsd.vertexShader = vs.get(); gpsd.fragmentShader = ps.get();
+    gpsd.vertexInput = vis; gpsd.topology = rhi::PrimitiveTopology::TriangleList;
+    gpsd.renderTargets.colorFormats = {rhi::Format::B8G8R8A8_UNORM};
+    gpsd.renderTargets.depthFormat = rhi::Format::Unknown;
+    gpsd.renderTargets.sampleCount = 1;
+    auto pso = d3dDevice->createGraphicsPSO(gpsd);
+    std::printf("[d3d12] graphics PSO created — triangle pipeline\n");
+    // 注: triangle PSO 已被 fullscreen quad 替代，保留用于参考
+
+    // 创建 RHI 线性采样器
+    rhi::SamplerDesc sampDesc;
+    sampDesc.magFilter = rhi::Filter::Linear;
+    sampDesc.minFilter = rhi::Filter::Linear;
+    sampDesc.mipmapMode = rhi::SamplerMipmapMode::Linear;
+    auto linearSampler = d3dDevice->createSampler(sampDesc);
+    std::printf("[d3d12] linear sampler created\n");
+
+    // 初始化 TonemapPass（D3D12 路径）
+    TonemapPass tonemap;
+    tonemap.init(*d3dDevice, *linearSampler);
+    std::printf("[d3d12] TonemapPass initialized\n");
+
+    // 创建三角形顶点缓冲
+    struct Vertex { float x, y; float r, g, b; };
+    Vertex triVerts[] = {
+        { 0.0f, -0.5f, 1,0,0 },
+        { 0.5f,  0.5f, 0,1,0 },
+        {-0.5f,  0.5f, 0,0,1 },
+    };
+    rhi::BufferDesc vbDesc{};
+    vbDesc.size = sizeof(triVerts);
+    vbDesc.usage = rhi::BufferUsage::Vertex;
+    vbDesc.memory = rhi::MemoryType::HostVisible;
+    auto vb = d3dDevice->createBuffer(vbDesc);
+    std::memcpy(vb->map(), triVerts, sizeof(triVerts));
+    vb->unmap();
+    std::printf("[d3d12] vertex buffer: %zu bytes\n", sizeof(triVerts));
+
+    // SSAO compute PSO（多 compute pass 同帧验证）
+    std::unique_ptr<rhi::RHIPipelineState> ssaoPSO;
+    {
+        std::ifstream f("build/shaders_dxil/ssao/ssao.dxil", std::ios::binary);
+        if (f) {
+            std::vector<uint8_t> bc(std::istreambuf_iterator<char>(f), {});
+            rhi::ShaderDesc sd; sd.stage = rhi::ShaderStage::Compute; sd.entryPoint = "comp_main";
+            auto cs = d3dDevice->createShader(sd, bc.data(), bc.size());
+            rhi::DescSetLayoutDesc dslD;
+            auto add = [&](uint32_t vk, rhi::DescriptorType t, uint32_t hlsl) {
+                rhi::DescriptorBinding b; b.binding = vk; b.type = t; b.hlslRegister = hlsl;
+                dslD.bindings.push_back(b);
+            };
+            add(0, rhi::DescriptorType::UniformBuffer, 0);
+            add(0, rhi::DescriptorType::SampledImage, 0);
+            add(1, rhi::DescriptorType::SampledImage, 1);
+            add(2, rhi::DescriptorType::StorageImage, 2);
+            auto sdsl = d3dDevice->createDescriptorSetLayout(dslD);
+            rhi::ComputePSODesc psd; psd.computeShader = cs.get();
+            psd.descriptorSetLayouts.push_back(sdsl.get());
+            ssaoPSO = d3dDevice->createComputePSO(psd);
+            std::printf("[d3d12] SSAO PSO created\n");
+        }
+    }
+
+    // Fullscreen quad PSO（采样 LDR 纹理显示 tonemap 结果）
+    auto fsqVS = loadShader("build/shaders_dxil/fsq_vs.dxil", rhi::ShaderStage::Vertex, "main");
+    auto fsqPS = loadShader("build/shaders_dxil/fsq_ps.dxil", rhi::ShaderStage::Fragment, "main");
+    std::unique_ptr<rhi::RHIPipelineState> fsqPSO;
+    std::unique_ptr<rhi::RHIDescriptorSetLayout> fsqDSL;
+    std::unique_ptr<rhi::RHIDescriptorSet> fsqSet;
+    if (fsqVS && fsqPS) {
+        rhi::DescSetLayoutDesc fsqDesc;
+        auto ab = [&](uint32_t vk, rhi::DescriptorType t, uint32_t hlsl) {
+            rhi::DescriptorBinding b; b.binding = vk; b.type = t; b.hlslRegister = hlsl;
+            fsqDesc.bindings.push_back(b);
+        };
+        ab(0, rhi::DescriptorType::SampledImage, 0); // t0: LDR texture
+        ab(1, rhi::DescriptorType::Sampler, 0);      // s0: sampler
+        fsqDSL = d3dDevice->createDescriptorSetLayout(fsqDesc);
+
+        rhi::GraphicsPSODesc gd;
+        gd.vertexShader = fsqVS.get(); gd.fragmentShader = fsqPS.get();
+        gd.topology = rhi::PrimitiveTopology::TriangleList;
+        rhi::VertexInputState vis;
+        vis.bindings = {{0, 20, false}};
+        vis.attributes = {{0, rhi::VertexFormat::Float2, 0, 0}, {1, rhi::VertexFormat::Float2, 8, 0}};
+        gd.vertexInput = vis;
+        gd.renderTargets.colorFormats = {rhi::Format::B8G8R8A8_UNORM};
+        gd.renderTargets.sampleCount = 1;
+        gd.descriptorSetLayouts.push_back(fsqDSL.get());
+        fsqPSO = d3dDevice->createGraphicsPSO(gd);
+        fsqSet = d3dDevice->createDescriptorSet(*fsqDSL);
+        std::printf("[d3d12] fullscreen quad PSO created\n");
+    }
+
+
+    // Fullscreen quad vertex buffer (NDC quad)
+    struct FSQVertex { float x, y; float u, v; };
+    FSQVertex fsqVerts[] = {
+        {-1,-1, 0,1}, {3,-1, 2,1}, {-1,3, 0,-1},
+    };
+    rhi::BufferDesc fsqVbDesc{}; fsqVbDesc.size = sizeof(fsqVerts);
+    fsqVbDesc.usage = rhi::BufferUsage::Vertex; fsqVbDesc.memory = rhi::MemoryType::HostVisible;
+    auto fsqVB = d3dDevice->createBuffer(fsqVbDesc);
+    std::memcpy(fsqVB->map(), fsqVerts, sizeof(fsqVerts));
+    fsqVB->unmap();
+
+    // Fill compute PSO（生成测试 HDR 数据）
+    std::unique_ptr<rhi::RHIPipelineState> fillPSO;
+    rhi::BufferDesc fillPcDesc{}; fillPcDesc.size = 16;
+    fillPcDesc.usage = rhi::BufferUsage::Uniform; fillPcDesc.memory = rhi::MemoryType::HostVisible;
+    auto fillPcBuf = d3dDevice->createBuffer(fillPcDesc);
+    {
+        std::ifstream f("build/shaders_dxil/fill_cs.dxil", std::ios::binary);
+        if (f) {
+            std::vector<uint8_t> bc(std::istreambuf_iterator<char>(f), {});
+            rhi::ShaderDesc sd; sd.stage = rhi::ShaderStage::Compute; sd.entryPoint = "main";
+            auto cs = d3dDevice->createShader(sd, bc.data(), bc.size());
+            rhi::DescSetLayoutDesc d;
+            auto ab = [&](uint32_t vk, rhi::DescriptorType t, uint32_t hlsl) {
+                rhi::DescriptorBinding b; b.binding = vk; b.type = t; b.hlslRegister = hlsl;
+                d.bindings.push_back(b);
+            };
+            ab(0, rhi::DescriptorType::UniformBuffer, 0); // CBV b0
+            ab(1, rhi::DescriptorType::StorageImage, 0); // UAV u0
+            auto dsl = d3dDevice->createDescriptorSetLayout(d);
+            rhi::ComputePSODesc psd; psd.computeShader = cs.get();
+            psd.descriptorSetLayouts.push_back(dsl.get());
+            fillPSO = d3dDevice->createComputePSO(psd);
+            std::printf("[d3d12] fill compute PSO created\n");
+        }
+    }
+
+    // 创建渲染目标 + push constant buffer
+    rhi::TextureDesc hdrDesc; hdrDesc.format = rhi::Format::R16G16B16A16_SFLOAT;
+    hdrDesc.width = 800; hdrDesc.height = 450;
+    hdrDesc.usage = (rhi::TextureUsage)((uint32_t)rhi::TextureUsage::Sampled | (uint32_t)rhi::TextureUsage::Storage);
+    auto hdrTex = d3dDevice->createTexture(hdrDesc);
+    auto hdrView = hdrTex->createView({});
+    rhi::TextureDesc ldrDesc = hdrDesc; ldrDesc.format = rhi::Format::B8G8R8A8_UNORM;
+    auto ldrTex = d3dDevice->createTexture(ldrDesc);
+    auto ldrView = ldrTex->createView({});
+
+    // Fill descriptor set: CBV b0 + UAV u0 → hdrColor
+    std::unique_ptr<rhi::RHIDescriptorSet> fillSet;
+    if (fillPSO) {
+        rhi::DescSetLayoutDesc fd;
+        auto ab = [&](uint32_t vk, rhi::DescriptorType t, uint32_t hlsl) {
+            rhi::DescriptorBinding b; b.binding = vk; b.type = t; b.hlslRegister = hlsl;
+            fd.bindings.push_back(b);
+        };
+        ab(0, rhi::DescriptorType::UniformBuffer, 0);
+        ab(1, rhi::DescriptorType::StorageImage, 0);
+        auto fdsl = d3dDevice->createDescriptorSetLayout(fd);
+        fillSet = d3dDevice->createDescriptorSet(*fdsl);
+        fillSet->write({
+            {0, rhi::DescriptorType::UniformBuffer, nullptr, fillPcBuf.get()},
+            {1, rhi::DescriptorType::StorageImage, hdrView.get()},
+        });
+        std::printf("[d3d12] fill descriptor set bound\n");
+    }
+
+    rhi::BufferDesc pcDesc{}; pcDesc.size = 16;
+    pcDesc.usage = rhi::BufferUsage::Uniform; pcDesc.memory = rhi::MemoryType::HostVisible;
+    auto pcBuf = d3dDevice->createBuffer(pcDesc);
+
+    // 获取 tonemap 的 descriptor set (slot 0, frame 0)
+    auto& tonemapSets = tonemap.sets();
+    if (tonemapSets[0]) {
+        tonemapSets[0]->write({
+            {0, rhi::DescriptorType::UniformBuffer, nullptr, pcBuf.get()},
+            {1, rhi::DescriptorType::SampledImage, hdrView.get()},
+            {2, rhi::DescriptorType::Sampler, nullptr, nullptr, 0, 0, linearSampler.get()},
+            {3, rhi::DescriptorType::StorageImage, ldrView.get()},
+        });
+        std::printf("[d3d12] tonemap descriptor set bound\n");
+    }
+    while (!m_window->shouldClose()) {
+        m_window->pollEvents();
+        if (glfwGetKey(m_window->handle(), GLFW_KEY_ESCAPE) == GLFW_PRESS)
+            glfwSetWindowShouldClose(m_window->handle(), GLFW_TRUE);
+
+        auto frame = swapchain->acquireNextFrame();
+        if (frame.needsResize) continue;
+
+        // 三角形顶点数据（CPU 端）
+        struct Vertex { float x, y; float r, g, b; };
+        Vertex tri[] = {
+            { 0.0f, -0.5f, 1,0,0 },
+            { 0.5f,  0.5f, 0,1,0 },
+            {-0.5f,  0.5f, 0,0,1 },
+        };
+
+        cmdBuf->begin();
+
+        // 清除 + 渲染三角形到 swapchain
+        rhi::RenderingAttachmentInfo colorAttach{};
+        colorAttach.view = frame.view.get();
+        colorAttach.loadOp = rhi::AttachmentLoadOp::Clear;
+        colorAttach.storeOp = rhi::AttachmentStoreOp::Store;
+        colorAttach.clearColor[0] = 0.1f; colorAttach.clearColor[1] = 0.2f;
+        colorAttach.clearColor[2] = 0.4f; colorAttach.clearColor[3] = 1.0f;
+        // Fill: 生成 HDR 渐变 → hdrColor
+        static float gTime = 0; gTime += 0.016f;
+        if (fillPSO && fillSet) {
+            uint32_t fc[4] = { *(uint32_t*)&gTime, 800, 450, 0 };
+            std::memcpy(fillPcBuf->map(), fc, sizeof(fc));
+            fillPcBuf->unmap();
+            cmdBuf->bindPipelineState(*fillPSO);
+            cmdBuf->bindDescriptorSet(0, *fillSet);
+            cmdBuf->dispatch((800 + 7) / 8, (450 + 7) / 8);
+        }
+        // Tonemap: HDR → LDR
+        if (auto* tPSO = tonemap.pipeline()) {
+            cmdBuf->bindPipelineState(*tPSO);
+            cmdBuf->bindDescriptorSet(0, *tonemap.sets()[0]);
+            uint32_t pc[4] = {0};
+            std::memcpy(pcBuf->map(), pc, sizeof(pc));
+            pcBuf->unmap();
+            cmdBuf->pushConstants(rhi::ShaderStage::Compute, pc, sizeof(pc));
+            cmdBuf->dispatch((800 + 7) / 8, (450 + 7) / 8);
+        }
+        if (ssaoPSO) {
+            cmdBuf->bindPipelineState(*ssaoPSO);
+            cmdBuf->dispatch((800 + 7) / 8, (450 + 7) / 8);
+        }
+
+        // 渲染全屏 quad（采样 tonemap LDR 输出）到 swapchain
+        if (fsqPSO && fsqSet) {
+            // 绑定 LDR 纹理 + sampler
+            fsqSet->write({
+                {0, rhi::DescriptorType::SampledImage, ldrView.get()},
+                {1, rhi::DescriptorType::Sampler, nullptr, nullptr, 0, 0, linearSampler.get()},
+            });
+
+            cmdBuf->beginRendering(&colorAttach, 1, nullptr, frame.width, frame.height);
+            cmdBuf->bindPipelineState(*fsqPSO);
+            cmdBuf->bindDescriptorSet(0, *fsqSet);
+            cmdBuf->setViewport(0, 0, (float)frame.width, (float)frame.height);
+            cmdBuf->setScissor(0, 0, frame.width, frame.height);
+            cmdBuf->bindVertexBuffer(0, *fsqVB);
+            cmdBuf->draw(3);
+            cmdBuf->endRendering();
+        }
+
+        cmdBuf->end();
+
+        rhi::SubmitDesc sub{}; sub.commandBuffer = cmdBuf.get();
+        sub.signalFence = submitFence.get();
+        d3dDevice->submit(sub);
+        d3dDevice->waitForFence(*submitFence, UINT64_MAX);
+        submitFence->reset();
+        swapchain->present(frame);
+    }
+    d3dDevice->waitIdle();
+    std::printf("[d3d12] loop ended\n");
+}
+
+} // namespace somegi

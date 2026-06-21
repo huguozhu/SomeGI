@@ -20,6 +20,8 @@ struct CliConfig {
     bool captureRef = false;          // --capture-ref：生成参考图
     bool captureCompare = false;      // --capture-compare：截帧对比
     double refThreshold = 40.0;       // --ref-threshold N
+    // 后端选择
+    const char* backend = "d3d12";   // --backend vulkan|d3d12
 };
 
 CliConfig parseCli(int argc, char** argv) {
@@ -43,6 +45,8 @@ CliConfig parseCli(int argc, char** argv) {
             cfg.captureCompare = true;
         } else if (std::strcmp(argv[i], "--ref-threshold") == 0 && i + 1 < argc) {
             cfg.refThreshold = std::atof(argv[++i]);
+        } else if (std::strcmp(argv[i], "--backend") == 0 && i + 1 < argc) {
+            cfg.backend = argv[++i];
         } else {
             // 兜底：旧的 gltf 路径参数（已废弃），忽略
         }
@@ -80,20 +84,27 @@ int main(int argc, char** argv) {
 
         std::printf("CWD : %s\n", std::filesystem::current_path().string().c_str());
 
-        somegi::App app;
-        app.setScreenshotConfig(
+        // 根据后端选择创建 App（D3D12 跳过 Vulkan 初始化）
+        std::unique_ptr<somegi::App> app;
+        if (std::strcmp(g_cliConfig.backend, "d3d12") == 0) {
+            app.reset(new somegi::App(somegi::App::ForD3D12{}));
+        } else {
+            app.reset(new somegi::App());
+        }
+        app->setBackend(g_cliConfig.backend);
+        app->setScreenshotConfig(
             g_cliConfig.captureInterval,
             g_cliConfig.captureFrame,
             g_cliConfig.captureDir);
         if (g_cliConfig.shadowMethod >= 0)
-            app.setInitialShadowMethod(g_cliConfig.shadowMethod);
+            app->setInitialShadowMethod(g_cliConfig.shadowMethod);
         if (g_cliConfig.exitAfterCapture)
-            app.setExitAfterCapture(true);
+            app->setExitAfterCapture(true);
         if (g_cliConfig.captureRef)
-            app.setCaptureRefMode(true);
+            app->setCaptureRefMode(true);
         if (g_cliConfig.captureCompare)
-            app.setCaptureCompareMode(true, g_cliConfig.refThreshold);
-        app.run();
+            app->setCaptureCompareMode(true, g_cliConfig.refThreshold);
+        app->run();
     } catch (const std::exception& e) {
         std::fprintf(stderr, "Fatal: %s\n", e.what());
         return 1;

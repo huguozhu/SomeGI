@@ -99,6 +99,8 @@ public:
     void init(Device& d, VkCommandPool pool, VkExtent2D extent,
               VkSampleCountFlagBits msaaSamples, bool rtSupported,
               VkFormat swapchainFmt, GLFWwindow* window);
+    // D3D12 初始化路径（跳过 Vulkan 特定设置）
+    void initD3D12(rhi::RHIDevice& rhiDev, VkExtent2D extent);
     void destroy();
 
     void onResize(Device& d, VkExtent2D newExtent,

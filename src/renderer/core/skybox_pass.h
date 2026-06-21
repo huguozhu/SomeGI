@@ -26,6 +26,7 @@ public:
     void destroy();
 
     void bindEnv(VkImageView envCubeView, VkSampler linearSampler);
+    void bindEnvRHI(VkImageView envCubeView, rhi::RHISampler& linearSampler);
     void updateFrame(const glm::mat4& invViewProj, const glm::vec3& cameraPos);
 
     // RHI 路径

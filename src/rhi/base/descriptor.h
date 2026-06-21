@@ -30,6 +30,9 @@ struct DescriptorBinding {
     uint32_t count = 1;
     ShaderStage visibility = ShaderStage::Compute;
     bool partiallyBound = false;  // VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT
+    // D3D12 HLSL 寄存器号（~0u 表示使用 binding 值）
+    // CBV/SRV/UAV 独立编号，可覆盖 Vulkan binding 实现不同寄存器映射
+    uint32_t hlslRegister = ~0u;
 };
 
 struct DescSetLayoutDesc {

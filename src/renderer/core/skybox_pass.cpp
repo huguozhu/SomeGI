@@ -111,6 +111,18 @@ void SkyboxPass::bindEnv(VkImageView envCubeView, VkSampler linearSampler) {
         {2, rhi::DescriptorType::Sampler, nullptr, nullptr, 0, 0, m_sampler.get()},
     });
 }
+void SkyboxPass::bindEnvRHI(VkImageView envCubeView, rhi::RHISampler& linearSampler) {
+    if (!m_set) return;
+    m_sampler.reset(&linearSampler);
+    m_sampler.release(); // 不拥有所有权
+
+    auto& vkDev = *m_rhiDevice;
+    auto cubeView = rhi::VkRHITextureView::createNonOwning(static_cast<rhi::VkRHIDevice&>(vkDev), envCubeView);
+    m_set->write({
+        {1, rhi::DescriptorType::SampledImage, cubeView.get()},
+        {2, rhi::DescriptorType::Sampler, nullptr, nullptr, 0, 0, m_sampler.get()},
+    });
+}
 
 void SkyboxPass::updateFrame(const glm::mat4& invViewProj, const glm::vec3& cameraPos) {
     SkyUbo u{};

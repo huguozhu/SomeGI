@@ -35,13 +35,26 @@ struct SceneState {
 class App {
 public:
     App();
+    // D3D12 专用构造标签
+    struct ForD3D12 {};
+    explicit App(ForD3D12);
     ~App();
     void run();
+    // D3D12 独立渲染循环（后端为 D3D12 时自动调用）
+    void runD3D12();
 
     // 由 main() 在构造后、run() 前调用，传入 CLI 截图配置
     void setScreenshotConfig(int interval, int oneFrame, const char* dir);
     void setInitialShadowMethod(int method);   // --shadow-method CLI
     void setExitAfterCapture(bool v) { m_exitAfterCapture = v; }
+
+    // 图形 API 后端（--backend vulkan|d3d12）
+    void setBackend(const char* name);
+    const char* backendName() const { return m_backendName.c_str(); }
+    bool backendIs(const char* name) const { return m_backendName == name; }
+
+    // D3D12 专用构造函数（跳过 Vulkan 初始化）
+    static App createForD3D12();
     // 回归测试（--capture-ref / --capture-compare）
     void setCaptureRefMode(bool v)      { m_captureRef = v; }
     void setCaptureCompareMode(bool v, double thresh) { m_captureCompare = v; m_refThreshold = thresh; }
@@ -195,6 +208,11 @@ private:
     // ---- Screenshot ----
     ScreenshotCapture m_screenshot;
     bool m_exitAfterCapture = false;  // --exit-after-capture CLI
+
+    // ---- Backend ----
+    std::string m_backendName = "Vulkan";
+    // D3D12 设备（仅 D3D12 路径使用，Vulkan 路径为 nullptr）
+    class rhi::RHIDevice* m_d3d12Device = nullptr;
 
     // ---- Regression test ----
     bool   m_captureRef     = false;  // --capture-ref：生成参考图到 tests/ref/

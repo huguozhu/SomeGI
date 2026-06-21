@@ -13,6 +13,9 @@
 #include <core/window.h>  // Window::createSurface
 #include <cstdio>
 
+// D3D12 设备声明（必须在 namespace 外部 include）
+#include "../d3d12/d3d12_device.h"
+
 namespace somegi {
 namespace rhi {
 
@@ -21,6 +24,21 @@ namespace rhi {
 // ════════════════════════════════════════════════════════════════
 std::unique_ptr<RHIDevice> RHIDevice::createVulkan(void* nativeWindowHandle, bool enableValidation) {
     return std::make_unique<VkRHIDevice>(nativeWindowHandle, enableValidation);
+}
+
+std::unique_ptr<RHIDevice> RHIDevice::create(Backend backend, void* nativeWindow, bool enableValidation) {
+    switch (backend) {
+        case Backend::Vulkan:
+            return createVulkan(nativeWindow, enableValidation);
+        case Backend::D3D12:
+            return createD3D12();
+        default:
+            throw std::runtime_error("[rhi] unsupported backend");
+    }
+}
+
+std::unique_ptr<RHIDevice> RHIDevice::createD3D12() {
+    return std::make_unique<D3D12RHIDevice>();
 }
 
 // ════════════════════════════════════════════════════════════════
