@@ -136,10 +136,12 @@ private:
     // ---- 资源布局时间线记录 ----
     struct FGDebug* m_debug = nullptr;
 
-    // ---- GPU Timestamp ----
+    // ---- GPU Timestamp (双缓冲，每 frameInFlight 独立 query 段) ----
     std::unique_ptr<rhi::RHIQueryPool> m_timestampPool;
     uint32_t m_maxTsPasses = 0;
-    uint32_t m_tsCount = 0;           // 上帧实际写入的 pass 数
+    uint32_t m_tsSlotCount = 0;       // 每 slot 的 query 数 (maxTsPasses * 2)
+    uint32_t m_tsCount[2] = {};       // 每 slot 上次写入的 pass 数
+    uint32_t m_tsSlot = 0;            // 本帧写入的 slot 索引 (0/1)
     std::vector<float> m_passGpuMs;   // 上帧每 pass 的 GPU 耗时 (ms)
 
     void readbackTimestamps();

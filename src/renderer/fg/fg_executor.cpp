@@ -104,8 +104,10 @@ void FGExecutor::destroy() {
 void FGExecutor::initTimestamps(rhi::RHIDevice& d, uint32_t maxPasses) {
     m_rhiDevice = &d;
     m_maxTsPasses = maxPasses;
+    m_tsSlotCount = maxPasses * 2;
     m_passGpuMs.resize(maxPasses, 0.0f);
-    m_timestampPool = d.createQueryPool(maxPasses * 2);
+    // 双缓冲：kFramesInFlight=2，每 slot 一段独立 query 范围
+    m_timestampPool = d.createQueryPool(m_tsSlotCount * 2);
 }
 
 // ════════════════════════════════════════════════════════════════
@@ -119,9 +121,11 @@ void FGExecutor::execute(rhi::RHICommandBuffer& cmd,
     restoreResourceStates(compiled.resources);
     readbackTimestamps();
 
-    // 0b. 重置本帧 timestamp 池
+    // 0b. 选择本帧写入的 slot 并只重置本帧段
+    m_tsSlot = m_currentFrame % 2;
+    uint32_t tsBase = m_tsSlot * m_tsSlotCount;
     if (m_timestampPool) {
-        cmd.resetQueryPool(*m_timestampPool, 0, m_maxTsPasses * 2);
+        cmd.resetQueryPool(*m_timestampPool, tsBase, m_tsSlotCount);
     }
 
     // 1. 分配别名组
@@ -138,7 +142,7 @@ void FGExecutor::execute(rhi::RHICommandBuffer& cmd,
         if (!pass || pass->culled) continue;
 
         if (m_timestampPool && tsIdx < m_maxTsPasses) {
-            cmd.writeTimestamp(*m_timestampPool, tsIdx * 2);
+            cmd.writeTimestamp(*m_timestampPool, tsBase + tsIdx * 2);
         }
 
         // 2a. 插入 barrier：
@@ -152,7 +156,7 @@ void FGExecutor::execute(rhi::RHICommandBuffer& cmd,
         }
 
         if (m_timestampPool && tsIdx < m_maxTsPasses) {
-            cmd.writeTimestamp(*m_timestampPool, tsIdx * 2 + 1);
+            cmd.writeTimestamp(*m_timestampPool, tsBase + tsIdx * 2 + 1);
             tsIdx++;
         }
 
@@ -199,7 +203,7 @@ void FGExecutor::execute(rhi::RHICommandBuffer& cmd,
         }
     }
 
-    m_tsCount = tsIdx;
+    m_tsCount[m_tsSlot] = tsIdx;
 
     // 3. 保存状态供下帧恢复
     saveResourceStates(compiled.resources);
@@ -533,17 +537,21 @@ void FGExecutor::saveResourceStates(const std::vector<FGResourceNode*>& resource
 // ════════════════════════════════════════════════════════════════
 
 void FGExecutor::readbackTimestamps() {
-    if (!m_timestampPool || m_tsCount == 0) return;
+    // 读取上一帧写入的 slot（当前写入 slot 的对侧），其 GPU fence 已由主循环等待
+    uint32_t readSlot = 1 - m_tsSlot;
+    uint32_t readBase = readSlot * m_tsSlotCount;
+    uint32_t tsCount = m_tsCount[readSlot];
 
-    uint32_t count = m_tsCount * 2;
-    // RHIQueryPool::getResults 使用 VK_QUERY_RESULT_WAIT_BIT，
-    // 数据布局为扁平 uint64_t 数组（每 query 一个值）
+    if (!m_timestampPool || tsCount == 0) return;
+
+    uint32_t count = tsCount * 2;
+    // 主循环每帧结束时已 vkWaitForFences，query 结果保证就绪
     std::vector<uint64_t> buf(count);
-    m_timestampPool->getResults(0, count, buf.data());
+    m_timestampPool->getResults(readBase, count, buf.data());
 
     // timestampPeriod 来自 RHI DeviceLimits（nanoseconds per tick）
     float period = (m_rhiDevice ? m_rhiDevice->limits().timestampPeriod : 1.0f) * 1e-6f;
-    for (uint32_t i = 0; i < m_tsCount; ++i) {
+    for (uint32_t i = 0; i < tsCount; ++i) {
         uint64_t startVal = buf[i * 2];
         uint64_t endVal   = buf[i * 2 + 1];
         if (endVal > startVal) {

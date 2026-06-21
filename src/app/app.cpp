@@ -1486,10 +1486,12 @@ void App::run() {
         si.commandBufferInfoCount = 1;     si.pCommandBufferInfos = &csi;
         VK_CHECK(vkQueueSubmit2(m_device->graphicsQueue(), 1, &si, frame.sync->inFlight));
 
+        // 等待 GPU 完成本帧所有工作，确保 timestamp query 结果可读
+        // （FG readbackTimestamps 下一帧会读取本帧 query，依赖此 fence）
+        vkWaitForFences(m_device->device(), 1, &frame.sync->inFlight, VK_TRUE, UINT64_MAX);
+
         // ---- Screenshot capture (post-submit, pre-present) ----
         if (m_screenshot.shouldCapture() && !m_swap->hdrEnabled()) {
-            // 等待 GPU 完成，再单独提交一次 copy 命令
-            vkWaitForFences(m_device->device(), 1, &frame.sync->inFlight, VK_TRUE, UINT64_MAX);
 
             // ldrTonemap 在 SDR 路径末尾处于 VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL
             // 直接用 oneShotSubmit 拷到 staging buffer
