@@ -1,5 +1,5 @@
-// rhi/vulkan/vulkan_context.cpp
-#include "vulkan_context.h"
+// rhi/vulkan/vk_context.cpp
+#include "vk_context.h"
 #include "vk_command.h"
 #include "../base/fence.h"    // RHISemaphore
 #include <core/vk_common.h>
@@ -7,16 +7,16 @@
 namespace somegi {
 namespace rhi {
 
-VulkanContext::VulkanContext(VkRHIDevice& device, uint32_t framesInFlight)
+VkContext::VkContext(VkRHIDevice& device, uint32_t framesInFlight)
     : m_device(device), m_framesInFlight(framesInFlight) {
     createResources();
 }
 
-VulkanContext::~VulkanContext() {
+VkContext::~VkContext() {
     destroyResources();
 }
 
-void VulkanContext::createResources() {
+void VkContext::createResources() {
     // ── 命令池 ──
     VkCommandPoolCreateInfo pci{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
     pci.queueFamilyIndex = m_device.queueFamily();
@@ -39,7 +39,7 @@ void VulkanContext::createResources() {
     }
 }
 
-void VulkanContext::destroyResources() {
+void VkContext::destroyResources() {
     if (m_pool) {
         vkDestroyCommandPool(m_device.vkDevice(), m_pool, nullptr);
         m_pool = VK_NULL_HANDLE;
@@ -51,7 +51,7 @@ void VulkanContext::destroyResources() {
     m_frames.clear();
 }
 
-RHICommandBuffer& VulkanContext::beginFrame(uint32_t frameIndex) {
+RHICommandBuffer& VkContext::beginFrame(uint32_t frameIndex) {
     auto& fr = m_frames[frameIndex % m_framesInFlight];
 
     // 等待上一轮此 slot 的 GPU 工作完成
@@ -74,7 +74,7 @@ RHICommandBuffer& VulkanContext::beginFrame(uint32_t frameIndex) {
     return *m_tempCmd;
 }
 
-void VulkanContext::endFrame(uint32_t frameIndex,
+void VkContext::endFrame(uint32_t frameIndex,
                               const RHISemaphore* waitSemaphore,
                               const RHISemaphore* signalSemaphore) {
     auto& fr = m_frames[frameIndex % m_framesInFlight];
@@ -118,21 +118,21 @@ void VulkanContext::endFrame(uint32_t frameIndex,
     VK_CHECK(vkQueueSubmit2(m_device.vkQueue(), 1, &si, fr.fence));
 }
 
-RHICommandBuffer& VulkanContext::commandBuffer(uint32_t frameIndex) {
+RHICommandBuffer& VkContext::commandBuffer(uint32_t frameIndex) {
     auto& fr = m_frames[frameIndex % m_framesInFlight];
     m_tempCmd.reset(new VkRHICommandBuffer(m_device, fr.cmd));
     return *m_tempCmd;
 }
 
-void VulkanContext::waitIdle() {
+void VkContext::waitIdle() {
     vkDeviceWaitIdle(m_device.vkDevice());
 }
 
-VkCommandBuffer VulkanContext::vkCommandBuffer(uint32_t frameIndex) const {
+VkCommandBuffer VkContext::vkCommandBuffer(uint32_t frameIndex) const {
     return m_frames[frameIndex % m_framesInFlight].cmd;
 }
 
-void VulkanContext::endFrame(uint32_t frameIndex, VkSemaphore waitSem, VkSemaphore signalSem) {
+void VkContext::endFrame(uint32_t frameIndex, VkSemaphore waitSem, VkSemaphore signalSem) {
     auto& fr = m_frames[frameIndex % m_framesInFlight];
 
     vkEndCommandBuffer(fr.cmd);

@@ -8,7 +8,7 @@
 #include "rhi/base/pipeline_state.h"
 #include "rhi/base/descriptor.h"
 #include "rhi/base/buffer.h"
-#include "rhi/vulkan/vulkan_context.h"
+#include "rhi/vulkan/vk_context.h"
 #include "renderer/core/render_targets.h"
 #include "renderer/core/tonemap_pass.h"
 #define GLFW_EXPOSE_NATIVE_WIN32
@@ -110,7 +110,7 @@ App::App() {
     }
 
     // 临时命令池：FrameRenderer::init 需要 VkCommandPool（用于 oneShotSubmit），
-    // 随后由 VulkanContext 接管帧级 cmd buffer 管理。
+    // 随后由 VkContext 接管帧级 cmd buffer 管理。
     VkCommandPoolCreateInfo pci{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
     pci.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
     pci.queueFamilyIndex = m_device->graphicsQueueFamily();
@@ -123,7 +123,7 @@ App::App() {
 
     // RHI 命令上下文：接管帧级 cmd buffer + fence 管理
     auto& vkDevRhi = static_cast<rhi::VkRHIDevice&>(*m_renderer.rhiDevice());
-    m_context = std::make_unique<rhi::VulkanContext>(vkDevRhi, kFramesInFlight);
+    m_context = std::make_unique<rhi::VkContext>(vkDevRhi, kFramesInFlight);
 
     // 应用依赖 renderer 的持久化设置
     if (loadedCfg.useMeshShader && m_renderer.meshShaderSupported())
@@ -196,7 +196,7 @@ void App::bakeEnvIbl() {
         makeFallbackSky(env);
     }
     IblBaker baker;
-    baker.bake(*m_device, static_cast<rhi::VulkanContext&>(*m_context).vkCommandPool(), env, m_renderer.envIbl(), m_renderer.rhiDevice());
+    baker.bake(*m_device, static_cast<rhi::VkContext&>(*m_context).vkCommandPool(), env, m_renderer.envIbl(), m_renderer.rhiDevice());
 }
 
 bool App::loadAndUploadScene(const std::filesystem::path& gltfPath, std::string& outErr) {
@@ -211,7 +211,7 @@ bool App::loadAndUploadScene(const std::filesystem::path& gltfPath, std::string&
         m_scene.aabbMax.x, m_scene.aabbMax.y, m_scene.aabbMax.z);
 
     std::printf("[scene] uploading to GPU...\n");
-    uploadScene(*m_device, static_cast<rhi::VulkanContext&>(*m_context).vkCommandPool(), m_scene, m_sceneGpu, m_useMipmaps, m_renderer.rhiDevice());
+    uploadScene(*m_device, static_cast<rhi::VkContext&>(*m_context).vkCommandPool(), m_scene, m_sceneGpu, m_useMipmaps, m_renderer.rhiDevice());
     std::printf("[scene] GPU upload done.\n");
     return true;
 }
@@ -273,7 +273,7 @@ void App::applySceneSelection() {
 
     // M9：场景已加载，构建加速结构 + bindFrame（仅 HW 支持时）。
     if (m_renderer.rtSupported()) {
-        m_renderer.rtAS().build(*m_device, *m_renderer.rhiDevice(), static_cast<rhi::VulkanContext&>(*m_context).vkCommandPool(), m_scene, m_sceneGpu);
+        m_renderer.rtAS().build(*m_device, *m_renderer.rhiDevice(), static_cast<rhi::VkContext&>(*m_context).vkCommandPool(), m_scene, m_sceneGpu);
         m_renderer.rtGiBound() = (m_renderer.rtAS().instanceCount() > 0);
         if (m_renderer.rtGiBound()) {
             m_renderer.rtGi().bindFrame(m_renderer.rt(), m_renderer.gbuffer().frameUboHandle(), m_renderer.rtAS(), m_sceneGpu);
@@ -1367,7 +1367,7 @@ void App::run() {
         buildFrameUBO(ubo);
 
         // ---- Begin frame (context 内自动 reset+begin cmd buffer) ----
-        auto& rhiCtx = static_cast<rhi::VulkanContext&>(*m_context);
+        auto& rhiCtx = static_cast<rhi::VkContext&>(*m_context);
         auto& rhiCmd = rhiCtx.beginFrame(frame.frameInFlight);
         VkCommandBuffer cmd = rhiCtx.vkCommandBuffer(frame.frameInFlight);
 

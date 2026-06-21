@@ -1,4 +1,4 @@
-// rhi/vulkan/vulkan_context.h
+// rhi/vulkan/vk_context.h
 #pragma once
 #include "../base/context.h"
 #include "vk_device.h"
@@ -11,11 +11,11 @@ namespace rhi {
 
 class VkRHIDevice;
 
-class VulkanContext : public RHIContext {
+class VkContext : public RHIContext {
 public:
     // 构造时创建命令池、命令缓冲区、fence（kFramesInFlight 组）
-    VulkanContext(VkRHIDevice& device, uint32_t framesInFlight);
-    ~VulkanContext() override;
+    VkContext(VkRHIDevice& device, uint32_t framesInFlight);
+    ~VkContext() override;
 
     RHICommandBuffer& beginFrame(uint32_t frameIndex) override;
     void endFrame(uint32_t frameIndex,
