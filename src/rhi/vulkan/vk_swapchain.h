@@ -22,6 +22,7 @@ public:
     Format format() const override { return m_format; }
     uint32_t width() const override { return m_extent.width; }
     uint32_t height() const override { return m_extent.height; }
+    VkImage vkImage(uint32_t frameInFlight) const { return m_images[frameInFlight % m_images.size()]; }
 
 private:
     VkRHIDevice& m_device;

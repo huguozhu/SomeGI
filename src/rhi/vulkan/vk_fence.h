@@ -22,11 +22,18 @@ private:
 class VkRHISemaphore : public RHISemaphore {
 public:
     static std::unique_ptr<RHISemaphore> create(VkRHIDevice& device);
+    static std::unique_ptr<RHISemaphore> createNonOwning(VkRHIDevice& device, VkSemaphore sem) {
+        auto s = std::unique_ptr<VkRHISemaphore>(new VkRHISemaphore(device));
+        s->m_semaphore = sem;
+        s->m_owns = false;
+        return s;
+    }
     ~VkRHISemaphore() override;
     void* nativeHandle() const override { return (void*)m_semaphore; }
 private:
     VkRHIDevice& m_device;
     VkSemaphore m_semaphore = VK_NULL_HANDLE;
+    bool m_owns = true;
     VkRHISemaphore(VkRHIDevice& d) : m_device(d) {}
 };
 

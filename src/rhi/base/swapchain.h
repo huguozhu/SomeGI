@@ -14,8 +14,9 @@ struct SwapchainFrame {
     uint32_t frameInFlight;
     std::unique_ptr<RHITexture> texture;
     std::unique_ptr<RHITextureView> view;
-    RHISemaphore* imageAvailable = nullptr;  // 由 swapchain 管理
-    RHISemaphore* renderFinished = nullptr;
+    void* imageAvailable = nullptr;   // VkSemaphore：submit 时 wait
+    void* renderFinished = nullptr;   // VkSemaphore：submit 时 signal
+    void* inFlightFence = nullptr;    // VkFence：GPU 完成后 CPU 同步
     bool needsResize = false;
     uint32_t width = 0, height = 0;
 };

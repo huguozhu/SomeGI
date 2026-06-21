@@ -21,7 +21,7 @@ std::unique_ptr<RHISemaphore> VkRHISemaphore::create(VkRHIDevice& device) {
     vkCreateSemaphore(device.vkDevice(), &ci, nullptr, &s->m_semaphore);
     return s;
 }
-VkRHISemaphore::~VkRHISemaphore() { if (m_semaphore) vkDestroySemaphore(m_device.vkDevice(), m_semaphore, nullptr); }
+VkRHISemaphore::~VkRHISemaphore() { if (m_owns && m_semaphore) vkDestroySemaphore(m_device.vkDevice(), m_semaphore, nullptr); }
 
 } // namespace rhi
 } // namespace somegi

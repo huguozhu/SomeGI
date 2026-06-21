@@ -104,6 +104,9 @@ SwapchainFrame VkRHISwapchain::acquireNextFrame() {
     f.view = std::unique_ptr<RHITextureView>(new VkRHITextureView(m_device));
     static_cast<VkRHITextureView*>(f.view.get())->setView(m_views[imgIdx]->vkView());
     f.width = m_extent.width; f.height = m_extent.height;
+    f.imageAvailable = VkRHISemaphore::createNonOwning(m_device, sync.imageAvailable).release();
+    f.renderFinished = VkRHISemaphore::createNonOwning(m_device, sync.renderFinished).release();
+    f.inFlightFence = &sync.inFlight;
     m_frameIndex++;
     return f;
 }

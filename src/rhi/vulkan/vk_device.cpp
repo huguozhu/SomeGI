@@ -120,7 +120,11 @@ VkRHIDevice::VkRHIDevice(void* nativeWindowHandle, bool enableValidation)
     VkPhysicalDeviceRayQueryFeaturesKHR rqFeat{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_QUERY_FEATURES_KHR};
     VkPhysicalDeviceMeshShaderFeaturesEXT msFeat{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_FEATURES_EXT};
 
+    // Chain Vulkan 1.2 → 1.3 features
+    f12.pNext = &f13;
+
     vkb::DeviceBuilder db{vkbPD};
+    db.add_pNext(&f12);  // Vulkan 1.2 + 1.3 features (dynamicRendering, synchronization2, etc.)
     if (hasAS && hasRQ && hasDHO) {
         asFeat.accelerationStructure = VK_TRUE;
         rqFeat.rayQuery = VK_TRUE;
