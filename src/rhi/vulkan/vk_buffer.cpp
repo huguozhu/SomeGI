@@ -33,14 +33,17 @@ std::unique_ptr<RHIBuffer> VkRHIBuffer::create(VkRHIDevice& device, const Buffer
     } else {
         ai.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
     }
-    vmaCreateBuffer(device.vma(), &ci, &ai, &buf->m_buffer, &buf->m_allocation, nullptr);
+    VmaAllocationInfo allocInfo{};
+    vmaCreateBuffer(device.vma(), &ci, &ai, &buf->m_buffer, &buf->m_allocation, &allocInfo);
     buf->m_size = desc.size;
     if (desc.usage == BufferUsage::Storage || desc.usage == BufferUsage::Indirect || (uint32_t)desc.usage & (uint32_t)BufferUsage::AccelStruct) {
         VkBufferDeviceAddressInfo ai2{VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO, nullptr, buf->m_buffer};
         buf->m_address = vkGetBufferDeviceAddress(device.vkDevice(), &ai2);
     }
+    // VMA_ALLOCATION_CREATE_MAPPED_BIT 已使 VMA 持久映射，直接用 allocInfo.pMappedData
+    // 不可再调 vmaMapMemory（会导致 map count 翻倍 → 析构时断言失败）
     if (ai.flags & VMA_ALLOCATION_CREATE_MAPPED_BIT) {
-        vmaMapMemory(device.vma(), buf->m_allocation, &buf->m_mapped);
+        buf->m_mapped = allocInfo.pMappedData;
     }
     return buf;
 }
