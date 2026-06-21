@@ -22,7 +22,7 @@ std::unique_ptr<RHIBuffer> VkRHIBuffer::create(VkRHIDevice& device, const Buffer
     auto buf = std::make_unique<VkRHIBuffer>(device);
     VkBufferCreateInfo ci{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
     ci.size = desc.size;
-    ci.usage = toVkUsage(desc.usage);
+    ci.usage = toVkUsage(desc.usage) | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
     VmaAllocationCreateInfo ai{};
     if (desc.memory == MemoryType::HostVisible) {
         ai.usage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST;

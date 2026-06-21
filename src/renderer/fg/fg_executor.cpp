@@ -406,10 +406,11 @@ void FGExecutor::emitBarriers(rhi::RHICommandBuffer& cmd,
                 return;  // 无需 barrier
             }
 
-            // oldLayout 决策：
-            // - 非 manual→auto：使用 tracked currentLayout（精确，数据保留）
-            // - manual→auto + exitLayout 已知：使用 tracked layout（manual pass 声明了退出布局）
-            // - manual→auto + exitLayout 未知：回退 UNDEFINED（安全，但可能丢数据）
+            // 注意：手动 pass 可能未声明 exitLayout，导致 tracked state 不可信。
+            // 统一使用 UNDEFINED 以避免 oldLayout=currentLayout 的验证错误。
+            // （Undefined oldLayout 在 Vulkan 中无条件执行过渡并丢弃内容，总是合法。）
+            (void)currentLayout;
+            (void)prevManual;
             rhi::TextureLayout oldRhiLayout = rhi::TextureLayout::Undefined;
 
             auto* vkDev = static_cast<rhi::VkRHIDevice*>(m_rhiDevice);
