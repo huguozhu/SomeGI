@@ -15,6 +15,8 @@ static VkFormat toVkFormat(Format f) {
         case Format::R32_SFLOAT:        return VK_FORMAT_R32_SFLOAT;
         case Format::R32G32_SFLOAT:     return VK_FORMAT_R32G32_SFLOAT;
         case Format::D32_SFLOAT:        return VK_FORMAT_D32_SFLOAT;
+        case Format::R8G8B8A8_SRGB:          return VK_FORMAT_R8G8B8A8_SRGB;
+        case Format::R32G32B32A32_SFLOAT: return VK_FORMAT_R32G32B32A32_SFLOAT;
         case Format::B8G8R8A8_UNORM:    return VK_FORMAT_B8G8R8A8_UNORM;
         default: return VK_FORMAT_R8G8B8A8_UNORM;
     }
@@ -32,6 +34,8 @@ Format toRhiFormat(VkFormat vkFmt) {
         case VK_FORMAT_R32G32_SFLOAT:       return Format::R32G32_SFLOAT;
         case VK_FORMAT_D32_SFLOAT:          return Format::D32_SFLOAT;
         case VK_FORMAT_B8G8R8A8_UNORM:      return Format::B8G8R8A8_UNORM;
+        case VK_FORMAT_R8G8B8A8_SRGB:       return Format::R8G8B8A8_SRGB;
+        case VK_FORMAT_R32G32B32A32_SFLOAT: return Format::R32G32B32A32_SFLOAT;
         case VK_FORMAT_B8G8R8A8_SRGB:       return Format::B8G8R8A8_SRGB;
         default: return Format::R8G8B8A8_UNORM;
     }

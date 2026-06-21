@@ -25,6 +25,8 @@ enum class Format : uint32_t {
     R32_SFLOAT,
     R32G32_SFLOAT,
     D32_SFLOAT,
+    R8G8B8A8_SRGB,
+    R32G32B32A32_SFLOAT,
     B8G8R8A8_UNORM,
     B8G8R8A8_SRGB,
 };
@@ -52,9 +54,11 @@ struct BufferTextureCopyRegion {
 struct TextureBlitRegion {
     uint32_t srcMipLevel = 0;
     int32_t srcOffsetX = 0, srcOffsetY = 0, srcOffsetZ = 0;
+    uint32_t srcExtentWidth = 0, srcExtentHeight = 1, srcExtentDepth = 1;
     uint32_t dstMipLevel = 0;
     int32_t dstOffsetX = 0, dstOffsetY = 0, dstOffsetZ = 0;
-    uint32_t extentWidth = 0, extentHeight = 1, extentDepth = 1;
+    uint32_t dstExtentWidth = 0, dstExtentHeight = 1, dstExtentDepth = 1;
+    uint32_t layerCount = 1;         // Number of array layers to blit (e.g., 6 for cubemap faces)
     // Filter: Linear (for mipmap generation) or Nearest (for integer formats)
     bool linearFilter = true;
 };

@@ -7,6 +7,8 @@
 #include "rhi/base/sampler.h"
 #include "rhi/vulkan/vk_device.h"
 #include "rhi/vulkan/vk_buffer.h"
+#include "rhi/vulkan/vk_texture.h"
+#include "rhi/vulkan/vk_command.h"
 #include <cstring>
 
 namespace somegi {
@@ -74,17 +76,25 @@ static void uploadImageImpl(rhi::RHIDevice& rhiDevice, Device& d, const TextureC
     Buffer staging = makeStaging(d, cpu.rgba.data(), cpu.rgba.size());
 
     oneShotSubmit(rhiDevice, [&](VkCommandBuffer cmd) {
+        auto& vkDev = static_cast<rhi::VkRHIDevice&>(rhiDevice);
+        rhi::VkRHICommandBuffer rhiCmd(vkDev, cmd);
+
         transitionImg(cmd, out.image(),
             VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
             VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
             VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
             0, mipLevels);
 
-        VkBufferImageCopy c{};
-        c.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-        c.imageExtent = id.extent;
-        vkCmdCopyBufferToImage(cmd, staging.handle(), out.image(),
-            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &c);
+        auto stagingBuf = rhi::VkRHIBuffer::createNonOwning(vkDev, staging.handle(), staging.size());
+        auto dstTex = rhi::VkRHITexture::createNonOwning(vkDev, out.image(),
+            rhi::toRhiFormat(fmt), (uint32_t)cpu.width, (uint32_t)cpu.height, mipLevels);
+        {
+            rhi::BufferTextureCopyRegion r;
+            r.bufferOffset = 0;
+            r.extentWidth = (uint32_t)cpu.width;
+            r.extentHeight = (uint32_t)cpu.height;
+            rhiCmd.copyBufferToTexture(*stagingBuf, *dstTex, r);
+        }
 
         if (useMipmaps) {
             int32_t mipW = (int32_t)cpu.width;
@@ -109,17 +119,17 @@ static void uploadImageImpl(rhi::RHIDevice& rhiDevice, Device& d, const TextureC
                 int32_t nextW = mipW > 1 ? mipW / 2 : 1;
                 int32_t nextH = mipH > 1 ? mipH / 2 : 1;
 
-                VkImageBlit blit{};
-                blit.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, i - 1, 0, 1};
-                blit.srcOffsets[0] = {0, 0, 0};
-                blit.srcOffsets[1] = {mipW, mipH, 1};
-                blit.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, i, 0, 1};
-                blit.dstOffsets[0] = {0, 0, 0};
-                blit.dstOffsets[1] = {nextW, nextH, 1};
-
-                vkCmdBlitImage(cmd, out.image(), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                              out.image(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                              1, &blit, VK_FILTER_LINEAR);
+                {
+                    rhi::TextureBlitRegion r;
+                    r.srcMipLevel = i - 1;
+                    r.dstMipLevel = i;
+                    r.srcExtentWidth = (uint32_t)mipW;
+                    r.srcExtentHeight = (uint32_t)mipH;
+                    r.dstExtentWidth = (uint32_t)nextW;
+                    r.dstExtentHeight = (uint32_t)nextH;
+                    r.linearFilter = true;
+                    rhiCmd.blitTexture(*dstTex, *dstTex, r);
+                }
 
                 VkImageMemoryBarrier2 dstBarrier{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
                 dstBarrier.srcStageMask = VK_PIPELINE_STAGE_2_COPY_BIT;

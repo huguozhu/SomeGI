@@ -1203,20 +1203,23 @@ void App::recordPostProcessing(VkCommandBuffer cmd) {
         }
 
         // SDR blit: ldrTonemap → swapchain
+        auto ldrTex = rhi::VkRHITexture::createNonOwning(vkDev,
+            m_renderer.rt().ldrTonemap.image(), rhi::toRhiFormat(m_renderer.rt().ldrTonemap.format()),
+            m_renderer.rt().extent.width, m_renderer.rt().extent.height);
         auto swapTex = rhi::VkRHITexture::createNonOwning(vkDev,
             m_frameCtx.swapImage, rhi::toRhiFormat(m_swap->format()),
             m_frameCtx.swapExtent.width, m_frameCtx.swapExtent.height);
         rhiCmd.textureBarrier(*swapTex, rhi::TextureLayout::Undefined, rhi::TextureLayout::TransferDst);
 
-        VkImageBlit blit{};
-        blit.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-        blit.srcOffsets[1] = {(int32_t)m_renderer.rt().extent.width, (int32_t)m_renderer.rt().extent.height, 1};
-        blit.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-        blit.dstOffsets[1] = {(int32_t)m_frameCtx.swapExtent.width, (int32_t)m_frameCtx.swapExtent.height, 1};
-        vkCmdBlitImage(cmd,
-            m_renderer.rt().ldrTonemap.image(), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-            m_frameCtx.swapImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-            1, &blit, VK_FILTER_LINEAR);
+        {
+            rhi::TextureBlitRegion r;
+            r.srcExtentWidth = m_renderer.rt().extent.width;
+            r.srcExtentHeight = m_renderer.rt().extent.height;
+            r.dstExtentWidth = m_frameCtx.swapExtent.width;
+            r.dstExtentHeight = m_frameCtx.swapExtent.height;
+            r.linearFilter = true;
+            rhiCmd.blitTexture(*ldrTex, *swapTex, r);
+        }
 
         // SDR: transition swapchain to COLOR_ATTACHMENT for ImGui
         rhiCmd.textureBarrier(*swapTex, rhi::TextureLayout::TransferDst, rhi::TextureLayout::ColorAttachment);

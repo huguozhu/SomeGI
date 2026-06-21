@@ -20,6 +20,8 @@
 #include "rhi/vulkan/vk_shader.h"
 #include "rhi/vulkan/vk_texture.h"
 #include "rhi/vulkan/vk_sampler.h"
+#include "rhi/vulkan/vk_command.h"
+#include "rhi/vulkan/vk_buffer.h"
 #include "rhi/vulkan/vk_pso.h"
 #include <array>
 #include <cstring>
@@ -39,7 +41,7 @@ constexpr uint32_t kSpecularMips      = 6;     // specular mip 数（mip 0=镜�
 constexpr uint32_t kBrdfLutSize       = 256;   // BRDF LUT 二维分辨率
 
 // 构造一个 VkImageMemoryBarrier2 而不立刻提交（让调用方批量打到 VkDependencyInfo）。
-// 烘焙过程中 vkCmdBlitImage2 链需要复杂 barrier（多 mip / 条件 layout），此工具保留
+// 烘焙过程中 blit 链需要复杂 barrier（多 mip / 条件 layout），此工具保留
 // 原生 Vulkan。
 VkImageMemoryBarrier2 imgBarrier(VkImage img,
     VkImageLayout oldL, VkImageLayout newL,
@@ -70,7 +72,7 @@ void pipelineBarrier(VkCommandBuffer cmd, std::vector<VkImageMemoryBarrier2>& b)
 // usage 包含 SAMPLED + STORAGE + TRANSFER_SRC + TRANSFER_DST：
 // - SAMPLED: prefilter 阶段当源采样
 // - STORAGE: compute 写 mip 0（imageStore 通过 RWTexture2DArray）
-// - TRANSFER_SRC + TRANSFER_DST: vkCmdBlitImage 生成 envCube 的 mip 链
+// - TRANSFER_SRC + TRANSFER_DST: blit 生成 envCube 的 mip 链
 VkImage allocCube(Device& d, uint32_t size, uint32_t mips, VkFormat fmt,
                   VkImageUsageFlags extraUsage, Image& out) {
     ImageDesc id{};
@@ -89,7 +91,7 @@ VkImage allocCube(Device& d, uint32_t size, uint32_t mips, VkFormat fmt,
 // 把 CPU 上的 equirect HDR float 数据上传到一张 2D image 上，layout
 // 转到 SHADER_READ_ONLY_OPTIMAL。后续 equi_to_cube compute kernel 用它
 // 当源采样、写到 envCube 的 mip 0。
-// 由于 RHI 没有 copyBufferToTexture，此函数保留原生 Vulkan。
+// 使用 RHI cmd.copyBufferToTexture 上传。
 Image uploadEquirect(rhi::RHIDevice& rhiDevice, Device& d, const EnvCpu& env) {
     ImageDesc id{};
     id.format = VK_FORMAT_R32G32B32A32_SFLOAT;
@@ -103,6 +105,9 @@ Image uploadEquirect(rhi::RHIDevice& rhiDevice, Device& d, const EnvCpu& env) {
     std::memcpy(staging.mapped(), env.rgbaF32.data(), env.rgbaF32.size() * sizeof(float));
 
     oneShotSubmit(rhiDevice, [&](VkCommandBuffer cmd) {
+        auto& vkDev = static_cast<rhi::VkRHIDevice&>(rhiDevice);
+        rhi::VkRHICommandBuffer rhiCmd(vkDev, cmd);
+
         std::vector<VkImageMemoryBarrier2> bs;
         bs.push_back(imgBarrier(img.image(),
             VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
@@ -111,11 +116,16 @@ Image uploadEquirect(rhi::RHIDevice& rhiDevice, Device& d, const EnvCpu& env) {
             0, 1, 0, 1));
         pipelineBarrier(cmd, bs);
 
-        VkBufferImageCopy c{};
-        c.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-        c.imageExtent = id.extent;
-        vkCmdCopyBufferToImage(cmd, staging.handle(), img.image(),
-            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &c);
+        auto srcBuf = rhi::VkRHIBuffer::createNonOwning(vkDev, staging.handle(), staging.size());
+        auto dstTex = rhi::VkRHITexture::createNonOwning(vkDev, img.image(),
+            rhi::toRhiFormat(id.format), id.extent.width, id.extent.height);
+        {
+            rhi::BufferTextureCopyRegion r;
+            r.bufferOffset = 0;
+            r.extentWidth = id.extent.width;
+            r.extentHeight = id.extent.height;
+            rhiCmd.copyBufferToTexture(*srcBuf, *dstTex, r);
+        }
 
         bs.clear();
         bs.push_back(imgBarrier(img.image(),
@@ -143,7 +153,7 @@ void IblResources::destroy(Device& d) {
 // IBL 烘焙主流程。按阶段顺序：
 //   阶段 0：上传 equirect、分配四张目标 image、所有目标 image 转 GENERAL（原生 Vulkan）。
 //   阶段 1：equi_to_cube compute 把 equirect 投影到 envCube mip 0。（RHI）
-//   阶段 2：vkCmdBlitImage 链生成 envCube mip 1..N（保留原生 Vulkan）。
+//   阶段 2：RHI cmd.blitTexture 链生成 envCube mip 1..N。
 //   阶段 3：prefilter_diffuse compute 对 envCube 做 cosine-weighted 半球
 //          积分得 diffuseCube。（RHI）
 //   阶段 4：prefilter_specular compute 按 mip 各 dispatch 一次（每个 mip
@@ -263,12 +273,15 @@ void IblBaker::bake(Device& d, VkCommandPool pool, const EnvCpu& env, IblResourc
         });
     }
 
-    // ===== 阶段 2：用 vkCmdBlitImage 生成 envCube mip 1..N =====
-    // 简单线性下采样链：mip k → mip k+1（半边长，VK_FILTER_LINEAR 做 box
+    // ===== 阶段 2：用 RHI cmd.blitTexture 生成 envCube mip 1..N =====
+    // 简单线性下采样链：mip k → mip k+1（半边长，linear filter 做 box
     // 平均）。比 compute pipeline 简单，适合 specular prefilter 的 mip 0
     // 输入需求（不需要高质量过滤，反正 prefilter 自己会按粗糙度做卷积）。
-    // RHI 无 blit 等效项，保留原生 Vulkan。
     oneShotSubmit(*rhiDevice, [&](VkCommandBuffer cmd) {
+        rhi::VkRHICommandBuffer rhiCmd(vkDev, cmd);
+        auto envCubeTex = rhi::VkRHITexture::createNonOwning(vkDev, out.envCube.image(),
+            rhi::toRhiFormat(VK_FORMAT_R16G16B16A16_SFLOAT), kEnvCubeSize, kEnvCubeSize, kEnvCubeMips);
+
         int32_t s = (int32_t)kEnvCubeSize;
         for (uint32_t lvl = 1; lvl < kEnvCubeMips; ++lvl) {
             // src mip lvl-1：第一次循环时来自 compute 写出（GENERAL），后续
@@ -298,22 +311,21 @@ void IblBaker::bake(Device& d, VkCommandPool pool, const EnvCpu& env, IblResourc
                 lvl, 1, 0, 6));
             pipelineBarrier(cmd, bs);
 
-            VkImageBlit2 blit{VK_STRUCTURE_TYPE_IMAGE_BLIT_2};
-            blit.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, lvl - 1, 0, 6};
-            blit.srcOffsets[1]   = {s, s, 1};
-            blit.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, lvl, 0, 6};
-            blit.dstOffsets[1]   = {std::max(s / 2, 1), std::max(s / 2, 1), 1};
+            uint32_t dstSide = std::max(s / 2, 1);
+            {
+                rhi::TextureBlitRegion r;
+                r.srcMipLevel = lvl - 1;
+                r.dstMipLevel = lvl;
+                r.srcExtentWidth = (uint32_t)s;
+                r.srcExtentHeight = (uint32_t)s;
+                r.dstExtentWidth = (uint32_t)dstSide;
+                r.dstExtentHeight = (uint32_t)dstSide;
+                r.layerCount = 6;
+                r.linearFilter = true;
+                rhiCmd.blitTexture(*envCubeTex, *envCubeTex, r);
+            }
 
-            VkBlitImageInfo2 bi{VK_STRUCTURE_TYPE_BLIT_IMAGE_INFO_2};
-            bi.srcImage = out.envCube.image();
-            bi.srcImageLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-            bi.dstImage = out.envCube.image();
-            bi.dstImageLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-            bi.regionCount = 1; bi.pRegions = &blit;
-            bi.filter = VK_FILTER_LINEAR;
-            vkCmdBlitImage2(cmd, &bi);
-
-            s = std::max(s / 2, 1);
+            s = (int32_t)dstSide;
         }
 
         // mip 链生成完毕。把所有 mip 一次性转回 SHADER_READ_ONLY_OPTIMAL：

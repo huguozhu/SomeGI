@@ -343,9 +343,9 @@ void D3D12RHICommandBuffer::blitTexture(const RHITexture& src, const RHITexture&
     srcBox.left = region.srcOffsetX;
     srcBox.top = region.srcOffsetY;
     srcBox.front = region.srcOffsetZ;
-    srcBox.right = region.srcOffsetX + region.extentWidth;
-    srcBox.bottom = region.srcOffsetY + region.extentHeight;
-    srcBox.back = region.srcOffsetZ + region.extentDepth;
+    srcBox.right = region.srcOffsetX + region.srcExtentWidth;
+    srcBox.bottom = region.srcOffsetY + region.srcExtentHeight;
+    srcBox.back = region.srcOffsetZ + region.srcExtentDepth;
 
     m_cmdList->CopyTextureRegion(&dstLoc, region.dstOffsetX, region.dstOffsetY, 0,
                                    &srcLoc, &srcBox);

@@ -216,19 +216,19 @@ void VkRHICommandBuffer::blitTexture(const RHITexture& src, const RHITexture& ds
     blit.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
     blit.srcSubresource.mipLevel = region.srcMipLevel;
     blit.srcSubresource.baseArrayLayer = 0;
-    blit.srcSubresource.layerCount = 1;
+    blit.srcSubresource.layerCount = region.layerCount;
     blit.srcOffsets[0] = {region.srcOffsetX, region.srcOffsetY, region.srcOffsetZ};
-    blit.srcOffsets[1] = {region.srcOffsetX + (int32_t)region.extentWidth,
-                          region.srcOffsetY + (int32_t)region.extentHeight,
-                          region.srcOffsetZ + (int32_t)region.extentDepth};
+    blit.srcOffsets[1] = {region.srcOffsetX + (int32_t)region.srcExtentWidth,
+                          region.srcOffsetY + (int32_t)region.srcExtentHeight,
+                          region.srcOffsetZ + (int32_t)region.srcExtentDepth};
     blit.dstSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
     blit.dstSubresource.mipLevel = region.dstMipLevel;
     blit.dstSubresource.baseArrayLayer = 0;
-    blit.dstSubresource.layerCount = 1;
+    blit.dstSubresource.layerCount = region.layerCount;
     blit.dstOffsets[0] = {region.dstOffsetX, region.dstOffsetY, region.dstOffsetZ};
-    blit.dstOffsets[1] = {region.dstOffsetX + (int32_t)region.extentWidth,
-                          region.dstOffsetY + (int32_t)region.extentHeight,
-                          region.dstOffsetZ + (int32_t)region.extentDepth};
+    blit.dstOffsets[1] = {region.dstOffsetX + (int32_t)region.dstExtentWidth,
+                          region.dstOffsetY + (int32_t)region.dstExtentHeight,
+                          region.dstOffsetZ + (int32_t)region.dstExtentDepth};
 
     VkBlitImageInfo2 info{VK_STRUCTURE_TYPE_BLIT_IMAGE_INFO_2};
     info.srcImage = (VkImage)(uintptr_t)vkSrc.nativeHandle();
