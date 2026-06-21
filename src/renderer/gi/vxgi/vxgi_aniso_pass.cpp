@@ -24,9 +24,9 @@ void VxgiAnisoPass::init(rhi::RHIDevice& d,uint32_t ml){ m_rhiDevice=&d; m_mipLe
     m_pipeline=d.createComputePSO(pd);
 }
 void VxgiAnisoPass::destroy(){m_sets.clear();m_pipeline.reset();m_setLayout.reset();m_rhiDevice=nullptr;}
-void VxgiAnisoPass::bindResources(const VxgiResources& vxgi){ auto& vkD=static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
-    m_sets[0]->write({{0,rhi::DescriptorType::SampledImage,rhi::VkRHITextureView::createNonOwning(vkD,vxgi.mipView(0)).get()},{1,rhi::DescriptorType::SampledImage,rhi::VkRHITextureView::createNonOwning(vkD,vxgi.mipView(0)).get()},{2,rhi::DescriptorType::StorageImage,rhi::VkRHITextureView::createNonOwning(vkD,vxgi.anisoMipView(1)).get()}});
-    for(uint32_t lv=2;lv<m_mipLevels;++lv) m_sets[lv-1]->write({{0,rhi::DescriptorType::SampledImage,rhi::VkRHITextureView::createNonOwning(vkD,vxgi.mipView(0)).get()},{1,rhi::DescriptorType::SampledImage,rhi::VkRHITextureView::createNonOwning(vkD,vxgi.anisoMipView(lv-1)).get()},{2,rhi::DescriptorType::StorageImage,rhi::VkRHITextureView::createNonOwning(vkD,vxgi.anisoMipView(lv)).get()}});
+void VxgiAnisoPass::bindResources(const VxgiResources& vxgi){
+    m_sets[0]->write({{0,rhi::DescriptorType::SampledImage,vxgi.mipView(0)},{1,rhi::DescriptorType::SampledImage,vxgi.mipView(0)},{2,rhi::DescriptorType::StorageImage,vxgi.anisoMipView(1)}});
+    for(uint32_t lv=2;lv<m_mipLevels;++lv) m_sets[lv-1]->write({{0,rhi::DescriptorType::SampledImage,vxgi.mipView(0)},{1,rhi::DescriptorType::SampledImage,vxgi.anisoMipView(lv-1)},{2,rhi::DescriptorType::StorageImage,vxgi.anisoMipView(lv)}});
 }
 void VxgiAnisoPass::record(rhi::RHICommandBuffer& cmd,const VxgiResources& vxgi){
     if(!m_pipeline)return;

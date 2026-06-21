@@ -91,6 +91,12 @@ std::unique_ptr<RHITextureView> VkRHITexture::createView(const TextureViewDesc& 
 }
 
 // View
+std::unique_ptr<RHITextureView> VkRHITextureView::createNonOwning(VkDevice device, const VkImageViewCreateInfo& ci) {
+    auto v = std::unique_ptr<VkRHITextureView>(new VkRHITextureView(device));
+    vkCreateImageView(device, &ci, nullptr, &v->m_view);
+    return v;
+}
+
 std::unique_ptr<RHITextureView> VkRHITextureView::create(VkRHIDevice& device, const RHITexture& tex, const TextureViewDesc& desc) {
     auto v = std::unique_ptr<VkRHITextureView>(new VkRHITextureView(device));
     VkImageViewCreateInfo ci{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
@@ -103,7 +109,7 @@ std::unique_ptr<RHITextureView> VkRHITextureView::create(VkRHIDevice& device, co
 }
 
 VkRHITextureView::~VkRHITextureView() {
-    if (m_view && m_ownsView) vkDestroyImageView(m_device.vkDevice(), m_view, nullptr);
+    if (m_view && m_ownsView) vkDestroyImageView(m_vkDev, m_view, nullptr);
 }
 
 } // namespace rhi

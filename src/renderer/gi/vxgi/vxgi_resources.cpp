@@ -1,5 +1,6 @@
 #include "renderer/gi/vxgi/vxgi_resources.h"
 #include "core/device.h"
+#include "rhi/vulkan/vk_texture.h"
 
 namespace somegi {
 
@@ -36,7 +37,7 @@ void VxgiResources::create(Device& d, uint32_t resolution) {
         vi.viewType = VK_IMAGE_VIEW_TYPE_3D;
         vi.format = desc.format;
         vi.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, i, 1, 0, 1};
-        VK_CHECK(vkCreateImageView(d.device(), &vi, nullptr, &m_mipViews[i]));
+        m_mipViews[i] = rhi::VkRHITextureView::createNonOwning(d.device(), vi);
     }
 
     // B.6 各向异性 alpha：与 voxelGrid 同分辨率 + mip 数。RGBA16F：
@@ -58,7 +59,7 @@ void VxgiResources::create(Device& d, uint32_t resolution) {
         vi.viewType = VK_IMAGE_VIEW_TYPE_3D;
         vi.format = adesc.format;
         vi.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, i, 1, 0, 1};
-        VK_CHECK(vkCreateImageView(d.device(), &vi, nullptr, &m_anisoMipViews[i]));
+        m_anisoMipViews[i] = rhi::VkRHITextureView::createNonOwning(d.device(), vi);
     }
 
     // C.2 relight scratch：单 mip RGBA16F 128³ ≈ 16 MB
@@ -104,12 +105,7 @@ void VxgiResources::destroySixAxis() {
 
 void VxgiResources::destroy() {
     if (!m_device) return;
-    for (auto v : m_mipViews) {
-        if (v) vkDestroyImageView(m_device->device(), v, nullptr);
-    }
-    for (auto v : m_anisoMipViews) {
-        if (v) vkDestroyImageView(m_device->device(), v, nullptr);
-    }
+    // unique_ptr reset 自动销毁 VkImageView（通过 RHI VkRHITextureView 析构）
     m_mipViews.clear();
     m_anisoMipViews.clear();
     m_image.reset();

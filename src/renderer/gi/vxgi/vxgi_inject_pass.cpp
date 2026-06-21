@@ -27,7 +27,7 @@ void VxgiInjectPass::init(rhi::RHIDevice& d,uint32_t rs){ m_rhiDevice=&d; m_rsmS
 }
 void VxgiInjectPass::destroy(){ m_set.reset(); m_pipeline.reset(); m_setLayout.reset(); m_rhiDevice=nullptr; }
 void VxgiInjectPass::bindResources(VkImageView rsmPosView,VkImageView rsmFluxView,const VxgiResources& vxgi){ auto& vkD=static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
-    m_set->write({{0,rhi::DescriptorType::SampledImage,rhi::VkRHITextureView::createNonOwning(vkD,rsmPosView).get()},{1,rhi::DescriptorType::SampledImage,rhi::VkRHITextureView::createNonOwning(vkD,rsmFluxView).get()},{2,rhi::DescriptorType::StorageImage,rhi::VkRHITextureView::createNonOwning(vkD,vxgi.mipView(0)).get()}});
+    m_set->write({{0,rhi::DescriptorType::SampledImage,rhi::VkRHITextureView::createNonOwning(vkD,rsmPosView).get()},{1,rhi::DescriptorType::SampledImage,rhi::VkRHITextureView::createNonOwning(vkD,rsmFluxView).get()},{2,rhi::DescriptorType::StorageImage,vxgi.mipView(0)}});
 }
 void VxgiInjectPass::record(rhi::RHICommandBuffer& cmd,uint32_t gr,const glm::vec3& gm,float cs){ if(!m_pipeline||!m_set)return;
     cmd.bindPipelineState(*m_pipeline); cmd.bindDescriptorSet(0,*m_set);

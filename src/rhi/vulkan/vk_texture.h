@@ -47,7 +47,7 @@ private:
 
 class VkRHITextureView : public RHITextureView {
 public:
-    VkRHITextureView(VkRHIDevice& d) : m_device(d) {}
+    VkRHITextureView(VkRHIDevice& d) : m_vkDev(d.vkDevice()) {}
     static std::unique_ptr<RHITextureView> create(VkRHIDevice& device, const RHITexture& tex, const TextureViewDesc& desc);
     // 非拥有型包装：析构时不销毁 VkImageView（用于 FGResources 资源池包装）
     static std::unique_ptr<RHITextureView> createNonOwning(VkRHIDevice& device, VkImageView view) {
@@ -56,12 +56,16 @@ public:
         v->m_view = view;
         return v;
     }
+    // 从原生 Vulkan 句柄创建并拥有 VkImageView（适配仍用原生 VkImage 的旧代码路径）
+    // 内部调用 vkCreateImageView，析构时自动 vkDestroyImageView
+    static std::unique_ptr<RHITextureView> createNonOwning(VkDevice device, const VkImageViewCreateInfo& ci);
     ~VkRHITextureView() override;
     void* nativeHandle() const override { return (void*)m_view; }
     void setView(VkImageView v) { m_view = v; }
     VkImageView vkView() const { return m_view; }
 private:
-    VkRHIDevice& m_device;
+    VkRHITextureView(VkDevice d) : m_vkDev(d) {}
+    VkDevice m_vkDev = VK_NULL_HANDLE;
     VkImageView m_view = VK_NULL_HANDLE;
     bool m_ownsView = true;
 };

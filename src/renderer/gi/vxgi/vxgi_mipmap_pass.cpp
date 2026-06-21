@@ -37,11 +37,10 @@ void VxgiMipmapPass::init(rhi::RHIDevice& d, uint32_t mipLevels) {
 void VxgiMipmapPass::destroy() { m_sets.clear(); m_pipeline.reset(); m_setLayout.reset(); m_rhiDevice=nullptr; }
 
 void VxgiMipmapPass::bindResources(const VxgiResources& vxgi) {
-    auto& vkD=static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
     for(uint32_t lv=1;lv<m_mipLevels;++lv){
         m_sets[lv-1]->write({
-            {0,rhi::DescriptorType::SampledImage,rhi::VkRHITextureView::createNonOwning(vkD,vxgi.mipView(lv-1)).get()},
-            {1,rhi::DescriptorType::StorageImage,rhi::VkRHITextureView::createNonOwning(vkD,vxgi.mipView(lv)).get()},
+            {0,rhi::DescriptorType::SampledImage,vxgi.mipView(lv-1)},
+            {1,rhi::DescriptorType::StorageImage,vxgi.mipView(lv)},
         });
     }
 }
