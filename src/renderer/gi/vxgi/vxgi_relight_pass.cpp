@@ -43,12 +43,4 @@ void VxgiRelightPass::record(rhi::RHICommandBuffer& cmd,const rhi::RHIDescriptor
     cmd.pushConstants(rhi::ShaderStage::Compute, &pc, sizeof(pc));
     cmd.dispatch((gr+3)/4, (gr+3)/4, (gr+3)/4);
 }
-// Vk 兼容路径（因 VkDescriptorSet 无法转换为 RHIDescriptorSet&，保留原生实现）
-void VxgiRelightPass::record(VkCommandBuffer vkCmd,VkDescriptorSet set,uint32_t gr,uint32_t ml,float cs,const glm::vec3& gm,float bs){
-    auto& vkPso=static_cast<rhi::VkRHIPipelineState&>(*m_pipeline);
-    vkCmdBindPipeline(vkCmd,VK_PIPELINE_BIND_POINT_COMPUTE,(VkPipeline)(uintptr_t)vkPso.nativeHandle());
-    vkCmdBindDescriptorSets(vkCmd,VK_PIPELINE_BIND_POINT_COMPUTE,vkPso.layout(),0,1,&set,0,nullptr);
-    RelightPC pc{gr,ml,cs,bs,gm.x,gm.y,gm.z}; vkCmdPushConstants(vkCmd,vkPso.layout(),VK_SHADER_STAGE_COMPUTE_BIT,0,sizeof(pc),&pc);
-    vkCmdDispatch(vkCmd,(gr+3)/4,(gr+3)/4,(gr+3)/4);
-}
 } // namespace somegi

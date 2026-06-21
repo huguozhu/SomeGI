@@ -1007,9 +1007,12 @@ void FrameRenderer::registerPipelineSteps() {
                 VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
                 VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                 VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
-            vxgiRelight().record(cmd, vxgiRelight().voxelSet(), kVxgiResolution,
-                vxgi().mipLevels(), vxgiCellSize(), vxgiGridMin(),
-                vxgiRelightStrength());
+            {
+                rhi::VkRHICommandBuffer rhiCmd(static_cast<rhi::VkRHIDevice&>(*rhiDevice()), cmd);
+                vxgiRelight().record(rhiCmd, vxgiRelight().voxelSet(), kVxgiResolution,
+                    vxgi().mipLevels(), vxgiCellSize(), vxgiGridMin(),
+                    vxgiRelightStrength());
+            }
 
             if (bounces >= 2) {
                 transImg(vxgi().relightScratch().image(),
@@ -1025,9 +1028,12 @@ void FrameRenderer::registerPipelineSteps() {
                     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                     VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
                 // Bounce 2: read scratch → write scratch2
-                vxgiRelight().record(cmd, vxgiRelight().pingSet0(), kVxgiResolution,
-                    vxgi().mipLevels(), vxgiCellSize(), vxgiGridMin(),
-                    vxgiRelightStrength());
+                {
+                    rhi::VkRHICommandBuffer rhiCmd(static_cast<rhi::VkRHIDevice&>(*rhiDevice()), cmd);
+                    vxgiRelight().record(rhiCmd, vxgiRelight().pingSet0(), kVxgiResolution,
+                        vxgi().mipLevels(), vxgiCellSize(), vxgiGridMin(),
+                        vxgiRelightStrength());
+                }
 
                 if (bounces >= 3) {
                     transImg(vxgi().relightScratch2().image(),
@@ -1045,9 +1051,12 @@ void FrameRenderer::registerPipelineSteps() {
                         VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                         VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
                     // Bounce 3: read scratch2 → write scratch
-                    vxgiRelight().record(cmd, vxgiRelight().pingSet1(), kVxgiResolution,
-                        vxgi().mipLevels(), vxgiCellSize(), vxgiGridMin(),
-                        vxgiRelightStrength());
+                    {
+                        rhi::VkRHICommandBuffer rhiCmd(static_cast<rhi::VkRHIDevice&>(*rhiDevice()), cmd);
+                        vxgiRelight().record(rhiCmd, vxgiRelight().pingSet1(), kVxgiResolution,
+                            vxgi().mipLevels(), vxgiCellSize(), vxgiGridMin(),
+                            vxgiRelightStrength());
+                    }
                     blitScratchToVoxel(vxgi().relightScratch().image());
                 } else {
                     blitScratchToVoxel(vxgi().relightScratch2().image());

@@ -395,10 +395,13 @@ void App::setupFrameGraph() {
                         VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
                         VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                         VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
-                    m_renderer.vxgiRelight().record(cmd, m_renderer.vxgiRelight().voxelSet(),
-                        m_renderer.kVxgiResolution, m_renderer.vxgi().mipLevels(),
-                        m_renderer.vxgiCellSize(), m_renderer.vxgiGridMin(),
-                        m_renderer.vxgiRelightStrength());
+                    {
+                        rhi::VkRHICommandBuffer rhiCmd(static_cast<rhi::VkRHIDevice&>(*m_renderer.rhiDevice()), cmd);
+                        m_renderer.vxgiRelight().record(rhiCmd, m_renderer.vxgiRelight().voxelSet(),
+                            m_renderer.kVxgiResolution, m_renderer.vxgi().mipLevels(),
+                            m_renderer.vxgiCellSize(), m_renderer.vxgiGridMin(),
+                            m_renderer.vxgiRelightStrength());
+                    }
 
                     if (bounces >= 2) {
                         transImg(m_renderer.vxgi().relightScratch().image(),
@@ -414,10 +417,13 @@ void App::setupFrameGraph() {
                             VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                             VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
                         // Bounce 2: read scratch → write scratch2
-                        m_renderer.vxgiRelight().record(cmd, m_renderer.vxgiRelight().pingSet0(),
-                            m_renderer.kVxgiResolution, m_renderer.vxgi().mipLevels(),
-                            m_renderer.vxgiCellSize(), m_renderer.vxgiGridMin(),
-                            m_renderer.vxgiRelightStrength());
+                        {
+                            rhi::VkRHICommandBuffer rhiCmd(static_cast<rhi::VkRHIDevice&>(*m_renderer.rhiDevice()), cmd);
+                            m_renderer.vxgiRelight().record(rhiCmd, m_renderer.vxgiRelight().pingSet0(),
+                                m_renderer.kVxgiResolution, m_renderer.vxgi().mipLevels(),
+                                m_renderer.vxgiCellSize(), m_renderer.vxgiGridMin(),
+                                m_renderer.vxgiRelightStrength());
+                        }
 
                         if (bounces >= 3) {
                             transImg(m_renderer.vxgi().relightScratch2().image(),
@@ -435,10 +441,13 @@ void App::setupFrameGraph() {
                                 VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                                 VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
                             // Bounce 3: read scratch2 → write scratch
-                            m_renderer.vxgiRelight().record(cmd, m_renderer.vxgiRelight().pingSet1(),
-                                m_renderer.kVxgiResolution, m_renderer.vxgi().mipLevels(),
-                                m_renderer.vxgiCellSize(), m_renderer.vxgiGridMin(),
-                                m_renderer.vxgiRelightStrength());
+                            {
+                                rhi::VkRHICommandBuffer rhiCmd(static_cast<rhi::VkRHIDevice&>(*m_renderer.rhiDevice()), cmd);
+                                m_renderer.vxgiRelight().record(rhiCmd, m_renderer.vxgiRelight().pingSet1(),
+                                    m_renderer.kVxgiResolution, m_renderer.vxgi().mipLevels(),
+                                    m_renderer.vxgiCellSize(), m_renderer.vxgiGridMin(),
+                                    m_renderer.vxgiRelightStrength());
+                            }
                             blitScratchToVoxel(m_renderer.vxgi().relightScratch().image());
                         } else {
                             blitScratchToVoxel(m_renderer.vxgi().relightScratch2().image());
