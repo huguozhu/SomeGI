@@ -632,7 +632,7 @@ void App::onSwapchainResized() {
     // L.2：swapchain resize 后 probe atlas 重建。
     if (m_renderer.rtSupported()) {
         m_renderer.lumen().destroy();
-        m_renderer.lumen().create(*m_device, m_swap->extent());
+        m_renderer.lumen().create(*m_device, *m_renderer.rhiDevice(), m_swap->extent());
         m_renderer.lumenAtlasInited() = false;
         m_renderer.lumenOutInited()  = false;
         if (m_renderer.lumenProbeInited()) {
