@@ -97,6 +97,14 @@ public:
     virtual void clearColor(const RHITexture& tex, float r, float g, float b, float a) = 0;
     virtual void clearDepth(const RHITexture& tex, float depth, uint32_t stencil = 0) = 0;
 
+    // ── 复制（高级） ──
+    // Buffer → Texture 复制（上传纹理数据）
+    virtual void copyBufferToTexture(const RHIBuffer& src, const RHITexture& dst,
+                                      const BufferTextureCopyRegion& region) = 0;
+    // Texture → Texture Blit（mip 生成 / 缩放 / 格式转换）
+    virtual void blitTexture(const RHITexture& src, const RHITexture& dst,
+                              const TextureBlitRegion& region) = 0;
+
     // ── Barrier ──
     // 纹理屏障（自动推断阶段和访问掩码）
     virtual void textureBarrier(const RHITexture& tex, TextureLayout oldLayout, TextureLayout newLayout) = 0;

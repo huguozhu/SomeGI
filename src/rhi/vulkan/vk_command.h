@@ -71,6 +71,12 @@ public:
     void clearColor(const RHITexture& tex, float r, float g, float b, float a) override;
     void clearDepth(const RHITexture& tex, float depth, uint32_t stencil = 0) override;
 
+    // 复制（高级）
+    void copyBufferToTexture(const RHIBuffer& src, const RHITexture& dst,
+                              const BufferTextureCopyRegion& region) override;
+    void blitTexture(const RHITexture& src, const RHITexture& dst,
+                      const TextureBlitRegion& region) override;
+
     // Barrier
     void textureBarrier(const RHITexture& tex, TextureLayout oldLayout, TextureLayout newLayout) override;
     void bufferBarrier(const RHIBuffer& buf,

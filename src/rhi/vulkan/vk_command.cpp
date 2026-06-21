@@ -181,6 +181,67 @@ void VkRHICommandBuffer::copyTexture(const RHITexture& src, const RHITexture& ds
 void VkRHICommandBuffer::fillBuffer(const RHIBuffer& dst, uint64_t offset, uint64_t size, uint32_t data) {
     vkCmdFillBuffer(m_cmd, (VkBuffer)(uintptr_t)dst.nativeHandle(), offset, size, data);
 }
+void VkRHICommandBuffer::copyBufferToTexture(const RHIBuffer& src, const RHITexture& dst,
+                                               const BufferTextureCopyRegion& region) {
+    auto& vkSrc = static_cast<const VkRHIBuffer&>(src);
+    auto& vkDst = static_cast<const VkRHITexture&>(dst);
+
+    VkBufferImageCopy2 copy{VK_STRUCTURE_TYPE_BUFFER_IMAGE_COPY_2};
+    copy.bufferOffset = region.bufferOffset;
+    copy.bufferRowLength = region.bufferRowLength;
+    copy.bufferImageHeight = region.bufferImageHeight;
+    copy.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    copy.imageSubresource.mipLevel = region.texMipLevel;
+    copy.imageSubresource.baseArrayLayer = region.texArrayLayer;
+    copy.imageSubresource.layerCount = 1;
+    copy.imageOffset = {region.texOffsetX, region.texOffsetY, region.texOffsetZ};
+    copy.imageExtent = {region.extentWidth, region.extentHeight, region.extentDepth};
+
+    VkCopyBufferToImageInfo2 info{VK_STRUCTURE_TYPE_COPY_BUFFER_TO_IMAGE_INFO_2};
+    info.srcBuffer = (VkBuffer)(uintptr_t)vkSrc.nativeHandle();
+    info.dstImage = (VkImage)(uintptr_t)vkDst.nativeHandle();
+    info.dstImageLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    info.regionCount = 1;
+    info.pRegions = &copy;
+
+    vkCmdCopyBufferToImage2(m_cmd, &info);
+}
+
+void VkRHICommandBuffer::blitTexture(const RHITexture& src, const RHITexture& dst,
+                                       const TextureBlitRegion& region) {
+    auto& vkSrc = static_cast<const VkRHITexture&>(src);
+    auto& vkDst = static_cast<const VkRHITexture&>(dst);
+
+    VkImageBlit2 blit{VK_STRUCTURE_TYPE_IMAGE_BLIT_2};
+    blit.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    blit.srcSubresource.mipLevel = region.srcMipLevel;
+    blit.srcSubresource.baseArrayLayer = 0;
+    blit.srcSubresource.layerCount = 1;
+    blit.srcOffsets[0] = {region.srcOffsetX, region.srcOffsetY, region.srcOffsetZ};
+    blit.srcOffsets[1] = {region.srcOffsetX + (int32_t)region.extentWidth,
+                          region.srcOffsetY + (int32_t)region.extentHeight,
+                          region.srcOffsetZ + (int32_t)region.extentDepth};
+    blit.dstSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    blit.dstSubresource.mipLevel = region.dstMipLevel;
+    blit.dstSubresource.baseArrayLayer = 0;
+    blit.dstSubresource.layerCount = 1;
+    blit.dstOffsets[0] = {region.dstOffsetX, region.dstOffsetY, region.dstOffsetZ};
+    blit.dstOffsets[1] = {region.dstOffsetX + (int32_t)region.extentWidth,
+                          region.dstOffsetY + (int32_t)region.extentHeight,
+                          region.dstOffsetZ + (int32_t)region.extentDepth};
+
+    VkBlitImageInfo2 info{VK_STRUCTURE_TYPE_BLIT_IMAGE_INFO_2};
+    info.srcImage = (VkImage)(uintptr_t)vkSrc.nativeHandle();
+    info.srcImageLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    info.dstImage = (VkImage)(uintptr_t)vkDst.nativeHandle();
+    info.dstImageLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    info.regionCount = 1;
+    info.pRegions = &blit;
+    info.filter = region.linearFilter ? VK_FILTER_LINEAR : VK_FILTER_NEAREST;
+
+    vkCmdBlitImage2(m_cmd, &info);
+}
+
 void VkRHICommandBuffer::clearColor(const RHITexture& tex, float r, float g, float b, float a) {
     VkClearColorValue cv{r, g, b, a};
     VkImageSubresourceRange range{toVkAspect(tex.format()), 0, tex.mipLevels(), 0, 1};

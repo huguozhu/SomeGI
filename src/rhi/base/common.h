@@ -30,6 +30,36 @@ enum class Format : uint32_t {
 };
 
 // ════════════════════════════════════════════════════════════════
+// Buffer → Texture 复制区域描述
+// ════════════════════════════════════════════════════════════════
+struct BufferTextureCopyRegion {
+    uint64_t bufferOffset = 0;       // 源 buffer 偏移（字节）
+    uint32_t bufferRowLength = 0;    // 行字节数（0 = 使用 extent.width * 像素字节）
+    uint32_t bufferImageHeight = 0;  // 图像高度（0 = 使用 extent.height）
+    uint32_t texMipLevel = 0;        // 目标 mip level
+    uint32_t texArrayLayer = 0;      // 目标 array layer
+    int32_t texOffsetX = 0;          // 目标纹理偏移 X
+    int32_t texOffsetY = 0;          // 目标纹理偏移 Y
+    int32_t texOffsetZ = 0;          // 目标纹理偏移 Z
+    uint32_t extentWidth = 0;        // 复制宽度
+    uint32_t extentHeight = 1;       // 复制高度
+    uint32_t extentDepth = 1;        // 复制深度
+};
+
+// ════════════════════════════════════════════════════════════════
+// Texture → Texture Blit 区域描述
+// ════════════════════════════════════════════════════════════════
+struct TextureBlitRegion {
+    uint32_t srcMipLevel = 0;
+    int32_t srcOffsetX = 0, srcOffsetY = 0, srcOffsetZ = 0;
+    uint32_t dstMipLevel = 0;
+    int32_t dstOffsetX = 0, dstOffsetY = 0, dstOffsetZ = 0;
+    uint32_t extentWidth = 0, extentHeight = 1, extentDepth = 1;
+    // Filter: Linear (for mipmap generation) or Nearest (for integer formats)
+    bool linearFilter = true;
+};
+
+// ════════════════════════════════════════════════════════════════
 // Buffer
 // ════════════════════════════════════════════════════════════════
 enum class BufferUsage : uint32_t {

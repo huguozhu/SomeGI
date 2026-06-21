@@ -286,6 +286,71 @@ void D3D12RHICommandBuffer::fillBuffer(const RHIBuffer& dst, uint64_t offset,
     m_fillUploadBuf->Unmap(0, nullptr);
     m_cmdList->CopyBufferRegion(d3dBuf.resource(), offset, m_fillUploadBuf, 0, size);
 }
+void D3D12RHICommandBuffer::copyBufferToTexture(const RHIBuffer& src, const RHITexture& dst,
+                                                  const BufferTextureCopyRegion& region) {
+    auto& d3dSrc = static_cast<const D3D12RHIBuffer&>(src);
+    auto& d3dDst = static_cast<const D3D12RHITexture&>(dst);
+
+    D3D12_TEXTURE_COPY_LOCATION dstLoc{};
+    dstLoc.pResource = d3dDst.resource();
+    dstLoc.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+    dstLoc.SubresourceIndex = region.texMipLevel;
+
+    D3D12_TEXTURE_COPY_LOCATION srcLoc{};
+    srcLoc.pResource = d3dSrc.resource();
+    srcLoc.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+
+    // 查询目标纹理在指定 mip level 的布局
+    auto* device = m_device.device();
+    D3D12_RESOURCE_DESC dstDesc = d3dDst.resource()->GetDesc();
+
+    UINT numRows = 0;
+    UINT64 rowSizeBytes = 0;
+    UINT64 totalBytes = 0;
+    device->GetCopyableFootprints(&dstDesc, region.texMipLevel, 1,
+                                    region.bufferOffset,
+                                    &srcLoc.PlacedFootprint, &numRows, &rowSizeBytes, &totalBytes);
+
+    srcLoc.PlacedFootprint.Offset = region.bufferOffset;
+    srcLoc.PlacedFootprint.Footprint.Width = region.extentWidth;
+    srcLoc.PlacedFootprint.Footprint.Height = region.extentHeight;
+    srcLoc.PlacedFootprint.Footprint.Depth = region.extentDepth;
+    srcLoc.PlacedFootprint.Footprint.RowPitch = region.bufferRowLength > 0
+        ? region.bufferRowLength : rowSizeBytes;
+
+    m_cmdList->CopyTextureRegion(&dstLoc, region.texOffsetX, region.texOffsetY, 0,
+                                   &srcLoc, nullptr);
+}
+
+void D3D12RHICommandBuffer::blitTexture(const RHITexture& src, const RHITexture& dst,
+                                          const TextureBlitRegion& region) {
+    // D3D12 没有直接的 blit API。使用 CopyTextureRegion 进行整个子资源的复制。
+    // 带 linear filtering 的 mip 生成无法在此完成 —— 调用者应使用 compute shader。
+    auto& d3dSrc = static_cast<const D3D12RHITexture&>(src);
+    auto& d3dDst = static_cast<const D3D12RHITexture&>(dst);
+
+    D3D12_TEXTURE_COPY_LOCATION srcLoc{};
+    srcLoc.pResource = d3dSrc.resource();
+    srcLoc.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+    srcLoc.SubresourceIndex = region.srcMipLevel;
+
+    D3D12_TEXTURE_COPY_LOCATION dstLoc{};
+    dstLoc.pResource = d3dDst.resource();
+    dstLoc.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+    dstLoc.SubresourceIndex = region.dstMipLevel;
+
+    D3D12_BOX srcBox{};
+    srcBox.left = region.srcOffsetX;
+    srcBox.top = region.srcOffsetY;
+    srcBox.front = region.srcOffsetZ;
+    srcBox.right = region.srcOffsetX + region.extentWidth;
+    srcBox.bottom = region.srcOffsetY + region.extentHeight;
+    srcBox.back = region.srcOffsetZ + region.extentDepth;
+
+    m_cmdList->CopyTextureRegion(&dstLoc, region.dstOffsetX, region.dstOffsetY, 0,
+                                   &srcLoc, &srcBox);
+}
+
 void D3D12RHICommandBuffer::clearColor(const RHITexture& tex,
                                         float r, float g, float b, float a) {
     auto& d3dTex = static_cast<const D3D12RHITexture&>(tex);
