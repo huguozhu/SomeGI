@@ -21,8 +21,8 @@ LightingPass::~LightingPass() = default;
 // ════════════════════════════════════════════════════════════════
 // Init
 // ════════════════════════════════════════════════════════════════
-void LightingPass::init(Device& d, rhi::RHIDevice& rhiDevice) {
-    m_device = &d; m_rhiDevice = &rhiDevice;
+void LightingPass::init(rhi::RHIDevice& rhiDevice) {
+    m_rhiDevice = &rhiDevice;
     auto& vkD = static_cast<rhi::VkRHIDevice&>(rhiDevice);
 
     // ── set=0 layout (34 bindings, UPDATE_AFTER_BIND on shadowMask@33) ──
@@ -75,9 +75,8 @@ void LightingPass::init(Device& d, rhi::RHIDevice& rhiDevice) {
         rhi::SamplerAddressMode::ClampToEdge, rhi::SamplerAddressMode::ClampToEdge, 0.f});
 
     // ── NDGI dummy buffer ──
-    m_dummyBuf = Buffer(d, 4, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-    *static_cast<float*>(m_dummyBuf.mapped()) = 0.0f;
+    m_dummyBuf = rhiDevice.createBuffer({4, rhi::BufferUsage::Storage, rhi::MemoryType::HostVisible});
+    *static_cast<float*>(m_dummyBuf->map()) = 0.0f;
 
     // ── IBL set=1 layout ──
     {
@@ -109,36 +108,28 @@ void LightingPass::init(Device& d, rhi::RHIDevice& rhiDevice) {
 // Destroy
 // ════════════════════════════════════════════════════════════════
 void LightingPass::destroy() {
-    if (!m_device) return;
+    if (!m_rhiDevice) return;
     m_pipeline.reset(); m_set.reset(); m_setLayout.reset();
     m_iblSet.reset(); m_iblDsl.reset();
     m_lpvSampler.reset();
     m_iblParamsUbo.reset(); m_dummyBuf.reset();
-    m_device = nullptr; m_rhiDevice = nullptr;
+    m_rhiDevice = nullptr;
 }
-
-// ════════════════════════════════════════════════════════════════
-// Vk 桥接工具
-// ════════════════════════════════════════════════════════════════
-static VkDescriptorSet VkSet(auto& p) { return (VkDescriptorSet)(uintptr_t)p->nativeHandle(); }
-static VkPipelineLayout VkLay(auto& p) { return static_cast<rhi::VkRHIPipelineState&>(*p).layout(); }
 
 // ════════════════════════════════════════════════════════════════
 // bindIblResources
 // ════════════════════════════════════════════════════════════════
-void LightingPass::bindIblResources(Device& d, const IblResources& ibl) {
+void LightingPass::bindIblResources(const IblResources& ibl) {
     auto& vkD = static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
     m_iblSet = m_rhiDevice->createDescriptorSet(*m_iblDsl);
 
     struct IblParams { float intensity; float _pad0,_pad1,_pad2; };
-    m_iblParamsUbo = Buffer(d, sizeof(IblParams),
-        VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
-        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    m_iblParamsUbo = m_rhiDevice->createBuffer({sizeof(IblParams), rhi::BufferUsage::Uniform, rhi::MemoryType::HostVisible});
 
     auto diffV = rhi::VkRHITextureView::createNonOwning(vkD, ibl.diffuseCube.view());
     auto specV = rhi::VkRHITextureView::createNonOwning(vkD, ibl.specularCube.view());
     auto lutV  = rhi::VkRHITextureView::createNonOwning(vkD, ibl.brdfLut.view());
-    auto uboB  = rhi::VkRHIBuffer::createNonOwning(vkD, m_iblParamsUbo.handle(), sizeof(IblParams));
+    auto uboB  = rhi::VkRHIBuffer::createNonOwning(vkD, (VkBuffer)(uintptr_t)m_iblParamsUbo->nativeHandle(), sizeof(IblParams));
     auto ibs   = rhi::VkRHISampler::createNonOwning(vkD, ibl.linear);
 
     m_iblSet->write({
@@ -151,21 +142,21 @@ void LightingPass::bindIblResources(Device& d, const IblResources& ibl) {
 
     IblParams params{};
     params.intensity = m_iblIntensity;
-    std::memcpy(m_iblParamsUbo.mapped(), &params, sizeof(params));
+    std::memcpy(m_iblParamsUbo->map(), &params, sizeof(params));
 }
 
 void LightingPass::setIblIntensity(float v) {
     m_iblIntensity = v;
-    if (m_iblParamsUbo.mapped()) {
+    if (m_iblParamsUbo && m_iblParamsUbo->map()) {
         struct IblParams { float intensity; float _pad0,_pad1,_pad2; } p{v};
-        std::memcpy(m_iblParamsUbo.mapped(), &p, sizeof(p));
+        std::memcpy(m_iblParamsUbo->map(), &p, sizeof(p));
     }
 }
 
 // ════════════════════════════════════════════════════════════════
 // bindFrame (set=0, 34 writes — 桥接 Vk 写描述符)
 // ════════════════════════════════════════════════════════════════
-void LightingPass::bindFrame(Device& d, const RenderTargets& rt, VkBuffer frameUbo,
+void LightingPass::bindFrame(const RenderTargets& rt, VkBuffer frameUbo,
                               const LpvGrid& lpv0, const VxgiResources& vxgi,
                               const PrtResources& prt, const DdgiResources& ddgi,
                               VkBuffer ddgiPS) {
@@ -201,7 +192,7 @@ void LightingPass::bindFrame(Device& d, const RenderTargets& rt, VkBuffer frameU
     auto lpS   = rhi::VkRHISampler::createNonOwning(vkD, (VkSampler)(uintptr_t)m_lpvSampler->nativeHandle());
 
     // NDGI 权重（6 SSBO），b27-32 初始占位
-    auto dumB  = rhi::VkRHIBuffer::createNonOwning(vkD, m_dummyBuf.handle(), 4);
+    auto dumB  = rhi::VkRHIBuffer::createNonOwning(vkD, (VkBuffer)(uintptr_t)m_dummyBuf->nativeHandle(), 4);
     m_set->write({
         {0, rhi::DescriptorType::UniformBuffer, nullptr, uboF.get()},
         {1, rhi::DescriptorType::SampledImage, abV.get()},
@@ -242,7 +233,7 @@ void LightingPass::bindFrame(Device& d, const RenderTargets& rt, VkBuffer frameU
 // ════════════════════════════════════════════════════════════════
 // bindShadowMask (set=0, binding 33)
 // ════════════════════════════════════════════════════════════════
-void LightingPass::bindShadowMask(Device&, VkImageView v) {
+void LightingPass::bindShadowMask(VkImageView v) {
     if (!m_set) return;
     m_shadowMaskView = v;
     auto& vkD = static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
@@ -253,7 +244,7 @@ void LightingPass::bindShadowMask(Device&, VkImageView v) {
 // ════════════════════════════════════════════════════════════════
 // setNdgiWeights (set=0, bindings 27-32)
 // ════════════════════════════════════════════════════════════════
-void LightingPass::setNdgiWeights(Device&, VkBuffer w1,VkBuffer b1,
+void LightingPass::setNdgiWeights(VkBuffer w1,VkBuffer b1,
                                    VkBuffer w2,VkBuffer b2,VkBuffer w3,VkBuffer b3) {
     if (!m_set) return;
     auto& vkD = static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
@@ -291,17 +282,6 @@ void LightingPass::record(rhi::RHICommandBuffer& cmd, const RenderTargets& rt) {
     // dispatch
     uint32_t gx = (rt.extent.width + 7) / 8, gy = (rt.extent.height + 7) / 8;
     cmd.dispatch(gx, gy, 1);
-}
-
-void LightingPass::record(VkCommandBuffer vkCmd, const RenderTargets& rt) {
-    if (!m_pipeline || !m_set || !m_iblSet) return;
-    VkDescriptorSet ds[2] = {VkSet(m_set), VkSet(m_iblSet)};
-    vkCmdBindPipeline(vkCmd, VK_PIPELINE_BIND_POINT_COMPUTE, (VkPipeline)(uintptr_t)m_pipeline->nativeHandle());
-    vkCmdBindDescriptorSets(vkCmd, VK_PIPELINE_BIND_POINT_COMPUTE, VkLay(m_pipeline), 0, 2, ds, 0, nullptr);
-    LightingPC pc{rt.extent.width, rt.extent.height, 1.f/rt.extent.width, 1.f/rt.extent.height};
-    vkCmdPushConstants(vkCmd, VkLay(m_pipeline), VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
-    uint32_t gx = (rt.extent.width + 7) / 8, gy = (rt.extent.height + 7) / 8;
-    vkCmdDispatch(vkCmd, gx, gy, 1);
 }
 
 } // namespace somegi
