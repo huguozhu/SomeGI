@@ -1,15 +1,11 @@
 // SkyboxPass —— Graphics PSO 天空盒，已迁移到 RHI（首个 Graphics PSO 验证）。
 #pragma once
-#include "core/buffer.h"
 #include "rhi/base/sampler.h"
 #include "renderer/core/render_targets.h"
 #include <glm/glm.hpp>
 #include <memory>
-#include <vulkan/vulkan.h>
 
 namespace somegi {
-
-class Device;
 
 namespace rhi {
 class RHIDevice;
@@ -17,35 +13,33 @@ class RHIDescriptorSetLayout;
 class RHIPipelineState;
 class RHIDescriptorSet;
 class RHICommandBuffer;
+class RHIBuffer;
+class RHITextureView;
 }
 
 class SkyboxPass {
 public:
     ~SkyboxPass();
-    void init(Device& d, rhi::RHIDevice& rhiDevice, VkFormat colorFmt, VkFormat depthFmt);
+    void init(rhi::RHIDevice& d, rhi::Format colorFmt, rhi::Format depthFmt);
     void destroy();
 
-    void bindEnv(VkImageView envCubeView, VkSampler linearSampler);
-    void bindEnvRHI(VkImageView envCubeView, rhi::RHISampler& linearSampler);
+    void bindEnv(const rhi::RHITextureView& envCubeView, const rhi::RHISampler& linearSampler);
+    void bindEnvRHI(const rhi::RHITextureView& envCubeView, const rhi::RHISampler& linearSampler);
     void updateFrame(const glm::mat4& invViewProj, const glm::vec3& cameraPos);
 
     // RHI 路径
     void record(rhi::RHICommandBuffer& cmd, const RenderTargets& rt);
-    // 兼容 VkCommandBuffer
-    void record(VkCommandBuffer cmd, const RenderTargets& rt);
 
 private:
-    Device* m_device = nullptr;
     rhi::RHIDevice* m_rhiDevice = nullptr;
 
     std::unique_ptr<rhi::RHIDescriptorSetLayout> m_setLayout;
     std::unique_ptr<rhi::RHIPipelineState>       m_pipeline;
     std::unique_ptr<rhi::RHIDescriptorSet>        m_set;
 
-    Buffer m_ubo;
-    std::unique_ptr<rhi::RHISampler> m_sampler;
-    VkFormat m_colorFmt = VK_FORMAT_UNDEFINED;
-    VkFormat m_depthFmt = VK_FORMAT_UNDEFINED;
+    std::unique_ptr<rhi::RHIBuffer> m_ubo;
+    rhi::Format m_colorFmt = rhi::Format::Unknown;
+    rhi::Format m_depthFmt = rhi::Format::Unknown;
 };
 
 } // namespace somegi

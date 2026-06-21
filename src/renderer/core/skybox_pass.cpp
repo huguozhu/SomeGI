@@ -2,42 +2,27 @@
 // 全屏三角形由 SV_VertexID 生成（无顶点输入）。
 
 #include "renderer/core/skybox_pass.h"
-#include "core/device.h"
 #include "rhi/base/device.h"
+#include "rhi/base/buffer.h"
 #include "rhi/base/descriptor.h"
 #include "rhi/base/pipeline_state.h"
 #include "rhi/base/command_buffer.h"
 #include "rhi/vulkan/vk_device.h"
 #include "rhi/vulkan/vk_shader.h"
 #include "rhi/vulkan/vk_texture.h"
-#include "rhi/vulkan/vk_buffer.h"
 #include "rhi/vulkan/vk_command.h"
-#include "rhi/vulkan/vk_sampler.h"
 #include "core/shader.h"
-#include <array>
 #include <cstring>
 
 namespace somegi {
 
 namespace {
 struct SkyUbo { glm::mat4 invViewProj; glm::vec4 cameraPos; };
-
-static rhi::Format toRhiFormat(VkFormat f) {
-    switch (f) {
-        case VK_FORMAT_R16G16B16A16_SFLOAT: return rhi::Format::R16G16B16A16_SFLOAT;
-        case VK_FORMAT_R32_SFLOAT:          return rhi::Format::R32_SFLOAT;
-        case VK_FORMAT_D32_SFLOAT:          return rhi::Format::D32_SFLOAT;
-        case VK_FORMAT_B8G8R8A8_UNORM:      return rhi::Format::B8G8R8A8_UNORM;
-        case VK_FORMAT_R8G8B8A8_UNORM:      return rhi::Format::R8G8B8A8_UNORM;
-        default: return rhi::Format::Unknown;
-    }
-}
 }
 
 SkyboxPass::~SkyboxPass() = default;
 
-void SkyboxPass::init(Device& d, rhi::RHIDevice& rhiDevice, VkFormat colorFmt, VkFormat depthFmt) {
-    m_device = &d;
+void SkyboxPass::init(rhi::RHIDevice& rhiDevice, rhi::Format colorFmt, rhi::Format depthFmt) {
     m_rhiDevice = &rhiDevice;
     m_colorFmt = colorFmt;
     m_depthFmt = depthFmt;
@@ -57,9 +42,14 @@ void SkyboxPass::init(Device& d, rhi::RHIDevice& rhiDevice, VkFormat colorFmt, V
     m_set = rhiDevice.createDescriptorSet(*m_setLayout);
 
     // ── UBO ──
-    m_ubo = Buffer(d, sizeof(SkyUbo),
-        VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
-        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    {
+        rhi::BufferDesc uboDesc;
+        uboDesc.size = sizeof(SkyUbo);
+        uboDesc.usage = rhi::BufferUsage::Uniform;
+        uboDesc.memory = rhi::MemoryType::HostVisible;
+        uboDesc.debugName = "SkyboxUBO";
+        m_ubo = rhiDevice.createBuffer(uboDesc);
+    }
 
     // ── Shaders（同一 SPV 文件，不同入口点） ──
     auto spvPath = shaderDir() / "skybox" / "skybox.spv";
@@ -80,15 +70,14 @@ void SkyboxPass::init(Device& d, rhi::RHIDevice& rhiDevice, VkFormat colorFmt, V
     psoDesc.depthStencil.depthTest  = true;
     psoDesc.depthStencil.depthWrite = false;
     psoDesc.depthStencil.depthCompare = rhi::CompareFunc::LessEqual;
-    psoDesc.renderTargets.colorFormats = {toRhiFormat(colorFmt)};
-    psoDesc.renderTargets.depthFormat  = toRhiFormat(depthFmt);
+    psoDesc.renderTargets.colorFormats = {colorFmt};
+    psoDesc.renderTargets.depthFormat  = depthFmt;
     psoDesc.renderTargets.sampleCount  = 1;
     psoDesc.descriptorSetLayouts = {m_setLayout.get()};
     m_pipeline = rhiDevice.createGraphicsPSO(psoDesc);
 
     // ── 初始 UBO 绑定 ──
-    auto uboRHI = rhi::VkRHIBuffer::createNonOwning(vkDevice, m_ubo.handle(), sizeof(SkyUbo));
-    m_set->write({{0, rhi::DescriptorType::UniformBuffer, nullptr, uboRHI.get()}});
+    m_set->write({{0, rhi::DescriptorType::UniformBuffer, nullptr, m_ubo.get()}});
 }
 
 void SkyboxPass::destroy() {
@@ -96,31 +85,21 @@ void SkyboxPass::destroy() {
     m_pipeline.reset();
     m_setLayout.reset();
     m_ubo.reset();
-    m_device = nullptr;
     m_rhiDevice = nullptr;
 }
 
-void SkyboxPass::bindEnv(VkImageView envCubeView, VkSampler linearSampler) {
+void SkyboxPass::bindEnv(const rhi::RHITextureView& envCubeView, const rhi::RHISampler& linearSampler) {
     if (!m_set) return;
-    auto& vkDevice = static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
-    m_sampler = rhi::VkRHISampler::createNonOwning(vkDevice, linearSampler);
-
-    auto cubeView = rhi::VkRHITextureView::createNonOwning(vkDevice, envCubeView);
     m_set->write({
-        {1, rhi::DescriptorType::SampledImage, cubeView.get()},
-        {2, rhi::DescriptorType::Sampler, nullptr, nullptr, 0, 0, m_sampler.get()},
+        {1, rhi::DescriptorType::SampledImage, &envCubeView},
+        {2, rhi::DescriptorType::Sampler, nullptr, nullptr, 0, 0, &linearSampler},
     });
 }
-void SkyboxPass::bindEnvRHI(VkImageView envCubeView, rhi::RHISampler& linearSampler) {
+void SkyboxPass::bindEnvRHI(const rhi::RHITextureView& envCubeView, const rhi::RHISampler& linearSampler) {
     if (!m_set) return;
-    m_sampler.reset(&linearSampler);
-    m_sampler.release(); // 不拥有所有权
-
-    auto& vkDev = *m_rhiDevice;
-    auto cubeView = rhi::VkRHITextureView::createNonOwning(static_cast<rhi::VkRHIDevice&>(vkDev), envCubeView);
     m_set->write({
-        {1, rhi::DescriptorType::SampledImage, cubeView.get()},
-        {2, rhi::DescriptorType::Sampler, nullptr, nullptr, 0, 0, m_sampler.get()},
+        {1, rhi::DescriptorType::SampledImage, &envCubeView},
+        {2, rhi::DescriptorType::Sampler, nullptr, nullptr, 0, 0, &linearSampler},
     });
 }
 
@@ -128,7 +107,8 @@ void SkyboxPass::updateFrame(const glm::mat4& invViewProj, const glm::vec3& came
     SkyUbo u{};
     u.invViewProj = invViewProj;
     u.cameraPos = glm::vec4(cameraPos, 0.0f);
-    std::memcpy(m_ubo.mapped(), &u, sizeof(u));
+    std::memcpy(m_ubo->map(), &u, sizeof(u));
+    m_ubo->unmap();
 }
 
 void SkyboxPass::record(rhi::RHICommandBuffer& cmd, const RenderTargets& rt) {
@@ -151,13 +131,6 @@ void SkyboxPass::record(rhi::RHICommandBuffer& cmd, const RenderTargets& rt) {
     cmd.draw(3, 0, 0);  // 全屏三角形
 
     cmd.endRendering();
-}
-
-// 兼容 VkCommandBuffer
-void SkyboxPass::record(VkCommandBuffer vkCmd, const RenderTargets& rt) {
-    auto& vkDev = static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
-    rhi::VkRHICommandBuffer rhiCmd(vkDev, vkCmd);
-    record(rhiCmd, rt);
 }
 
 } // namespace somegi
