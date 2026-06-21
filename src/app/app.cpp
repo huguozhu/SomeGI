@@ -19,6 +19,9 @@
 #include "core/swapchain.h"
 #include "rhi/vulkan/vk_device.h"
 #include "rhi/vulkan/vk_command.h"
+#include "rhi/vulkan/vk_texture.h"
+#include "rhi/vulkan/vk_sampler.h"
+#include "rhi/vulkan/vk_buffer.h"
 #include <GLFW/glfw3.h>
 #include "scene/gltf_loader.h"
 #include "scene/scene_gpu.h"
@@ -156,8 +159,9 @@ App::App() {
     std::printf("[init] env (skybox.hdr) load + bake...\n");
     bakeEnvIbl();
     std::printf("[init] env bake done.\n");
-    m_renderer.skybox().bindEnv(m_renderer.envIbl().envCube.view(),
-                                m_renderer.envIbl().linear);
+    auto envView = rhi::VkRHITextureView::createNonOwning(static_cast<rhi::VkRHIDevice&>(*m_renderer.rhiDevice()), m_renderer.envIbl().envCube.view());
+    auto envSampler = rhi::VkRHISampler::createNonOwning(static_cast<rhi::VkRHIDevice&>(*m_renderer.rhiDevice()), m_renderer.envIbl().linear);
+    m_renderer.skybox().bindEnv(*envView, *envSampler);
     m_renderer.lighting().bindIblResources(m_renderer.envIbl());
     m_renderer.forward().bindIblResources(*m_device, m_renderer.envIbl());
     if (m_renderer.useMeshShader())
@@ -1002,19 +1006,23 @@ void App::recordIndirectDraws(VkCommandBuffer cmd, uint32_t frameInFlight, const
     if (m_drawCount == 0) return;
 
     if (m_useGpuCulling) {
+        rhi::VkRHICommandBuffer rhiCmd(static_cast<rhi::VkRHIDevice&>(*m_renderer.rhiDevice()), cmd);
         // Build Hi-Z from previous frame's depth (only if occlusion enabled)
-        if (m_useHiZOcclusion) m_renderer.hizPass().record(cmd, m_renderer.rt());
+        if (m_useHiZOcclusion) m_renderer.hizPass().record(rhiCmd, m_renderer.rt());
 
         // GPU frustum culling (+ Hi-Z occlusion if enabled)
+        auto drawBufWrap = rhi::VkRHIBuffer::createNonOwning(static_cast<rhi::VkRHIDevice&>(*m_renderer.rhiDevice()), m_sceneGpu.drawDataBuffer.handle(), m_sceneGpu.drawDataBuffer.size());
+        auto indirectBufWrap = rhi::VkRHIBuffer::createNonOwning(static_cast<rhi::VkRHIDevice&>(*m_renderer.rhiDevice()), m_indirectBuf.handle(), m_indirectBuf.size());
+        auto countBufWrap = rhi::VkRHIBuffer::createNonOwning(static_cast<rhi::VkRHIDevice&>(*m_renderer.rhiDevice()), m_countBuf.handle(), m_countBuf.size());
         if (m_useHiZOcclusion) {
-            m_renderer.cullPass().record(cmd, m_sceneGpu.drawDataBuffer.handle(),
-                m_drawCount, m_indirectBuf.handle(), m_countBuf.handle(), viewProj,
+            m_renderer.cullPass().record(rhiCmd, *drawBufWrap,
+                m_drawCount, *indirectBufWrap, *countBufWrap, viewProj,
                 m_renderer.rt().extent, frameInFlight,
                 m_renderer.hizPass().mip1View(), m_renderer.hizPass().mip2View(),
                 m_renderer.hizPass().mip3View(), m_renderer.hizPass().mip4View());
         } else {
-            m_renderer.cullPass().record(cmd, m_sceneGpu.drawDataBuffer.handle(),
-                m_drawCount, m_indirectBuf.handle(), m_countBuf.handle(), viewProj,
+            m_renderer.cullPass().record(rhiCmd, *drawBufWrap,
+                m_drawCount, *indirectBufWrap, *countBufWrap, viewProj,
                 m_renderer.rt().extent, frameInFlight);
         }
         m_culledDrawCount = m_drawCount;  // conservative; GPU cull reduces this
@@ -1118,9 +1126,10 @@ void App::recordPostProcessing(VkCommandBuffer cmd) {
                         VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
                         VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
                 } else {
+                    rhi::VkRHICommandBuffer rhiCmd(static_cast<rhi::VkRHIDevice&>(*m_renderer.rhiDevice()), cmd);
                     m_renderer.smaa().bindResources(m_renderer.rt());
                     m_renderer.smaa().bindOutput(m_frameCtx.swapView);
-                    m_renderer.smaa().record(cmd, m_renderer.rt());
+                    m_renderer.smaa().record(rhiCmd, m_renderer.rt());
                 }
                 m_renderer.writeTimestamp(cmd, m_renderer.kTsAA);
             }
@@ -1210,8 +1219,9 @@ void App::recordPostProcessing(VkCommandBuffer cmd) {
                     VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
                     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
             } else {
+                rhi::VkRHICommandBuffer rhiCmd(static_cast<rhi::VkRHIDevice&>(*m_renderer.rhiDevice()), cmd);
                 m_renderer.smaa().bindResources(m_renderer.rt());
-                m_renderer.smaa().record(cmd, m_renderer.rt());
+                m_renderer.smaa().record(rhiCmd, m_renderer.rt());
             }
             m_renderer.writeTimestamp(cmd, m_renderer.kTsAA);
 
@@ -1627,8 +1637,6 @@ void App::runD3D12() {
     auto submitFence = d3dDevice->createFence(false);
 
     // 加载简单三角形 shader（验证图形管线）
-    };
-
     auto loadShader = [&](const char* path, rhi::ShaderStage stage, const char* entry) {
         std::ifstream f(path, std::ios::binary);
         if (!f) { std::fprintf(stderr, "[d3d12] shader not found: %s\n", path); return std::unique_ptr<rhi::RHIShader>(); }

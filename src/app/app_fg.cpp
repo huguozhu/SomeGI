@@ -714,7 +714,8 @@ void App::setupFrameGraph() {
                     VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
 
                 float jitterRot = float((m_renderer.frameIndex() % 360) * 0.0174532925);
-                m_renderer.ddgiPass().record(cmd, m_renderer.ddgi(), m_renderer.ddgiOrigin(), m_renderer.ddgiSpacing(),
+                rhi::VkRHICommandBuffer rhiCmd(static_cast<rhi::VkRHIDevice&>(*m_renderer.rhiDevice()), cmd);
+                m_renderer.ddgiPass().record(rhiCmd, m_renderer.ddgi(), m_renderer.ddgiOrigin(), m_renderer.ddgiSpacing(),
                     m_renderer.vxgiGridMin(), m_renderer.vxgiCellSize(), m_renderer.kVxgiResolution,
                     jitterRot, m_renderer.frameIndex());
 
@@ -776,7 +777,8 @@ void App::setupFrameGraph() {
                     transToGeneral(m_renderer.lumen().filteredAtlas().image());
                     m_renderer.lumenAtlasInited() = true;
                 }
-                m_renderer.lumenProbe().record(cmd, m_renderer.lumen(), m_renderer.frameIndex(),
+                rhi::VkRHICommandBuffer rhiCmd2(static_cast<rhi::VkRHIDevice&>(*m_renderer.rhiDevice()), cmd);
+                m_renderer.lumenProbe().record(rhiCmd2, m_renderer.lumen(), m_renderer.frameIndex(),
                     m_renderer.vxgiSixAxisInited() ? 1u : 0u);
 
                 // ProbeAtlas GENERAL → SR_O for filter
@@ -1180,9 +1182,10 @@ void App::setupFrameGraph() {
                 b.read(m_fgh.aaHdr, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
                 b.write(m_fgh.swapImage, VK_IMAGE_LAYOUT_GENERAL);
                 b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
+                    rhi::VkRHICommandBuffer rhiCmd(static_cast<rhi::VkRHIDevice&>(*m_renderer.rhiDevice()), cmd);
                     m_renderer.smaa().bindResources(m_renderer.rt());
                     m_renderer.smaa().bindOutput(m_frameCtx.swapView);
-                    m_renderer.smaa().record(cmd, m_renderer.rt());
+                    m_renderer.smaa().record(rhiCmd, m_renderer.rt());
                 });
             });
         }
