@@ -1,9 +1,12 @@
 #include "renderer/gi/ddgi/ddgi_resources.h"
 #include "core/device.h"
+#include "rhi/base/device.h"
+#include "rhi/vulkan/vk_texture.h"
+#include "rhi/vulkan/vk_buffer.h"
 
 namespace somegi {
 
-void DdgiResources::create(Device& d) {
+void DdgiResources::create(Device& d, rhi::RHIDevice& rhiD) {
     m_device = &d;
 
     // irradiance atlas: probesX·octaIrr 宽 × probesY·probesZ·octaIrr 高，RGBA16F
@@ -41,6 +44,17 @@ void DdgiResources::create(Device& d) {
             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
             VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
     }
+
+    // RHI non-owning wrappers
+    auto& vkDev = static_cast<rhi::VkRHIDevice&>(rhiD);
+    m_irradianceTex = rhi::VkRHITexture::createNonOwning(vkDev, m_irradiance.image(),
+        rhi::toRhiFormat(VK_FORMAT_R16G16B16A16_SFLOAT), irradianceAtlasW(), irradianceAtlasH());
+    m_irradianceView = rhi::VkRHITextureView::createNonOwning(vkDev, m_irradiance.view());
+    m_distanceTex = rhi::VkRHITexture::createNonOwning(vkDev, m_distance.image(),
+        rhi::toRhiFormat(VK_FORMAT_R16G16_SFLOAT), distanceAtlasW(), distanceAtlasH());
+    m_distanceView = rhi::VkRHITextureView::createNonOwning(vkDev, m_distance.view());
+    m_rayBufferRhi = rhi::VkRHIBuffer::createNonOwning(vkDev, m_rayBuffer.handle(), m_rayBuffer.size());
+    m_probeStatesRhi = rhi::VkRHIBuffer::createNonOwning(vkDev, m_probeStates.handle(), m_probeStates.size());
 }
 
 void DdgiResources::destroy() {
@@ -48,6 +62,10 @@ void DdgiResources::destroy() {
     m_distance.reset();
     m_rayBuffer.reset();
     m_probeStates.reset();
+    m_irradianceTex.reset(); m_irradianceView.reset();
+    m_distanceTex.reset(); m_distanceView.reset();
+    m_rayBufferRhi.reset();
+    m_probeStatesRhi.reset();
     m_device = nullptr;
 }
 

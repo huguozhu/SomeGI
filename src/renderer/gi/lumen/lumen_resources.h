@@ -1,6 +1,9 @@
 #pragma once
 #include "core/image.h"
 #include "core/buffer.h"
+#include "rhi/base/texture.h"
+#include "rhi/base/buffer.h"
+#include <memory>
 
 // LumenResources —— L 阶段 Lumen-lite 的屏幕 probe atlas + ray buffer。
 //
@@ -17,6 +20,7 @@
 
 namespace somegi {
 class Device;
+namespace rhi { class RHIDevice; }
 
 class LumenResources {
 public:
@@ -24,13 +28,21 @@ public:
     static constexpr uint32_t kRaysPerProbe   = 48;
     static constexpr uint32_t kSHCoeffs       = 9;   // SH9 = 3 bands
 
-    void create(Device& d, VkExtent2D screenExt);
+    void create(Device& d, rhi::RHIDevice& rhiD, VkExtent2D screenExt);
     void destroy();
 
     const Image&  probeAtlas()    const { return m_probeAtlas; }
     const Image&  filteredAtlas() const { return m_filteredAtlas; }
     const Image&  prevAtlas()     const { return m_prevAtlas; }
     const Buffer& rayBuffer()     const { return m_rayBuffer; }
+
+    rhi::RHITexture* probeAtlasRhiTex() const { return m_probeAtlasTex.get(); }
+    rhi::RHITextureView* probeAtlasRhiView() const { return m_probeAtlasView.get(); }
+    rhi::RHITexture* filteredAtlasRhiTex() const { return m_filteredAtlasTex.get(); }
+    rhi::RHITextureView* filteredAtlasRhiView() const { return m_filteredAtlasView.get(); }
+    rhi::RHITexture* prevAtlasRhiTex() const { return m_prevAtlasTex.get(); }
+    rhi::RHITextureView* prevAtlasRhiView() const { return m_prevAtlasView.get(); }
+    rhi::RHIBuffer* rayBufferRhi() const { return m_rayBufferRhi.get(); }
 
     uint32_t probeGridW()  const { return m_probeGridW; }
     uint32_t probeGridH()  const { return m_probeGridH; }
@@ -47,6 +59,14 @@ private:
     Image  m_filteredAtlas;
     Image  m_prevAtlas;
     Buffer m_rayBuffer;
+
+    std::unique_ptr<rhi::RHITexture> m_probeAtlasTex;
+    std::unique_ptr<rhi::RHITextureView> m_probeAtlasView;
+    std::unique_ptr<rhi::RHITexture> m_filteredAtlasTex;
+    std::unique_ptr<rhi::RHITextureView> m_filteredAtlasView;
+    std::unique_ptr<rhi::RHITexture> m_prevAtlasTex;
+    std::unique_ptr<rhi::RHITextureView> m_prevAtlasView;
+    std::unique_ptr<rhi::RHIBuffer> m_rayBufferRhi;
 
     uint32_t m_probeGridW = 0;
     uint32_t m_probeGridH = 0;

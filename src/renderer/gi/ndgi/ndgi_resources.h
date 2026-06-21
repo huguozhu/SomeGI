@@ -1,6 +1,7 @@
 #pragma once
 #include "core/buffer.h"
-#include "core/image.h"
+#include "rhi/base/buffer.h"
+#include <memory>
 
 // NDGI (Neural Dynamic Global Illumination) 资源
 //
@@ -17,6 +18,7 @@
 
 namespace somegi {
 class Device;
+namespace rhi { class RHIDevice; }
 
 class NdgiResources {
 public:
@@ -56,7 +58,7 @@ public:
     static constexpr uint32_t kMaxSamples = kProbeCount * kRaysPerProbe; // 8192
     static constexpr uint32_t kSampleBufferFloats = kMaxSamples * kSampleFloats; // 73728
 
-    void create(Device& d);
+    void create(Device& d, rhi::RHIDevice& rhiD);
     void destroy();
 
     // 权重 buffer（训练更新、推理读取）
@@ -71,11 +73,23 @@ public:
     const Buffer& sampleBuf()    const { return m_sampleBuf; }
     const Buffer& sampleCount()  const { return m_sampleCount; }
 
+    rhi::RHIBuffer* rhiWeights1() const { return m_rhiW1.get(); }
+    rhi::RHIBuffer* rhiBias1()    const { return m_rhiB1.get(); }
+    rhi::RHIBuffer* rhiWeights2() const { return m_rhiW2.get(); }
+    rhi::RHIBuffer* rhiBias2()    const { return m_rhiB2.get(); }
+    rhi::RHIBuffer* rhiWeights3() const { return m_rhiW3.get(); }
+    rhi::RHIBuffer* rhiBias3()    const { return m_rhiB3.get(); }
+    rhi::RHIBuffer* rhiSampleBuf()   const { return m_rhiSampleBuf.get(); }
+    rhi::RHIBuffer* rhiSampleCount() const { return m_rhiSampleCount.get(); }
+
 private:
     Device* m_device = nullptr;
     Buffer m_w1, m_b1, m_w2, m_b2, m_w3, m_b3;
     Buffer m_sampleBuf;
     Buffer m_sampleCount;
+    std::unique_ptr<rhi::RHIBuffer> m_rhiW1, m_rhiB1, m_rhiW2, m_rhiB2, m_rhiW3, m_rhiB3;
+    std::unique_ptr<rhi::RHIBuffer> m_rhiSampleBuf;
+    std::unique_ptr<rhi::RHIBuffer> m_rhiSampleCount;
 };
 
 } // namespace somegi

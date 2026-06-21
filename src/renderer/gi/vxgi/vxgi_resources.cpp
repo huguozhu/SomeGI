@@ -1,5 +1,6 @@
 #include "renderer/gi/vxgi/vxgi_resources.h"
 #include "core/device.h"
+#include "rhi/base/device.h"
 #include "rhi/vulkan/vk_texture.h"
 
 namespace somegi {
@@ -12,7 +13,7 @@ uint32_t mipCountForExtent(uint32_t e) {
 }
 }
 
-void VxgiResources::create(Device& d, uint32_t resolution) {
+void VxgiResources::create(Device& d, rhi::RHIDevice& rhiD, uint32_t resolution) {
     m_device = &d;
     m_resolution = resolution;
     uint32_t mips = mipCountForExtent(resolution);
@@ -28,6 +29,12 @@ void VxgiResources::create(Device& d, uint32_t resolution) {
                | VK_IMAGE_USAGE_SAMPLED_BIT
                | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
     m_image = Image(d, desc);
+
+    // RHI non-owning texture + full view for the main voxel image
+    auto& vkDev = static_cast<rhi::VkRHIDevice&>(rhiD);
+    auto fmt = rhi::toRhiFormat(desc.format);
+    m_imageTex = rhi::VkRHITexture::createNonOwning(vkDev, m_image.image(), fmt, resolution, resolution, mips);
+    m_imageView = rhi::VkRHITextureView::createNonOwning(vkDev, m_image.view());
 
     // per-mip storage view —— 写 RWTexture3D 时必须指定单独 mip。
     m_mipViews.resize(mips);
@@ -52,6 +59,10 @@ void VxgiResources::create(Device& d, uint32_t resolution) {
                 | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
     m_aniso = Image(d, adesc);
 
+    // RHI non-owning wrappers for aniso
+    m_anisoTex = rhi::VkRHITexture::createNonOwning(vkDev, m_aniso.image(), fmt, resolution, resolution, mips);
+    m_anisoView = rhi::VkRHITextureView::createNonOwning(vkDev, m_aniso.view());
+
     m_anisoMipViews.resize(mips);
     for (uint32_t i = 0; i < mips; ++i) {
         VkImageViewCreateInfo vi{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
@@ -72,6 +83,10 @@ void VxgiResources::create(Device& d, uint32_t resolution) {
                 | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
     m_relightScratch = Image(d, sdesc);
 
+    // RHI wrappers for relight scratch
+    m_relightScratchTex = rhi::VkRHITexture::createNonOwning(vkDev, m_relightScratch.image(), fmt, resolution, resolution);
+    m_relightScratchView = rhi::VkRHITextureView::createNonOwning(vkDev, m_relightScratch.view());
+
     // L.3a second scratch for multi-bounce ping-pong
     ImageDesc sdesc2{};
     sdesc2.format = VK_FORMAT_R16G16B16A16_SFLOAT;
@@ -81,9 +96,13 @@ void VxgiResources::create(Device& d, uint32_t resolution) {
                  | VK_IMAGE_USAGE_SAMPLED_BIT
                  | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
     m_relightScratch2 = Image(d, sdesc2);
+
+    // RHI wrappers for second scratch
+    m_relightScratch2Tex = rhi::VkRHITexture::createNonOwning(vkDev, m_relightScratch2.image(), fmt, resolution, resolution);
+    m_relightScratch2View = rhi::VkRHITextureView::createNonOwning(vkDev, m_relightScratch2.view());
 }
 
-void VxgiResources::createSixAxis(Device& d) {
+void VxgiResources::createSixAxis(Device& d, rhi::RHIDevice& rhiD) {
     if (m_hasSixAxis) return;
     ImageDesc ax{};
     ax.format = VK_FORMAT_R16G16B16A16_SFLOAT;
@@ -93,6 +112,16 @@ void VxgiResources::createSixAxis(Device& d) {
     m_sixAxisX = Image(d, ax);
     m_sixAxisY = Image(d, ax);
     m_sixAxisZ = Image(d, ax);
+
+    // RHI non-owning wrappers
+    auto& vkDev = static_cast<rhi::VkRHIDevice&>(rhiD);
+    auto fmt = rhi::toRhiFormat(ax.format);
+    m_sixAxisXTex = rhi::VkRHITexture::createNonOwning(vkDev, m_sixAxisX.image(), fmt, m_resolution, m_resolution);
+    m_sixAxisXView = rhi::VkRHITextureView::createNonOwning(vkDev, m_sixAxisX.view());
+    m_sixAxisYTex = rhi::VkRHITexture::createNonOwning(vkDev, m_sixAxisY.image(), fmt, m_resolution, m_resolution);
+    m_sixAxisYView = rhi::VkRHITextureView::createNonOwning(vkDev, m_sixAxisY.view());
+    m_sixAxisZTex = rhi::VkRHITexture::createNonOwning(vkDev, m_sixAxisZ.image(), fmt, m_resolution, m_resolution);
+    m_sixAxisZView = rhi::VkRHITextureView::createNonOwning(vkDev, m_sixAxisZ.view());
     m_hasSixAxis = true;
 }
 
@@ -100,6 +129,9 @@ void VxgiResources::destroySixAxis() {
     m_sixAxisX.reset();
     m_sixAxisY.reset();
     m_sixAxisZ.reset();
+    m_sixAxisXTex.reset(); m_sixAxisXView.reset();
+    m_sixAxisYTex.reset(); m_sixAxisYView.reset();
+    m_sixAxisZTex.reset(); m_sixAxisZView.reset();
     m_hasSixAxis = false;
 }
 
@@ -109,9 +141,13 @@ void VxgiResources::destroy() {
     m_mipViews.clear();
     m_anisoMipViews.clear();
     m_image.reset();
+    m_imageTex.reset(); m_imageView.reset();
     m_aniso.reset();
+    m_anisoTex.reset(); m_anisoView.reset();
     m_relightScratch.reset();
+    m_relightScratchTex.reset(); m_relightScratchView.reset();
     m_relightScratch2.reset();
+    m_relightScratch2Tex.reset(); m_relightScratch2View.reset();
     m_resolution = 0;
     m_device = nullptr;
 }

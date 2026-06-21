@@ -1,6 +1,9 @@
 #pragma once
 #include "core/buffer.h"
 #include "core/image.h"
+#include "rhi/base/texture.h"
+#include "rhi/base/buffer.h"
+#include <memory>
 
 // DdgiResources —— Majercik 2019 DDGI（Dynamic Diffuse Global Illumination）
 // 的 probe atlas + ray buffer。
@@ -18,6 +21,7 @@
 
 namespace somegi {
 class Device;
+namespace rhi { class RHIDevice; }
 
 class DdgiResources {
 public:
@@ -29,13 +33,20 @@ public:
     static constexpr uint32_t kOctaDist = 16;     // distance/visibility 边长
     static constexpr uint32_t kRaysPerProbe = 64; // 每帧每 probe 投多少 ray
 
-    void create(Device& d);
+    void create(Device& d, rhi::RHIDevice& rhiD);
     void destroy();
 
     const Image& irradiance() const { return m_irradiance; }
     const Image& distance() const { return m_distance; }
     const Buffer& rayBuffer() const { return m_rayBuffer; }
     const Buffer& probeStates() const { return m_probeStates; }
+
+    rhi::RHITexture* irradianceRhiTex() const { return m_irradianceTex.get(); }
+    rhi::RHITextureView* irradianceRhiView() const { return m_irradianceView.get(); }
+    rhi::RHITexture* distanceRhiTex() const { return m_distanceTex.get(); }
+    rhi::RHITextureView* distanceRhiView() const { return m_distanceView.get(); }
+    rhi::RHIBuffer* rayBufferRhi() const { return m_rayBufferRhi.get(); }
+    rhi::RHIBuffer* probeStatesRhi() const { return m_probeStatesRhi.get(); }
 
     // atlas 尺寸（lighting 端 sampler UV 计算用）
     static uint32_t irradianceAtlasW() { return kProbesX * kOctaIrr; }
@@ -49,6 +60,13 @@ private:
     Image m_distance;
     Buffer m_rayBuffer;   // probe×ray 共享 SSBO，存 (rayDir+pad, hitRgb+hitDist)
     Buffer m_probeStates; // B.5 classification：每 probe 一个 uint，1=active 0=inactive
+
+    std::unique_ptr<rhi::RHITexture> m_irradianceTex;
+    std::unique_ptr<rhi::RHITextureView> m_irradianceView;
+    std::unique_ptr<rhi::RHITexture> m_distanceTex;
+    std::unique_ptr<rhi::RHITextureView> m_distanceView;
+    std::unique_ptr<rhi::RHIBuffer> m_rayBufferRhi;
+    std::unique_ptr<rhi::RHIBuffer> m_probeStatesRhi;
 };
 
 }

@@ -1,5 +1,7 @@
 #pragma once
 #include "core/image.h"
+#include "rhi/base/texture.h"
+#include <memory>
 
 // PrtResources —— PRT volume visibility transfer SH。
 //
@@ -13,10 +15,11 @@
 
 namespace somegi {
 class Device;
+namespace rhi { class RHIDevice; }
 
 class PrtResources {
 public:
-    void create(Device& d, uint32_t resolution);
+    void create(Device& d, rhi::RHIDevice& rhiD, uint32_t resolution);
     void destroy();
 
     const Image& image()  const { return m_image; }
@@ -29,6 +32,18 @@ public:
     VkImageView viewC() const { return m_imageC.view(); }
     VkImageView viewD() const { return m_imageD.view(); }
     VkImageView viewE() const { return m_imageE.view(); }
+
+    rhi::RHITexture* rhiTex()  const { return m_tex.get(); }
+    rhi::RHITextureView* rhiView()  const { return m_view.get(); }
+    rhi::RHITexture* rhiTexB() const { return m_texB.get(); }
+    rhi::RHITextureView* rhiViewB() const { return m_viewB.get(); }
+    rhi::RHITexture* rhiTexC() const { return m_texC.get(); }
+    rhi::RHITextureView* rhiViewC() const { return m_viewC.get(); }
+    rhi::RHITexture* rhiTexD() const { return m_texD.get(); }
+    rhi::RHITextureView* rhiViewD() const { return m_viewD.get(); }
+    rhi::RHITexture* rhiTexE() const { return m_texE.get(); }
+    rhi::RHITextureView* rhiViewE() const { return m_viewE.get(); }
+
     uint32_t resolution() const { return m_resolution; }
 
 private:
@@ -38,6 +53,8 @@ private:
     Image m_imageC;
     Image m_imageD;
     Image m_imageE;
+    std::unique_ptr<rhi::RHITexture> m_tex, m_texB, m_texC, m_texD, m_texE;
+    std::unique_ptr<rhi::RHITextureView> m_view, m_viewB, m_viewC, m_viewD, m_viewE;
     uint32_t m_resolution = 0;
 };
 

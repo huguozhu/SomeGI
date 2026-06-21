@@ -1,8 +1,11 @@
 #pragma once
 #include "core/image.h"
 #include "core/buffer.h"
+#include "rhi/base/texture.h"
+#include "rhi/base/buffer.h"
 #include <glm/glm.hpp>
 #include <vector>
+#include <memory>
 
 // RestirResources —— C.4 ReSTIR DI 资源。
 //
@@ -16,6 +19,7 @@
 
 namespace somegi {
 class Device;
+namespace rhi { class RHIDevice; }
 
 struct PointLightCpu {
     glm::vec3 pos;
@@ -28,7 +32,7 @@ static_assert(sizeof(PointLightCpu) == 32,
 
 class RestirResources {
 public:
-    void create(Device& d, VkExtent2D screenExtent, uint32_t maxLights);
+    void create(Device& d, rhi::RHIDevice& rhiD, VkExtent2D screenExtent, uint32_t maxLights);
     void destroy();
     void resize(Device& d, VkExtent2D newExtent);   // 只重建 reservoir，light 不变
 
@@ -43,13 +47,25 @@ public:
     uint32_t maxLights() const { return m_maxLights; }
     uint32_t currentLightCount() const { return m_lightCount; }
 
+    rhi::RHITexture* reservoirARhiTex() const { return m_reservoirATex.get(); }
+    rhi::RHITextureView* reservoirARhiView() const { return m_reservoirAView.get(); }
+    rhi::RHITexture* reservoirBRhiTex() const { return m_reservoirBTex.get(); }
+    rhi::RHITextureView* reservoirBRhiView() const { return m_reservoirBView.get(); }
+    rhi::RHIBuffer* lightBufRhi() const { return m_lightBufRhi.get(); }
+
 private:
     void createReservoirImages(Device& d, VkExtent2D ext);
 
     Device* m_device = nullptr;
+    rhi::RHIDevice* m_rhiDevice = nullptr;
     Image m_reservoirA;
     Image m_reservoirB;
     Buffer m_lightBuf;
+    std::unique_ptr<rhi::RHITexture> m_reservoirATex;
+    std::unique_ptr<rhi::RHITextureView> m_reservoirAView;
+    std::unique_ptr<rhi::RHITexture> m_reservoirBTex;
+    std::unique_ptr<rhi::RHITextureView> m_reservoirBView;
+    std::unique_ptr<rhi::RHIBuffer> m_lightBufRhi;
     VkExtent2D m_screenExtent{};
     uint32_t m_maxLights = 0;
     uint32_t m_lightCount = 0;

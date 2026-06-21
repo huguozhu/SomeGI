@@ -1,5 +1,7 @@
 #pragma once
 #include "core/image.h"
+#include "rhi/base/texture.h"
+#include <memory>
 
 // LPV 体素网格 —— 一阶 SH（4 系数）逐通道存到 3 张 RGBA16F 3D image：
 //   lpvR : 红通道的 4 个 SH 系数（c00, c1-1, c10, c11）
@@ -14,19 +16,27 @@
 
 namespace somegi {
 class Device;
+namespace rhi { class RHIDevice; }
 
 struct LpvGrid {
     Image lpvR;
     Image lpvG;
     Image lpvB;
 
-    void create(Device& d, uint32_t resolution);
+    std::unique_ptr<rhi::RHITexture> lpvRTex;
+    std::unique_ptr<rhi::RHITextureView> lpvRView;
+    std::unique_ptr<rhi::RHITexture> lpvGTex;
+    std::unique_ptr<rhi::RHITextureView> lpvGView;
+    std::unique_ptr<rhi::RHITexture> lpvBTex;
+    std::unique_ptr<rhi::RHITextureView> lpvBView;
+
+    void create(Device& d, rhi::RHIDevice& rhiD, uint32_t resolution);
     void destroy();
 };
 
 class LpvResources {
 public:
-    void create(Device& d, uint32_t resolution);
+    void create(Device& d, rhi::RHIDevice& rhiD, uint32_t resolution);
     void destroy();
 
     LpvGrid& current()       { return m_grids[m_curIdx]; }
@@ -40,11 +50,16 @@ public:
     const Image& gv() const { return m_gv; }
     Image& gv()             { return m_gv; }
 
+    rhi::RHITexture* gvRhiTex() const { return m_gvTex.get(); }
+    rhi::RHITextureView* gvRhiView() const { return m_gvView.get(); }
+
     uint32_t resolution() const { return m_resolution; }
 
 private:
     LpvGrid m_grids[2];
     Image m_gv;
+    std::unique_ptr<rhi::RHITexture> m_gvTex;
+    std::unique_ptr<rhi::RHITextureView> m_gvView;
     uint32_t m_curIdx = 0;
     uint32_t m_resolution = 0;
 };

@@ -68,13 +68,13 @@ void FrameRenderer::init(Device& d, VkCommandPool pool, VkExtent2D extent,
 
     // GI resources
     std::printf("[init] lpv resources...\n");
-    m_lpv.create(d, kLpvResolution);
+    m_lpv.create(d, *m_rhiDevice, kLpvResolution);
     std::printf("[init] vxgi resources...\n");
-    m_vxgi.create(d, kVxgiResolution);
+    m_vxgi.create(d, *m_rhiDevice, kVxgiResolution);
     std::printf("[init] prt resources...\n");
-    m_prt.create(d, kPrtResolution);
+    m_prt.create(d, *m_rhiDevice, kPrtResolution);
     std::printf("[init] ddgi resources + pass...\n");
-    m_ddgi.create(d);
+    m_ddgi.create(d, *m_rhiDevice);
     {
         auto& vkDev = static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
         oneShotSubmit(*m_rhiDevice, [&](VkCommandBuffer cmd) {
@@ -87,7 +87,7 @@ void FrameRenderer::init(Device& d, VkCommandPool pool, VkExtent2D extent,
     m_ddgiPass.bindResources(m_ddgi, m_vxgi);
 
     std::printf("[init] ndgi resources + pass...\n");
-    m_ndgi.create(d);
+    m_ndgi.create(d, *m_rhiDevice);
     m_ndgiPass.init(*m_rhiDevice, rtSupported);
     m_ndgiInited = false;
 
@@ -126,12 +126,12 @@ void FrameRenderer::init(Device& d, VkCommandPool pool, VkExtent2D extent,
     m_gtgi.bindFrame(m_rt, m_gbuffer.frameUboHandle());
 
     std::printf("[init] sdfgi resources/pass...\n");
-    m_sdfgi.create(d, kSdfgiResolution);
+    m_sdfgi.create(d, *m_rhiDevice, kSdfgiResolution);
     m_sdfgiPass.init(*m_rhiDevice);
     m_sdfgiPass.bindResources(m_sdfgi, m_vxgi, m_rt, m_gbuffer.frameUboHandle());
 
     std::printf("[init] restir resources/pass...\n");
-    m_restir.create(d, extent, kRestirMaxLights);
+    m_restir.create(d, *m_rhiDevice, extent, kRestirMaxLights);
     m_restirPass.init(*m_rhiDevice, rtSupported);
 
     if (rtSupported) {
@@ -141,7 +141,7 @@ void FrameRenderer::init(Device& d, VkCommandPool pool, VkExtent2D extent,
     }
     if (rtSupported) {
         std::printf("[init] lumen resources...\n");
-        m_lumen.create(d, extent);
+        m_lumen.create(d, *m_rhiDevice, extent);
     }
     m_restirPass.bindResources(m_restir, m_vxgi, m_rt, m_gbuffer.frameUboHandle());
 
@@ -289,7 +289,7 @@ void FrameRenderer::onResize(Device& d, VkExtent2D newExtent,
         m_rsmGeom.position(), m_rsmGeom.normal(), m_rsmGeom.flux());
     if (m_rtSupported) {
         m_lumen.destroy();
-        m_lumen.create(d, newExtent);
+        m_lumen.create(d, *m_rhiDevice, newExtent);
         m_lumenAtlasInited = false;
         m_lumenOutInited = false;
     }

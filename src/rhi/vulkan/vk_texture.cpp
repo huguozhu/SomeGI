@@ -27,9 +27,11 @@ Format toRhiFormat(VkFormat vkFmt) {
     switch (vkFmt) {
         case VK_FORMAT_R8_UNORM:            return Format::R8_UNORM;
         case VK_FORMAT_R8G8B8A8_UNORM:      return Format::R8G8B8A8_UNORM;
+        case VK_FORMAT_R16_SFLOAT:          return Format::R16_SFLOAT;
         case VK_FORMAT_R16G16_SFLOAT:       return Format::R16G16_SFLOAT;
         case VK_FORMAT_R16G16B16A16_SFLOAT: return Format::R16G16B16A16_SFLOAT;
         case VK_FORMAT_R32_UINT:            return Format::R32_UINT;
+        case VK_FORMAT_R32G32B32A32_UINT:   return Format::R32G32B32A32_UINT;
         case VK_FORMAT_R32_SFLOAT:          return Format::R32_SFLOAT;
         case VK_FORMAT_R32G32_SFLOAT:       return Format::R32G32_SFLOAT;
         case VK_FORMAT_D32_SFLOAT:          return Format::D32_SFLOAT;

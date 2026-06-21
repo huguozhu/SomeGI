@@ -1,5 +1,7 @@
 #pragma once
 #include "core/image.h"
+#include "rhi/base/texture.h"
+#include <memory>
 
 // SdfgiResources —— C.3：SDFGI-lite 用的 3D 资源。
 //
@@ -18,10 +20,11 @@
 
 namespace somegi {
 class Device;
+namespace rhi { class RHIDevice; }
 
 class SdfgiResources {
 public:
-    void create(Device& d, uint32_t resolution);
+    void create(Device& d, rhi::RHIDevice& rhiD, uint32_t resolution);
     void destroy();
 
     bool created() const { return m_resolution != 0; }
@@ -31,11 +34,24 @@ public:
     const Image& seedB() const { return m_seedB; }
     const Image& udf()   const { return m_udf;   }
 
+    rhi::RHITexture* seedARhiTex() const { return m_seedATex.get(); }
+    rhi::RHITextureView* seedARhiView() const { return m_seedAView.get(); }
+    rhi::RHITexture* seedBRhiTex() const { return m_seedBTex.get(); }
+    rhi::RHITextureView* seedBRhiView() const { return m_seedBView.get(); }
+    rhi::RHITexture* udfRhiTex() const { return m_udfTex.get(); }
+    rhi::RHITextureView* udfRhiView() const { return m_udfView.get(); }
+
 private:
     Device* m_device = nullptr;
     Image m_seedA;
     Image m_seedB;
     Image m_udf;
+    std::unique_ptr<rhi::RHITexture> m_seedATex;
+    std::unique_ptr<rhi::RHITextureView> m_seedAView;
+    std::unique_ptr<rhi::RHITexture> m_seedBTex;
+    std::unique_ptr<rhi::RHITextureView> m_seedBView;
+    std::unique_ptr<rhi::RHITexture> m_udfTex;
+    std::unique_ptr<rhi::RHITextureView> m_udfView;
     uint32_t m_resolution = 0;
 };
 
