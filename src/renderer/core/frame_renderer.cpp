@@ -54,6 +54,7 @@ void FrameRenderer::init(Device& d, VkCommandPool pool, VkExtent2D extent,
     // Render targets
     std::printf("[init] render targets...\n");
     m_rt.create(d, extent, msaaSamples);
+    m_rt.populateRHITargetsFromImages(*m_rhiDevice);
 
     // Core passes
     std::printf("[init] gbuffer pass...\n");
@@ -271,6 +272,7 @@ void FrameRenderer::onResize(Device& d, VkExtent2D newExtent,
                               VkFormat /*swapchainFmt*/, GLFWwindow* /*window*/) {
     m_rt.destroy();
     m_rt.create(d, newExtent, msaaSamples);
+    m_rt.populateRHITargetsFromImages(*m_rhiDevice);
     m_lighting.bindFrame(m_rt, m_gbuffer.frameUboHandle(),
                          m_lpv.current(), m_vxgi, m_prt, m_ddgi,
                          m_ddgi.probeStates().handle());

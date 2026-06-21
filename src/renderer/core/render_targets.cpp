@@ -2,6 +2,8 @@
 #include "core/device.h"
 #include "rhi/base/device.h"
 #include "rhi/base/texture.h"
+#include "rhi/vulkan/vk_device.h"
+#include "rhi/vulkan/vk_texture.h"
 
 namespace somegi {
 
@@ -226,6 +228,27 @@ void RenderTargets::destroy() {
     lumenGI.reset();
     aaHdr.reset();
     aaHistory.reset();
+
+    // 清除 non-owning RHI 包装（Vulkan 路径），避免 Image 销毁后留下悬空指针
+    rhi.hdrColor.reset();       rhi.hdrColorView.reset();
+    rhi.depth.reset();          rhi.depthView.reset();
+    rhi.ldrTonemap.reset();     rhi.ldrTonemapView.reset();
+    rhi.gAlbedoMetal.reset();   rhi.gAlbedoMetalView.reset();
+    rhi.gNormalRough.reset();   rhi.gNormalRoughView.reset();
+    rhi.gEmissiveAO.reset();    rhi.gEmissiveAOView.reset();
+    rhi.gAlbedoMetalMs.reset(); rhi.gNormalRoughMs.reset();
+    rhi.gEmissiveAOMs.reset();  rhi.depthMs.reset();
+    rhi.ssao.reset();           rhi.ssaoView.reset();
+    rhi.ssr.reset();            rhi.ssrView.reset();
+    rhi.hdrPrev.reset();        rhi.hdrPrevView.reset();
+    rhi.ssgi.reset();           rhi.ssgiView.reset();
+    rhi.ssgiPrev.reset();       rhi.ssgiPrevView.reset();
+    rhi.rsmGI.reset();          rhi.rsmGIView.reset();
+    rhi.restir.reset();         rhi.restirView.reset();
+    rhi.rtGI.reset();           rhi.rtGIView.reset();
+    rhi.lumenGI.reset();        rhi.lumenGIView.reset();
+    rhi.aaHdr.reset();          rhi.aaHdrView.reset();
+    rhi.aaHistory.reset();      rhi.aaHistoryView.reset();
 }
 
 void RenderTargets::createRHI(rhi::RHIDevice& rhiDev, VkExtent2D ext, VkSampleCountFlagBits msaaSamples) {
@@ -343,6 +366,65 @@ void RenderTargets::createRHI(rhi::RHIDevice& rhiDev, VkExtent2D ext, VkSampleCo
     makeAux(rhi::Format::R16G16B16A16_SFLOAT,
         VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
         rhi.aaHistory, rhi.aaHistoryView);
+}
+
+void RenderTargets::populateRHITargetsFromImages(rhi::RHIDevice& rhiDev) {
+    if (rhiDev.backend() != rhi::Backend::Vulkan) return;
+    auto& vkDev = static_cast<rhi::VkRHIDevice&>(rhiDev);
+
+    // 从已有 Vulkan Image 创建 non-owning RHI 纹理 + 视图包装
+    auto wrapTexView = [&](const Image& img,
+                            std::unique_ptr<rhi::RHITexture>& tex,
+                            std::unique_ptr<rhi::RHITextureView>& view) {
+        if (img.image() == VK_NULL_HANDLE) return;
+        auto fmt = rhi::toRhiFormat(img.format());
+        tex = rhi::VkRHITexture::createNonOwning(vkDev, img.image(), fmt,
+                                                   img.extent().width, img.extent().height,
+                                                   img.mipLevels());
+        view = rhi::VkRHITextureView::createNonOwning(vkDev, img.view());
+    };
+
+    auto wrapTex = [&](const Image& img,
+                       std::unique_ptr<rhi::RHITexture>& tex) {
+        if (img.image() == VK_NULL_HANDLE) return;
+        auto fmt = rhi::toRhiFormat(img.format());
+        tex = rhi::VkRHITexture::createNonOwning(vkDev, img.image(), fmt,
+                                                   img.extent().width, img.extent().height,
+                                                   img.mipLevels());
+    };
+
+    // 主 RT
+    wrapTexView(hdrColor, rhi.hdrColor, rhi.hdrColorView);
+    wrapTexView(depth, rhi.depth, rhi.depthView);
+    wrapTexView(ldrTonemap, rhi.ldrTonemap, rhi.ldrTonemapView);
+
+    // GBuffer（单采样）
+    wrapTexView(gAlbedoMetal, rhi.gAlbedoMetal, rhi.gAlbedoMetalView);
+    wrapTexView(gNormalRough, rhi.gNormalRough, rhi.gNormalRoughView);
+    wrapTexView(gEmissiveAO, rhi.gEmissiveAO, rhi.gEmissiveAOView);
+
+    // MSAA（仅纹理，无视图）
+    wrapTex(gAlbedoMetalMs, rhi.gAlbedoMetalMs);
+    wrapTex(gNormalRoughMs, rhi.gNormalRoughMs);
+    wrapTex(gEmissiveAOMs, rhi.gEmissiveAOMs);
+    wrapTex(depthMs, rhi.depthMs);
+
+    // 屏幕空间
+    wrapTexView(ssao, rhi.ssao, rhi.ssaoView);
+    wrapTexView(ssr, rhi.ssr, rhi.ssrView);
+    wrapTexView(hdrPrev, rhi.hdrPrev, rhi.hdrPrevView);
+    wrapTexView(ssgi, rhi.ssgi, rhi.ssgiView);
+    wrapTexView(ssgiPrev, rhi.ssgiPrev, rhi.ssgiPrevView);
+
+    // GI 输出
+    wrapTexView(rsmGI, rhi.rsmGI, rhi.rsmGIView);
+    wrapTexView(restir, rhi.restir, rhi.restirView);
+    wrapTexView(rtGI, rhi.rtGI, rhi.rtGIView);
+    wrapTexView(lumenGI, rhi.lumenGI, rhi.lumenGIView);
+
+    // AA
+    wrapTexView(aaHdr, rhi.aaHdr, rhi.aaHdrView);
+    wrapTexView(aaHistory, rhi.aaHistory, rhi.aaHistoryView);
 }
 
 } // namespace somegi

@@ -70,6 +70,10 @@ struct RenderTargets {
     // D3D12 RHI 纹理创建（与 Vulkan Image 并行）
     void createRHI(rhi::RHIDevice& rhiDev, VkExtent2D ext, VkSampleCountFlagBits msaaSamples);
 
+    // Vulkan 路径：从已创建的 Image 成员构造 non-owning RHI 包装，使 RHI 访问器在
+    // Vulkan 后端也能返回非 null。
+    void populateRHITargetsFromImages(rhi::RHIDevice& rhiDev);
+
     void ensureAaResources(Device& d);
     void destroyAaResources();
 
@@ -90,6 +94,49 @@ struct RenderTargets {
         std::unique_ptr<rhi::RHITextureView> aaHdrView, aaHistoryView;
     };
     RHITargets rhi{};
+
+    // ════════════════════════════════════════════════════════════════
+    // RHI 访问器 —— Vulkan 和 D3D12 双后端均返回非 null（Vulkan 需先调用
+    // populateRHITargetsFromImages）。
+    // ════════════════════════════════════════════════════════════════
+
+    // 纹理视图访问器（用于绑定为 descriptor）
+    rhi::RHITextureView* rhiHdrColorView() const { return rhi.hdrColorView.get(); }
+    rhi::RHITextureView* rhiDepthView() const { return rhi.depthView.get(); }
+    rhi::RHITextureView* rhiLdrTonemapView() const { return rhi.ldrTonemapView.get(); }
+    rhi::RHITextureView* rhiGAlbedoMetalView() const { return rhi.gAlbedoMetalView.get(); }
+    rhi::RHITextureView* rhiGNormalRoughView() const { return rhi.gNormalRoughView.get(); }
+    rhi::RHITextureView* rhiGEmissiveAOView() const { return rhi.gEmissiveAOView.get(); }
+    rhi::RHITextureView* rhiSsaoView() const { return rhi.ssaoView.get(); }
+    rhi::RHITextureView* rhiSsrView() const { return rhi.ssrView.get(); }
+    rhi::RHITextureView* rhiSsgiView() const { return rhi.ssgiView.get(); }
+    rhi::RHITextureView* rhiHdrPrevView() const { return rhi.hdrPrevView.get(); }
+    rhi::RHITextureView* rhiSsgiPrevView() const { return rhi.ssgiPrevView.get(); }
+    rhi::RHITextureView* rhiRsmGIView() const { return rhi.rsmGIView.get(); }
+    rhi::RHITextureView* rhiRestirView() const { return rhi.restirView.get(); }
+    rhi::RHITextureView* rhiRtGIView() const { return rhi.rtGIView.get(); }
+    rhi::RHITextureView* rhiLumenGIView() const { return rhi.lumenGIView.get(); }
+    rhi::RHITextureView* rhiAaHdrView() const { return rhi.aaHdrView.get(); }
+    rhi::RHITextureView* rhiAaHistoryView() const { return rhi.aaHistoryView.get(); }
+
+    // 纹理访问器（用于 barrier、clear、copy 等操作）
+    rhi::RHITexture* rhiHdrColor() const { return rhi.hdrColor.get(); }
+    rhi::RHITexture* rhiDepth() const { return rhi.depth.get(); }
+    rhi::RHITexture* rhiLdrTonemap() const { return rhi.ldrTonemap.get(); }
+    rhi::RHITexture* rhiGAlbedoMetal() const { return rhi.gAlbedoMetal.get(); }
+    rhi::RHITexture* rhiGNormalRough() const { return rhi.gNormalRough.get(); }
+    rhi::RHITexture* rhiGEmissiveAO() const { return rhi.gEmissiveAO.get(); }
+    rhi::RHITexture* rhiSsao() const { return rhi.ssao.get(); }
+    rhi::RHITexture* rhiSsr() const { return rhi.ssr.get(); }
+    rhi::RHITexture* rhiHdrPrev() const { return rhi.hdrPrev.get(); }
+    rhi::RHITexture* rhiSsgi() const { return rhi.ssgi.get(); }
+    rhi::RHITexture* rhiSsgiPrev() const { return rhi.ssgiPrev.get(); }
+    rhi::RHITexture* rhiRsmGI() const { return rhi.rsmGI.get(); }
+    rhi::RHITexture* rhiRestir() const { return rhi.restir.get(); }
+    rhi::RHITexture* rhiRtGI() const { return rhi.rtGI.get(); }
+    rhi::RHITexture* rhiLumenGI() const { return rhi.lumenGI.get(); }
+    rhi::RHITexture* rhiAaHdr() const { return rhi.aaHdr.get(); }
+    rhi::RHITexture* rhiAaHistory() const { return rhi.aaHistory.get(); }
 };
 
 }
