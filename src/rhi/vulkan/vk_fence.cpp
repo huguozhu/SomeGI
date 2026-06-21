@@ -11,7 +11,7 @@ std::unique_ptr<RHIFence> VkRHIFence::create(VkRHIDevice& device, bool signaled)
     vkCreateFence(device.vkDevice(), &ci, nullptr, &f->m_fence);
     return f;
 }
-VkRHIFence::~VkRHIFence() { if (m_fence) vkDestroyFence(m_device.vkDevice(), m_fence, nullptr); }
+VkRHIFence::~VkRHIFence() { if (m_owns && m_fence) vkDestroyFence(m_device.vkDevice(), m_fence, nullptr); }
 void VkRHIFence::wait(uint64_t timeoutNs) { vkWaitForFences(m_device.vkDevice(), 1, &m_fence, VK_TRUE, timeoutNs); }
 void VkRHIFence::reset() { vkResetFences(m_device.vkDevice(), 1, &m_fence); }
 

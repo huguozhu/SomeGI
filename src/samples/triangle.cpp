@@ -99,17 +99,16 @@ int main() {
 
         cmd.end();
 
-        // Submit
+        // Submit (signal the swapchain's inFlight fence for CPU-GPU sync)
+        auto sigFence = rhi::VkRHIFence::createNonOwning(rhiDevice,
+            *static_cast<VkFence*>(frame.inFlightFence));
         rhi::SubmitDesc sd;
         sd.commandBuffer = &cmd;
         sd.waitSemaphore = static_cast<rhi::RHISemaphore*>(frame.imageAvailable);
         sd.signalSemaphore = static_cast<rhi::RHISemaphore*>(frame.renderFinished);
+        sd.signalFence = sigFence.get();
         rhiDevice.submit(sd);
         pSwapchain->present(frame);
-
-        // CPU-GPU sync via swapchain inFlight fence
-        vkWaitForFences(rhiDevice.vkDevice(), 1,
-            static_cast<VkFence*>(frame.inFlightFence), VK_TRUE, UINT64_MAX);
 
         // Free non-owning semaphore wrappers
         delete static_cast<rhi::RHISemaphore*>(frame.imageAvailable);

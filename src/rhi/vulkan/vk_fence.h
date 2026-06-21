@@ -9,6 +9,10 @@ namespace rhi {
 class VkRHIFence : public RHIFence {
 public:
     static std::unique_ptr<RHIFence> create(VkRHIDevice& device, bool signaled);
+    static std::unique_ptr<RHIFence> createNonOwning(VkRHIDevice& device, VkFence fence) {
+        auto f = std::unique_ptr<VkRHIFence>(new VkRHIFence(device));
+        f->m_fence = fence; f->m_owns = false; return f;
+    }
     ~VkRHIFence() override;
     void wait(uint64_t timeoutNs) override;
     void reset() override;
@@ -16,6 +20,7 @@ public:
 private:
     VkRHIDevice& m_device;
     VkFence m_fence = VK_NULL_HANDLE;
+    bool m_owns = true;
     VkRHIFence(VkRHIDevice& d) : m_device(d) {}
 };
 
