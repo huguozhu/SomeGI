@@ -161,7 +161,7 @@ void SceneRtAS::build(Device& d, rhi::RHIDevice& rhiDevice, VkCommandPool pool,
 
     // ---- Step 5: build BLAS one-by-one to avoid TDR ----
     for (uint32_t i = 0; i < primCount; ++i) {
-        oneShotSubmit(d, pool, [&](VkCommandBuffer cmd) {
+        oneShotSubmit(rhiDevice, [&](VkCommandBuffer cmd) {
             VkAccelerationStructureBuildGeometryInfoKHR bi{
                 VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR};
             bi.type          = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
@@ -294,7 +294,7 @@ void SceneRtAS::build(Device& d, rhi::RHIDevice& rhiDevice, VkCommandPool pool,
     m_tlasRHI = rhi::VkRHIAccelerationStructure::createOwning(static_cast<rhi::VkRHIDevice&>(rhiDevice), rawTlas);
 
     // ---- Step 8: build TLAS (one-shot) ----
-    oneShotSubmit(d, pool, [&](VkCommandBuffer cmd) {
+    oneShotSubmit(rhiDevice, [&](VkCommandBuffer cmd) {
         // Copy instances and data.
         VkBufferCopy ic{0, 0, instBufSize};
         vkCmdCopyBuffer(cmd, instStaging.handle(), m_instanceBuf.handle(), 1, &ic);

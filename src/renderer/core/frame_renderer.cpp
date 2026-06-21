@@ -77,7 +77,7 @@ void FrameRenderer::init(Device& d, VkCommandPool pool, VkExtent2D extent,
     m_ddgi.create(d);
     {
         auto& vkDev = static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
-        oneShotSubmit(d, pool, [&](VkCommandBuffer cmd) {
+        oneShotSubmit(*m_rhiDevice, [&](VkCommandBuffer cmd) {
             rhi::VkRHICommandBuffer rhiCmd(vkDev, cmd);
             auto bufWrap = rhi::VkRHIBuffer::createNonOwning(vkDev, m_ddgi.probeStates().handle(), VK_WHOLE_SIZE);
             rhiCmd.fillBuffer(*bufWrap, 0, VK_WHOLE_SIZE, 1u);
@@ -369,7 +369,7 @@ void FrameRenderer::setupGiGrids(const glm::vec3& aabbMin, const glm::vec3& aabb
 
 void FrameRenderer::bootstrapHdrPrev() {
     auto& vkDev = static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
-    oneShotSubmit(*m_device, m_pool, [&](VkCommandBuffer cmd) {
+    oneShotSubmit(*m_rhiDevice, [&](VkCommandBuffer cmd) {
         rhi::VkRHICommandBuffer rhiCmd(vkDev, cmd);
         auto& img = m_rt.hdrPrev;
         rhiCmd.textureBarrier(*wrapImage(img.image(), img.format(), img.extent().width, img.extent().height),
@@ -379,7 +379,7 @@ void FrameRenderer::bootstrapHdrPrev() {
 
 void FrameRenderer::bootstrapSsgiTemporal() {
     auto& vkDev = static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
-    oneShotSubmit(*m_device, m_pool, [&](VkCommandBuffer cmd) {
+    oneShotSubmit(*m_rhiDevice, [&](VkCommandBuffer cmd) {
         rhi::VkRHICommandBuffer rhiCmd(vkDev, cmd);
         const Image* imgs[2] = {&m_rt.ssgi, &m_rt.ssgiPrev};
         for (auto* img : imgs) {
@@ -394,7 +394,7 @@ void FrameRenderer::bootstrapSsgiTemporal() {
 // 各 Pass 首次写入时会自行转换到正确的可写布局。
 void FrameRenderer::bootstrapAllTargets() {
     auto& vkDev = static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
-    oneShotSubmit(*m_device, m_pool, [&](VkCommandBuffer cmd) {
+    oneShotSubmit(*m_rhiDevice, [&](VkCommandBuffer cmd) {
         rhi::VkRHICommandBuffer rhiCmd(vkDev, cmd);
         // 辅助：UNDEFINED → SHADER_READ_ONLY 布局转换（支持多 mip）
         auto transitionFromUndefined = [&](VkImage img, VkFormat fmt, uint32_t w, uint32_t h, uint32_t mips=1) {
@@ -1386,7 +1386,7 @@ void FrameRenderer::debugDumpGBuffer(Device& d, VkCommandPool pool) {
     // 辅助：dump 单个附件（transition→copy→transition back）
     // 注：使用 GENERAL layout 避免要求 TRANSFER_SRC usage
     auto capture = [&](VkImage img, VkFormat fmt, VkImageAspectFlags aspect, const char* name) {
-        oneShotSubmit(d, pool, [&](VkCommandBuffer cmd) {
+        oneShotSubmit(*m_rhiDevice, [&](VkCommandBuffer cmd) {
             VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
             b.srcStageMask  = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
             b.srcAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT;

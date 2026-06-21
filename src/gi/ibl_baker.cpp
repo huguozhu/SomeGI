@@ -90,7 +90,7 @@ VkImage allocCube(Device& d, uint32_t size, uint32_t mips, VkFormat fmt,
 // 转到 SHADER_READ_ONLY_OPTIMAL。后续 equi_to_cube compute kernel 用它
 // 当源采样、写到 envCube 的 mip 0。
 // 由于 RHI 没有 copyBufferToTexture，此函数保留原生 Vulkan。
-Image uploadEquirect(Device& d, VkCommandPool pool, const EnvCpu& env) {
+Image uploadEquirect(rhi::RHIDevice& rhiDevice, Device& d, const EnvCpu& env) {
     ImageDesc id{};
     id.format = VK_FORMAT_R32G32B32A32_SFLOAT;
     id.extent = {(uint32_t)env.width, (uint32_t)env.height, 1};
@@ -102,7 +102,7 @@ Image uploadEquirect(Device& d, VkCommandPool pool, const EnvCpu& env) {
                    VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
     std::memcpy(staging.mapped(), env.rgbaF32.data(), env.rgbaF32.size() * sizeof(float));
 
-    oneShotSubmit(d, pool, [&](VkCommandBuffer cmd) {
+    oneShotSubmit(rhiDevice, [&](VkCommandBuffer cmd) {
         std::vector<VkImageMemoryBarrier2> bs;
         bs.push_back(imgBarrier(img.image(),
             VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
@@ -159,7 +159,7 @@ void IblBaker::bake(Device& d, VkCommandPool pool, const EnvCpu& env, IblResourc
     auto& vkDev = static_cast<rhi::VkRHIDevice&>(*rhiDevice);
 
     // 1. 把 HDR equirect 上传 GPU（layout 已 → SHADER_READ_ONLY，原生 Vulkan）。
-    Image equi = uploadEquirect(d, pool, env);
+    Image equi = uploadEquirect(*rhiDevice, d, env);
 
     // 2. 创建共享线性 sampler（RHI）；同时填充 VkSampler 供原生 Vulkan 阶段使用。
     {
@@ -193,7 +193,7 @@ void IblBaker::bake(Device& d, VkCommandPool pool, const EnvCpu& env, IblResourc
     // 4. 把 4 张目标 image 全部转到 GENERAL（compute storage 写需要）。
     //    equirect 已经在 SHADER_READ_ONLY，不需要再动。
     //    保留原生 Vulkan（无 RHI 等效项，且 barrier 一次性批处理更简单）。
-    oneShotSubmit(d, pool, [&](VkCommandBuffer cmd) {
+    oneShotSubmit(*rhiDevice, [&](VkCommandBuffer cmd) {
         std::vector<VkImageMemoryBarrier2> bs;
         auto pushUndefToGeneral = [&](VkImage img, uint32_t mips, uint32_t layers) {
             bs.push_back(imgBarrier(img,
@@ -253,7 +253,7 @@ void IblBaker::bake(Device& d, VkCommandPool pool, const EnvCpu& env, IblResourc
         });
 
         // RHI: 提交 compute dispatch
-        oneShotSubmitRHI(*rhiDevice, d, pool, [&](rhi::RHICommandBuffer& cmd) {
+        oneShotSubmitRHI(*rhiDevice, [&](rhi::RHICommandBuffer& cmd) {
             cmd.bindPipelineState(*pso);
             cmd.bindDescriptorSet(0, *descSet);
             struct PC { uint32_t cubeSize, p0, p1, p2; } pc{kEnvCubeSize, 0, 0, 0};
@@ -268,7 +268,7 @@ void IblBaker::bake(Device& d, VkCommandPool pool, const EnvCpu& env, IblResourc
     // 平均）。比 compute pipeline 简单，适合 specular prefilter 的 mip 0
     // 输入需求（不需要高质量过滤，反正 prefilter 自己会按粗糙度做卷积）。
     // RHI 无 blit 等效项，保留原生 Vulkan。
-    oneShotSubmit(d, pool, [&](VkCommandBuffer cmd) {
+    oneShotSubmit(*rhiDevice, [&](VkCommandBuffer cmd) {
         int32_t s = (int32_t)kEnvCubeSize;
         for (uint32_t lvl = 1; lvl < kEnvCubeMips; ++lvl) {
             // src mip lvl-1：第一次循环时来自 compute 写出（GENERAL），后续
@@ -386,7 +386,7 @@ void IblBaker::bake(Device& d, VkCommandPool pool, const EnvCpu& env, IblResourc
         });
 
         // RHI: 提交 compute dispatch
-        oneShotSubmitRHI(*rhiDevice, d, pool, [&](rhi::RHICommandBuffer& cmd) {
+        oneShotSubmitRHI(*rhiDevice, [&](rhi::RHICommandBuffer& cmd) {
             cmd.bindPipelineState(*pso);
             cmd.bindDescriptorSet(0, *descSet);
             struct PC { uint32_t outSize, p0, p1, p2; } pc{kDiffuseSize, 0, 0, 0};
@@ -450,7 +450,7 @@ void IblBaker::bake(Device& d, VkCommandPool pool, const EnvCpu& env, IblResourc
         }
 
         // RHI: 提交所有 mip 的 dispatch
-        oneShotSubmitRHI(*rhiDevice, d, pool, [&](rhi::RHICommandBuffer& cmd) {
+        oneShotSubmitRHI(*rhiDevice, [&](rhi::RHICommandBuffer& cmd) {
             cmd.bindPipelineState(*pso);
             for (uint32_t lvl = 0; lvl < kSpecularMips; ++lvl) {
                 cmd.bindDescriptorSet(0, *descSets[lvl]);
@@ -502,7 +502,7 @@ void IblBaker::bake(Device& d, VkCommandPool pool, const EnvCpu& env, IblResourc
         });
 
         // RHI: 提交 compute dispatch
-        oneShotSubmitRHI(*rhiDevice, d, pool, [&](rhi::RHICommandBuffer& cmd) {
+        oneShotSubmitRHI(*rhiDevice, [&](rhi::RHICommandBuffer& cmd) {
             cmd.bindPipelineState(*pso);
             cmd.bindDescriptorSet(0, *descSet);
             struct PC { uint32_t size, p0, p1, p2; } pc{kBrdfLutSize, 0, 0, 0};
@@ -517,7 +517,7 @@ void IblBaker::bake(Device& d, VkCommandPool pool, const EnvCpu& env, IblResourc
     // 转过），统一转 SHADER_READ_ONLY 供运行时 fragment / compute 阶段
     // 采样。envCube 在阶段 2 mip 链生成结束时已经转好了。
     // 保留原生 Vulkan（简单批处理 barrier，RHI 无等效批处理）。
-    oneShotSubmit(d, pool, [&](VkCommandBuffer cmd) {
+    oneShotSubmit(*rhiDevice, [&](VkCommandBuffer cmd) {
         std::vector<VkImageMemoryBarrier2> bs;
         auto toSampled = [&](VkImage img, uint32_t mips, uint32_t layers) {
             bs.push_back(imgBarrier(img,

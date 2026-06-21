@@ -726,7 +726,7 @@ void App::bakePrt() {
         vkCmdPipelineBarrier2(cmd, &di);
     };
 
-    oneShotSubmit(*m_device, m_pool, [&](VkCommandBuffer cmd) {
+    oneShotSubmit(*m_renderer.rhiDevice(), [&](VkCommandBuffer cmd) {
         // 1. voxel grid all mips: UNDEFINED → TRANSFER_DST → clear → GENERAL
         barrierAllVxgiMips(cmd,
             VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
@@ -814,7 +814,7 @@ void App::bakePrt() {
 void App::bootstrapSsgiTemporal() {
     // 把 ssgi 与 ssgiPrev 都清成 0 + 转 SHADER_READ_ONLY，让第一帧 SSGI on
     // 时 copy / sample 都有合法 layout。两张 image 同形 + 同初始内容。
-    oneShotSubmit(*m_device, m_pool, [&](VkCommandBuffer cmd) {
+    oneShotSubmit(*m_renderer.rhiDevice(), [&](VkCommandBuffer cmd) {
         VkImage imgs[2] = {m_renderer.rt().ssgi.image(), m_renderer.rt().ssgiPrev.image()};
         for (auto img : imgs) {
             transitionImage(cmd, img, VK_IMAGE_ASPECT_COLOR_BIT,
@@ -836,7 +836,7 @@ void App::bootstrapSsgiTemporal() {
 }
 
 void App::bootstrapHdrPrev() {
-    oneShotSubmit(*m_device, m_pool, [&](VkCommandBuffer cmd) {
+    oneShotSubmit(*m_renderer.rhiDevice(), [&](VkCommandBuffer cmd) {
         transitionImage(cmd, m_renderer.rt().hdrPrev.image(), VK_IMAGE_ASPECT_COLOR_BIT,
             VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
             VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
@@ -1550,7 +1550,7 @@ void App::run() {
 
             // ldrTonemap 在 SDR 路径末尾处于 VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL
             // 直接用 oneShotSubmit 拷到 staging buffer
-            oneShotSubmit(*m_device, m_pool, [&](VkCommandBuffer scmd) {
+            oneShotSubmit(*m_renderer.rhiDevice(), [&](VkCommandBuffer scmd) {
                 m_screenshot.recordCopy(scmd, m_renderer.rt().ldrTonemap.image(),
                                         m_renderer.rt().extent);
             });

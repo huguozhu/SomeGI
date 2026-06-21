@@ -2,6 +2,9 @@
 #include "core/device.h"
 #include "core/buffer.h"
 #include "upload.h"
+#include "rhi/base/device.h"
+#include "rhi/base/command_buffer.h"
+#include "rhi/base/sampler.h"
 #include "rhi/vulkan/vk_device.h"
 #include "rhi/vulkan/vk_buffer.h"
 #include <cstring>
@@ -15,15 +18,19 @@ static Buffer makeStaging(Device& d, const void* data, size_t size) {
     return b;
 }
 
-static void uploadBufferImpl(Device& d, VkCommandPool pool,
+static void uploadBufferImpl(rhi::RHIDevice& rhiDevice, Device& d,
                              const void* data, size_t size, VkBufferUsageFlags usage,
                              Buffer& out) {
     out = Buffer(d, size, usage | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                  VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
     Buffer staging = makeStaging(d, data, size);
-    oneShotSubmit(d, pool, [&](VkCommandBuffer cmd) {
-        VkBufferCopy c{0, 0, size};
-        vkCmdCopyBuffer(cmd, staging.handle(), out.handle(), 1, &c);
+
+    auto& vkDev = static_cast<rhi::VkRHIDevice&>(rhiDevice);
+    auto srcBuf = rhi::VkRHIBuffer::createNonOwning(vkDev, staging.handle(), staging.size());
+    auto dstBuf = rhi::VkRHIBuffer::createNonOwning(vkDev, out.handle(), out.size());
+
+    oneShotSubmitRHI(rhiDevice, [&](rhi::RHICommandBuffer& cmd) {
+        cmd.copyBuffer(*srcBuf, *dstBuf, size);
     });
 }
 
@@ -41,12 +48,12 @@ static void transitionImg(VkCommandBuffer cmd, VkImage img,
     vkCmdPipelineBarrier2(cmd, &di);
 }
 
-static void uploadImageImpl(Device& d, VkCommandPool pool, const TextureCpu& cpu, Image& out, bool useMipmaps = true) {
+static void uploadImageImpl(rhi::RHIDevice& rhiDevice, Device& d, const TextureCpu& cpu, Image& out, bool useMipmaps = true) {
     if (cpu.width <= 0 || cpu.height <= 0) {
         TextureCpu fallback;
         fallback.width = 1; fallback.height = 1; fallback.channels = 4;
         fallback.rgba = {255, 0, 255, 255}; fallback.isSrgb = cpu.isSrgb;
-        uploadImageImpl(d, pool, fallback, out, useMipmaps);
+        uploadImageImpl(rhiDevice, d, fallback, out, useMipmaps);
         return;
     }
     uint32_t mipLevels = 1;
@@ -66,7 +73,7 @@ static void uploadImageImpl(Device& d, VkCommandPool pool, const TextureCpu& cpu
 
     Buffer staging = makeStaging(d, cpu.rgba.data(), cpu.rgba.size());
 
-    oneShotSubmit(d, pool, [&](VkCommandBuffer cmd) {
+    oneShotSubmit(rhiDevice, [&](VkCommandBuffer cmd) {
         transitionImg(cmd, out.image(),
             VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
             VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
@@ -145,11 +152,12 @@ static void uploadImageImpl(Device& d, VkCommandPool pool, const TextureCpu& cpu
     });
 }
 
-static Image makeSolid1x1(Device& d, VkCommandPool pool, uint8_t r, uint8_t g, uint8_t b, uint8_t a, bool srgb) {
+static Image makeSolid1x1(rhi::RHIDevice& rhiDevice, Device& d,
+                           uint8_t r, uint8_t g, uint8_t b, uint8_t a, bool srgb) {
     TextureCpu c; c.width=1; c.height=1; c.channels=4;
     c.rgba = {r, g, b, a}; c.isSrgb = srgb;
     Image img;
-    uploadImageImpl(d, pool, c, img);
+    uploadImageImpl(rhiDevice, d, c, img);
     return img;
 }
 
@@ -160,11 +168,11 @@ void uploadScene(Device& d, VkCommandPool pool, const SceneCpu& cpu, SceneGpu& o
         asInput = VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR;
 
     if (!cpu.vertices.empty())
-        uploadBufferImpl(d, pool, cpu.vertices.data(), cpu.vertices.size()*sizeof(Vertex),
+        uploadBufferImpl(*rhiDevice, d, cpu.vertices.data(), cpu.vertices.size()*sizeof(Vertex),
                          VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | asInput,
                          out.vertexBuffer);
     if (!cpu.indices.empty())
-        uploadBufferImpl(d, pool, cpu.indices.data(), cpu.indices.size()*sizeof(uint32_t),
+        uploadBufferImpl(*rhiDevice, d, cpu.indices.data(), cpu.indices.size()*sizeof(uint32_t),
                          VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | asInput,
                          out.indexBuffer);
 
@@ -196,25 +204,29 @@ void uploadScene(Device& d, VkCommandPool pool, const SceneCpu& cpu, SceneGpu& o
         g.baseColorTex = -1; g.mrTex = -1; g.normalTex = -1; g.occlusionTex = -1; g.emissiveTex = -1;
         mats.push_back(g);
     }
-    uploadBufferImpl(d, pool, mats.data(), mats.size()*sizeof(MaterialGpu),
+    uploadBufferImpl(*rhiDevice, d, mats.data(), mats.size()*sizeof(MaterialGpu),
                      VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, out.materialBuffer);
 
     out.images.resize(cpu.textures.size());
     for (size_t i = 0; i < cpu.textures.size(); ++i) {
-        uploadImageImpl(d, pool, cpu.textures[i], out.images[i], useMipmaps);
+        uploadImageImpl(*rhiDevice, d, cpu.textures[i], out.images[i], useMipmaps);
     }
-    out.whiteTex  = makeSolid1x1(d, pool, 255, 255, 255, 255, true);
-    out.normalTex = makeSolid1x1(d, pool, 128, 128, 255, 255, false);
+    out.whiteTex  = makeSolid1x1(*rhiDevice, d, 255, 255, 255, 255, true);
+    out.normalTex = makeSolid1x1(*rhiDevice, d, 128, 128, 255, 255, false);
 
-    VkSamplerCreateInfo s{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
-    s.magFilter = VK_FILTER_LINEAR; s.minFilter = VK_FILTER_LINEAR;
-    s.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
-    s.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-    s.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-    s.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-    s.maxLod = VK_LOD_CLAMP_NONE;
-    s.anisotropyEnable = VK_FALSE;
-    VK_CHECK(vkCreateSampler(d.device(), &s, nullptr, &out.linearSampler));
+    // RHI sampler 创建
+    {
+        rhi::SamplerDesc sd;
+        sd.magFilter = rhi::Filter::Linear;
+        sd.minFilter = rhi::Filter::Linear;
+        sd.mipmapMode = rhi::SamplerMipmapMode::Linear;
+        sd.addressU = rhi::SamplerAddressMode::Repeat;
+        sd.addressV = rhi::SamplerAddressMode::Repeat;
+        sd.addressW = rhi::SamplerAddressMode::Repeat;
+        sd.maxLod = 0.0f;  // VK_LOD_CLAMP_NONE
+        out.m_rhiLinearSampler = rhiDevice->createSampler(sd);
+        out.linearSampler = static_cast<VkSampler>(out.m_rhiLinearSampler->nativeHandle());
+    }
 
     // 如果提供了 RHI 设备，填充 RHI 缓冲包装
     if (rhiDevice) {
@@ -223,7 +235,7 @@ void uploadScene(Device& d, VkCommandPool pool, const SceneCpu& cpu, SceneGpu& o
 }
 
 void destroySceneSamplers(Device& d, SceneGpu& gpu) {
-    if (gpu.linearSampler) vkDestroySampler(d.device(), gpu.linearSampler, nullptr);
+    gpu.m_rhiLinearSampler.reset();  // RHI sampler 自动销毁
     gpu.linearSampler = VK_NULL_HANDLE;
 }
 
