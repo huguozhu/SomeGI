@@ -91,7 +91,8 @@ public:
                       const TextureBlitRegion&) override;
 
     // ── Barrier ──
-    void textureBarrier(const RHITexture&, TextureLayout, TextureLayout) override;
+    void textureBarrier(const RHITexture&, TextureLayout, TextureLayout,
+                         const TextureBarrierRange&) override;
     void bufferBarrier(const RHIBuffer&, PipelineStage, PipelineStage,
                        BufferAccess, BufferAccess) override;
     void globalBarrier() override;

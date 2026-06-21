@@ -440,7 +440,10 @@ ID3D12CommandSignature* D3D12RHICommandBuffer::getDrawIndexedCountSignature() {
 
 void D3D12RHICommandBuffer::textureBarrier(const RHITexture& tex,
                                             TextureLayout oldLayout,
-                                            TextureLayout newLayout) {
+                                            TextureLayout newLayout,
+                                            const TextureBarrierRange& /*range*/) {
+    // 注：D3D12 子资源级 barrier 需要单独追踪每个 subresource 的状态，
+    // 当前状态追踪器仅支持全纹理粒度。range 参数保留供未来实现。
     auto& d3dTex = static_cast<const D3D12RHITexture&>(tex);
 
     // 从状态追踪器获取当前状态（而非始终 COMMON）

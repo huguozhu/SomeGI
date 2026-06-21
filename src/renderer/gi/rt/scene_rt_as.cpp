@@ -2,7 +2,9 @@
 #include "core/device.h"
 #include "scene/scene_gpu.h"
 #include "scene/upload.h"
+#include "rhi/base/command_buffer.h"
 #include "rhi/vulkan/vk_acceleration_structure.h"
+#include "rhi/vulkan/vk_buffer.h"
 #include "rhi/vulkan/vk_device.h"
 #include <vector>
 #include <cstring>
@@ -294,24 +296,22 @@ void SceneRtAS::build(Device& d, rhi::RHIDevice& rhiDevice, VkCommandPool pool,
     m_tlasRHI = rhi::VkRHIAccelerationStructure::createOwning(static_cast<rhi::VkRHIDevice&>(rhiDevice), rawTlas);
 
     // ---- Step 8: build TLAS (one-shot) ----
-    oneShotSubmit(rhiDevice, [&](VkCommandBuffer cmd) {
+    auto& vkDevRhi = static_cast<rhi::VkRHIDevice&>(rhiDevice);
+    auto rhiInstStaging = rhi::VkRHIBuffer::createNonOwning(vkDevRhi, instStaging.handle(), instStaging.size());
+    auto rhiInstBuf = rhi::VkRHIBuffer::createNonOwning(vkDevRhi, m_instanceBuf.handle(), m_instanceBuf.size());
+    auto rhiDataStaging = rhi::VkRHIBuffer::createNonOwning(vkDevRhi, dataStaging.handle(), dataStaging.size());
+    auto rhiDataBuf = rhi::VkRHIBuffer::createNonOwning(vkDevRhi, m_instanceDataBuf.handle(), m_instanceDataBuf.size());
+
+    oneShotSubmitRHI(rhiDevice, [&](rhi::RHICommandBuffer& cmd) {
         // Copy instances and data.
-        VkBufferCopy ic{0, 0, instBufSize};
-        vkCmdCopyBuffer(cmd, instStaging.handle(), m_instanceBuf.handle(), 1, &ic);
-        VkBufferCopy dc{0, 0, dataBufSize};
-        vkCmdCopyBuffer(cmd, dataStaging.handle(), m_instanceDataBuf.handle(), 1, &dc);
+        cmd.copyBuffer(*rhiInstStaging, *rhiInstBuf, instBufSize);
+        cmd.copyBuffer(*rhiDataStaging, *rhiDataBuf, dataBufSize);
 
         // Barrier: ensure copies finish before AS build reads.
-        VkMemoryBarrier2 mb{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
-        mb.srcStageMask = VK_PIPELINE_STAGE_2_COPY_BIT;
-        mb.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
-        mb.dstStageMask = VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR;
-        mb.dstAccessMask = VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR;
-        VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-        di.memoryBarrierCount = 1; di.pMemoryBarriers = &mb;
-        vkCmdPipelineBarrier2(cmd, &di);
+        cmd.globalBarrier();
 
         // Build TLAS.
+        auto vkCmd = static_cast<VkCommandBuffer>(cmd.nativeHandle());
         VkAccelerationStructureBuildGeometryInfoKHR bi = tlasBuildInfo;
         bi.dstAccelerationStructure = static_cast<VkAccelerationStructureKHR>(m_tlasRHI->nativeHandle());
         bi.scratchData.deviceAddress = scratchAddr;
@@ -323,7 +323,7 @@ void SceneRtAS::build(Device& d, rhi::RHIDevice& rhiDevice, VkCommandPool pool,
         range.transformOffset = 0;
         const VkAccelerationStructureBuildRangeInfoKHR* pRange = &range;
 
-        dispatch.cmdBuildAccelerationStructuresKHR(cmd, 1, &bi, &pRange);
+        dispatch.cmdBuildAccelerationStructuresKHR(vkCmd, 1, &bi, &pRange);
     });
 
     std::printf("[SceneRtAS] built %u BLAS + TLAS (%u instances), accel=%.1f MB scratch=%.1f MB\n",

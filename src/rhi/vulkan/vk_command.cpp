@@ -253,7 +253,8 @@ void VkRHICommandBuffer::clearDepth(const RHITexture& tex, float depth, uint32_t
     vkCmdClearDepthStencilImage(m_cmd, (VkImage)(uintptr_t)tex.nativeHandle(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &cv, 1, &range);
 }
 
-void VkRHICommandBuffer::textureBarrier(const RHITexture& tex, TextureLayout oldLayout, TextureLayout newLayout) {
+void VkRHICommandBuffer::textureBarrier(const RHITexture& tex, TextureLayout oldLayout, TextureLayout newLayout,
+                                         const TextureBarrierRange& range) {
     VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
     b.srcStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
     b.srcAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT;
@@ -262,7 +263,9 @@ void VkRHICommandBuffer::textureBarrier(const RHITexture& tex, TextureLayout old
     b.oldLayout = toVkLayout(oldLayout);
     b.newLayout = toVkLayout(newLayout);
     b.image = (VkImage)(uintptr_t)tex.nativeHandle();
-    b.subresourceRange = {toVkAspect(tex.format()), 0, tex.mipLevels(), 0, 1};
+    b.subresourceRange = {toVkAspect(tex.format()), range.baseMip,
+                          range.mipCount > 0 ? range.mipCount : tex.mipLevels() - range.baseMip,
+                          range.baseLayer, range.layerCount};
     VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
     di.imageMemoryBarrierCount = 1; di.pImageMemoryBarriers = &b;
     vkCmdPipelineBarrier2(m_cmd, &di);

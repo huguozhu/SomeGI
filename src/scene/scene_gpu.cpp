@@ -36,20 +36,6 @@ static void uploadBufferImpl(rhi::RHIDevice& rhiDevice, Device& d,
     });
 }
 
-static void transitionImg(VkCommandBuffer cmd, VkImage img,
-                          VkImageLayout oldL, VkImageLayout newL,
-                          VkPipelineStageFlags2 srcStage, VkAccessFlags2 srcAcc,
-                          VkPipelineStageFlags2 dstStage, VkAccessFlags2 dstAcc,
-                          uint32_t baseMipLevel = 0, uint32_t mipLevels = 1) {
-    VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
-    b.srcStageMask=srcStage; b.srcAccessMask=srcAcc; b.dstStageMask=dstStage; b.dstAccessMask=dstAcc;
-    b.oldLayout=oldL; b.newLayout=newL; b.image=img;
-    b.subresourceRange={VK_IMAGE_ASPECT_COLOR_BIT, baseMipLevel, mipLevels, 0, 1};
-    VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-    di.imageMemoryBarrierCount=1; di.pImageMemoryBarriers=&b;
-    vkCmdPipelineBarrier2(cmd, &di);
-}
-
 static void uploadImageImpl(rhi::RHIDevice& rhiDevice, Device& d, const TextureCpu& cpu, Image& out, bool useMipmaps = true) {
     if (cpu.width <= 0 || cpu.height <= 0) {
         TextureCpu fallback;
@@ -79,15 +65,11 @@ static void uploadImageImpl(rhi::RHIDevice& rhiDevice, Device& d, const TextureC
         auto& vkDev = static_cast<rhi::VkRHIDevice&>(rhiDevice);
         rhi::VkRHICommandBuffer rhiCmd(vkDev, cmd);
 
-        transitionImg(cmd, out.image(),
-            VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-            VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
-            VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
-            0, mipLevels);
-
         auto stagingBuf = rhi::VkRHIBuffer::createNonOwning(vkDev, staging.handle(), staging.size());
         auto dstTex = rhi::VkRHITexture::createNonOwning(vkDev, out.image(),
             rhi::toRhiFormat(fmt), (uint32_t)cpu.width, (uint32_t)cpu.height, mipLevels);
+        rhiCmd.textureBarrier(*dstTex, rhi::TextureLayout::Undefined, rhi::TextureLayout::TransferDst);
+
         {
             rhi::BufferTextureCopyRegion r;
             r.bufferOffset = 0;
@@ -148,16 +130,23 @@ static void uploadImageImpl(rhi::RHIDevice& rhiDevice, Device& d, const TextureC
                 mipH = nextH;
             }
 
-            transitionImg(cmd, out.image(),
-                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
-                VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT,
-                mipLevels - 1, 1);
+            // RHI 不支持单 mip 级 barrier，最后一级 mip 仍用原生精确转换
+            {
+                VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+                b.srcStageMask = VK_PIPELINE_STAGE_2_COPY_BIT;
+                b.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+                b.dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+                b.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
+                b.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+                b.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                b.image = out.image();
+                b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, mipLevels - 1, 1, 0, 1};
+                VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+                di.imageMemoryBarrierCount = 1; di.pImageMemoryBarriers = &b;
+                vkCmdPipelineBarrier2(cmd, &di);
+            }
         } else {
-            transitionImg(cmd, out.image(),
-                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
-                VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT);
+            rhiCmd.textureBarrier(*dstTex, rhi::TextureLayout::TransferDst, rhi::TextureLayout::ShaderReadOnly);
         }
     });
 }

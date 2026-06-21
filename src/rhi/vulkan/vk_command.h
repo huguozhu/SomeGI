@@ -78,7 +78,8 @@ public:
                       const TextureBlitRegion& region) override;
 
     // Barrier
-    void textureBarrier(const RHITexture& tex, TextureLayout oldLayout, TextureLayout newLayout) override;
+    void textureBarrier(const RHITexture& tex, TextureLayout oldLayout, TextureLayout newLayout,
+                         const TextureBarrierRange& range) override;
     void bufferBarrier(const RHIBuffer& buf,
                        PipelineStage srcStage, PipelineStage dstStage,
                        BufferAccess srcAccess, BufferAccess dstAccess) override;

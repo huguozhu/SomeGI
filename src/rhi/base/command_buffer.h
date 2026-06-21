@@ -1,6 +1,7 @@
 // rhi/base/command_buffer.h
 #pragma once
 #include "common.h"
+#include "texture.h"
 #include <memory>
 
 namespace somegi {
@@ -106,8 +107,20 @@ public:
                               const TextureBlitRegion& region) = 0;
 
     // ── Barrier ──
-    // 纹理屏障（自动推断阶段和访问掩码）
-    virtual void textureBarrier(const RHITexture& tex, TextureLayout oldLayout, TextureLayout newLayout) = 0;
+    // 纹理屏障 Subresource 范围
+    struct TextureBarrierRange {
+        uint32_t baseMip = 0;
+        uint32_t mipCount = 0;  // 0 = all remaining mips
+        uint32_t baseLayer = 0;
+        uint32_t layerCount = 1;
+    };
+    // 全纹理屏障
+    void textureBarrier(const RHITexture& tex, TextureLayout oldLayout, TextureLayout newLayout) {
+        textureBarrier(tex, oldLayout, newLayout, {0, tex.mipLevels(), 0, 1});
+    }
+    // 子资源级纹理屏障（指定 mip/layer 范围）
+    virtual void textureBarrier(const RHITexture& tex, TextureLayout oldLayout, TextureLayout newLayout,
+                                 const TextureBarrierRange& range) = 0;
     // Buffer 屏障（需要显式指定源/目标阶段和访问类型）
     virtual void bufferBarrier(const RHIBuffer& buf,
                                PipelineStage srcStage, PipelineStage dstStage,

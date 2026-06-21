@@ -91,7 +91,7 @@ VkImage allocCube(Device& d, uint32_t size, uint32_t mips, VkFormat fmt,
 // 把 CPU 上的 equirect HDR float 数据上传到一张 2D image 上，layout
 // 转到 SHADER_READ_ONLY_OPTIMAL。后续 equi_to_cube compute kernel 用它
 // 当源采样、写到 envCube 的 mip 0。
-// 使用 RHI cmd.copyBufferToTexture 上传。
+// 全部使用 RHI API（barrier + copy）。
 Image uploadEquirect(rhi::RHIDevice& rhiDevice, Device& d, const EnvCpu& env) {
     ImageDesc id{};
     id.format = VK_FORMAT_R32G32B32A32_SFLOAT;
@@ -104,36 +104,23 @@ Image uploadEquirect(rhi::RHIDevice& rhiDevice, Device& d, const EnvCpu& env) {
                    VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
     std::memcpy(staging.mapped(), env.rgbaF32.data(), env.rgbaF32.size() * sizeof(float));
 
-    oneShotSubmit(rhiDevice, [&](VkCommandBuffer cmd) {
+    oneShotSubmitRHI(rhiDevice, [&](rhi::RHICommandBuffer& cmd) {
         auto& vkDev = static_cast<rhi::VkRHIDevice&>(rhiDevice);
-        rhi::VkRHICommandBuffer rhiCmd(vkDev, cmd);
-
-        std::vector<VkImageMemoryBarrier2> bs;
-        bs.push_back(imgBarrier(img.image(),
-            VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-            VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
-            VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
-            0, 1, 0, 1));
-        pipelineBarrier(cmd, bs);
 
         auto srcBuf = rhi::VkRHIBuffer::createNonOwning(vkDev, staging.handle(), staging.size());
         auto dstTex = rhi::VkRHITexture::createNonOwning(vkDev, img.image(),
             rhi::toRhiFormat(id.format), id.extent.width, id.extent.height);
+        cmd.textureBarrier(*dstTex, rhi::TextureLayout::Undefined, rhi::TextureLayout::TransferDst);
+
         {
             rhi::BufferTextureCopyRegion r;
             r.bufferOffset = 0;
             r.extentWidth = id.extent.width;
             r.extentHeight = id.extent.height;
-            rhiCmd.copyBufferToTexture(*srcBuf, *dstTex, r);
+            cmd.copyBufferToTexture(*srcBuf, *dstTex, r);
         }
 
-        bs.clear();
-        bs.push_back(imgBarrier(img.image(),
-            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-            VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
-            VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
-            0, 1, 0, 1));
-        pipelineBarrier(cmd, bs);
+        cmd.textureBarrier(*dstTex, rhi::TextureLayout::TransferDst, rhi::TextureLayout::ShaderReadOnly);
     });
 
     return img;
@@ -151,7 +138,7 @@ void IblResources::destroy(Device& d) {
 }
 
 // IBL 烘焙主流程。按阶段顺序：
-//   阶段 0：上传 equirect、分配四张目标 image、所有目标 image 转 GENERAL（原生 Vulkan）。
+//   阶段 0：上传 equirect（RHI）、分配四张目标 image、所有目标 image 转 GENERAL（原生 Vulkan）。
 //   阶段 1：equi_to_cube compute 把 equirect 投影到 envCube mip 0。（RHI）
 //   阶段 2：RHI cmd.blitTexture 链生成 envCube mip 1..N。
 //   阶段 3：prefilter_diffuse compute 对 envCube 做 cosine-weighted 半球
@@ -168,7 +155,7 @@ void IblBaker::bake(Device& d, VkCommandPool pool, const EnvCpu& env, IblResourc
     out.specularMipCount = kSpecularMips;
     auto& vkDev = static_cast<rhi::VkRHIDevice&>(*rhiDevice);
 
-    // 1. 把 HDR equirect 上传 GPU（layout 已 → SHADER_READ_ONLY，原生 Vulkan）。
+    // 1. 把 HDR equirect 上传 GPU（layout 已 → SHADER_READ_ONLY，RHI）。
     Image equi = uploadEquirect(*rhiDevice, d, env);
 
     // 2. 创建共享线性 sampler（RHI）；同时填充 VkSampler 供原生 Vulkan 阶段使用。
