@@ -4,7 +4,6 @@
 #include "rhi/vulkan/vk_shader.h"
 #include "rhi/vulkan/vk_command.h"
 #include "rhi/vulkan/vk_pso.h"
-#include "rhi/vulkan/vk_descriptor.h"
 #include "rhi/vulkan/vk_texture.h"
 #include "rhi/vulkan/vk_fence.h"
 #include "core/window.h"
@@ -14,9 +13,9 @@
 
 using namespace somegi;
 
-static std::vector<uint32_t> loadSpv(const char* path) {
-    std::ifstream f(path, std::ios::binary | std::ios::ate);
-    if (!f) throw std::runtime_error(std::string("open: ") + path);
+static std::vector<uint32_t> loadSpv(const char* name) {
+    std::ifstream f(name, std::ios::binary | std::ios::ate);
+    if (!f) throw std::runtime_error(std::string("open: ") + name);
     auto size = static_cast<size_t>(f.tellg());
     std::vector<uint32_t> data(size / 4);
     f.seekg(0);
@@ -25,16 +24,13 @@ static std::vector<uint32_t> loadSpv(const char* path) {
 }
 
 int main() {
-    // ── 1. Window + RHI Device ──
     WindowDesc wd; wd.title = "RHI Triangle"; wd.width = 800; wd.height = 600;
     Window window(wd);
-    rhi::VkRHIDevice rhiDevice(&window, true);
+    rhi::VkRHIDevice rhiDevice(&window, false);  // validation off: 验证层 bug 在第三次 draw 时 NULL deref (offset 0xD0)
 
-    // ── 2. Swapchain ──
     auto pSwapchain = rhiDevice.createSwapchain(nullptr, wd.width, wd.height);
     auto& swapchain = static_cast<rhi::VkRHISwapchain&>(*pSwapchain);
 
-    // ── 3. Shaders ──
     auto vertSpv = loadSpv("triangle.vert.spv");
     auto fragSpv = loadSpv("triangle.frag.spv");
     rhi::ShaderDesc sd;
@@ -43,24 +39,19 @@ int main() {
     sd.stage = rhi::ShaderStage::Fragment;
     auto fs = rhiDevice.createShader(sd, fragSpv.data(), fragSpv.size() * 4);
 
-    // ── 4. Pipeline ──
-    rhi::DescSetLayoutDesc ld; ld.debugName = "Empty";
-    auto setLayout = rhiDevice.createDescriptorSetLayout(ld);
-
     rhi::GraphicsPSODesc pd; pd.debugName = "Triangle";
     pd.vertexShader = vs.get(); pd.fragmentShader = fs.get();
     pd.topology = rhi::PrimitiveTopology::TriangleList;
     pd.rasterization = {rhi::FillMode::Solid, rhi::CullMode::None, false};
     pd.renderTargets.colorFormats = {pSwapchain->format()};
-    pd.descriptorSetLayouts = {setLayout.get()};
     auto pso = rhiDevice.createGraphicsPSO(pd);
 
-    // ── 5. Command buffer (single, reused each frame) ──
     auto cmdPool = rhiDevice.createCommandPool();
-    auto* rawCmd = cmdPool->allocateRaw();
-    auto& cmd = static_cast<rhi::VkRHICommandBuffer&>(*rawCmd);
+    auto* rawCmd0 = cmdPool->allocateRaw();
+    auto* rawCmd1 = cmdPool->allocateRaw();
+    auto& cmd0 = static_cast<rhi::VkRHICommandBuffer&>(*rawCmd0);
+    auto& cmd1 = static_cast<rhi::VkRHICommandBuffer&>(*rawCmd1);
 
-    // ── 6. Main loop ──
     uint32_t frameIdx = 0;
     while (!window.shouldClose()) {
         window.pollEvents();
@@ -68,7 +59,7 @@ int main() {
         auto frame = pSwapchain->acquireNextFrame();
         if (frame.needsResize) { pSwapchain->recreate(); continue; }
 
-        // Begin command buffer
+        auto& cmd = (frame.frameInFlight == 0) ? cmd0 : cmd1;
         cmd.reset();
         cmd.begin();
 
@@ -76,11 +67,9 @@ int main() {
             swapchain.vkImage(frame.imageIndex),
             pSwapchain->format(), frame.width, frame.height, 1);
 
-        // Undefined → ColorAttachment
         cmd.textureBarrier(*swTex,
             rhi::TextureLayout::Undefined, rhi::TextureLayout::ColorAttachment);
 
-        // Draw triangle
         rhi::RenderingAttachmentInfo color{};
         color.view = frame.view.get();
         color.loadOp = rhi::AttachmentLoadOp::Clear;
@@ -93,13 +82,11 @@ int main() {
         cmd.draw(3, 0, 0);
         cmd.endRendering();
 
-        // ColorAttachment → Present
         cmd.textureBarrier(*swTex,
             rhi::TextureLayout::ColorAttachment, rhi::TextureLayout::Present);
 
         cmd.end();
 
-        // Submit (signal the swapchain's inFlight fence for CPU-GPU sync)
         auto sigFence = rhi::VkRHIFence::createNonOwning(rhiDevice,
             *static_cast<VkFence*>(frame.inFlightFence));
         rhi::SubmitDesc sd;
@@ -110,10 +97,8 @@ int main() {
         rhiDevice.submit(sd);
         pSwapchain->present(frame);
 
-        // CPU 等待 GPU 完成，确保下帧 reset cmd buffer 时 GPU 已空闲
         sigFence->wait();
 
-        // Free non-owning semaphore wrappers
         delete static_cast<rhi::RHISemaphore*>(frame.imageAvailable);
         delete static_cast<rhi::RHISemaphore*>(frame.renderFinished);
 
