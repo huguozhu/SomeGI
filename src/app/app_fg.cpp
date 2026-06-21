@@ -8,6 +8,7 @@
 #include "renderer/fg/fg_resources.h"
 #include "rhi/vulkan/vk_command.h"
 #include "rhi/vulkan/vk_buffer.h"
+#include "rhi/vulkan/vk_texture.h"
 
 namespace somegi {
 
@@ -193,51 +194,42 @@ void App::setupFrameGraph() {
             b.read(m_fgh.ssgiPrev);
             b.write(m_fgh.ssgi);
             b.setExecute([this](VkCommandBuffer vkCmd, const FGResources&) {
-                    rhi::VkRHICommandBuffer rhiCmd(static_cast<rhi::VkRHIDevice&>(*m_renderer.rhiDevice()), vkCmd);
+                    auto& vkDev = static_cast<rhi::VkRHIDevice&>(*m_renderer.rhiDevice());
+                    rhi::VkRHICommandBuffer rhiCmd(vkDev, vkCmd);
+                    auto& rt = m_renderer.rt();
                 // Copy ssgi → ssgiPrev for temporal history
-                transitionImage(vkCmd, m_renderer.rt().ssgi.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-                    VK_IMAGE_LAYOUT_UNDEFINED,
-                    VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                    VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
-                    VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
-                transitionImage(vkCmd, m_renderer.rt().ssgiPrev.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-                    VK_IMAGE_LAYOUT_UNDEFINED,
-                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                    VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
-                    VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
+                auto transImg = [&](VkImage img, VkFormat fmt,
+                                    rhi::TextureLayout oldL, rhi::TextureLayout newL) {
+                    auto tex = rhi::VkRHITexture::createNonOwning(vkDev, img,
+                        rhi::toRhiFormat(fmt), rt.extent.width, rt.extent.height, 1);
+                    rhiCmd.textureBarrier(*tex, oldL, newL);
+                };
+                transImg(rt.ssgi.image(), rt.ssgi.format(),
+                    rhi::TextureLayout::Undefined, rhi::TextureLayout::TransferSrc);
+                transImg(rt.ssgiPrev.image(), rt.ssgiPrev.format(),
+                    rhi::TextureLayout::Undefined, rhi::TextureLayout::TransferDst);
 
                 VkImageCopy region{};
                 region.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
                 region.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-                region.extent = {m_renderer.rt().extent.width, m_renderer.rt().extent.height, 1};
+                region.extent = {rt.extent.width, rt.extent.height, 1};
                 vkCmdCopyImage(vkCmd,
-                    m_renderer.rt().ssgi.image(), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                    m_renderer.rt().ssgiPrev.image(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                    rt.ssgi.image(), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                    rt.ssgiPrev.image(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                     1, &region);
 
                 // ssgiPrev → SHADER_READ_ONLY for sampling
-                transitionImage(vkCmd, m_renderer.rt().ssgiPrev.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                    VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
-                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                    VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+                transImg(rt.ssgiPrev.image(), rt.ssgiPrev.format(),
+                    rhi::TextureLayout::TransferDst, rhi::TextureLayout::ShaderReadOnly);
                 // ssgi → GENERAL for writing new value
-                transitionImage(vkCmd, m_renderer.rt().ssgi.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-                    VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL,
-                    VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_READ_BIT,
-                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                    VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
+                transImg(rt.ssgi.image(), rt.ssgi.format(),
+                    rhi::TextureLayout::TransferSrc, rhi::TextureLayout::General);
 
-                if (m_renderer.ssgi().enabled) m_renderer.ssgi().record(rhiCmd, m_renderer.rt());
-                else m_renderer.gtgi().record(rhiCmd, m_renderer.rt());
+                if (m_renderer.ssgi().enabled) m_renderer.ssgi().record(rhiCmd, rt);
+                else m_renderer.gtgi().record(rhiCmd, rt);
 
-                transitionImage(vkCmd, m_renderer.rt().ssgi.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-                    VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                    VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
-                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                    VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+                transImg(rt.ssgi.image(), rt.ssgi.format(),
+                    rhi::TextureLayout::General, rhi::TextureLayout::ShaderReadOnly);
             });
         });
     } else if (!fwd) {
@@ -544,7 +536,15 @@ void App::setupFrameGraph() {
             b.read(m_fgh.depth);
             b.read(m_fgh.ssgi);
             b.setExecute([this](VkCommandBuffer vkCmd, const FGResources&) {
-                    rhi::VkRHICommandBuffer rhiCmd(static_cast<rhi::VkRHIDevice&>(*m_renderer.rhiDevice()), vkCmd);
+                    auto& vkDev = static_cast<rhi::VkRHIDevice&>(*m_renderer.rhiDevice());
+                    rhi::VkRHICommandBuffer rhiCmd(vkDev, vkCmd);
+                auto& rt = m_renderer.rt();
+                auto transImg = [&](VkImage img, VkFormat fmt,
+                                    rhi::TextureLayout oldL, rhi::TextureLayout newL) {
+                    auto tex = rhi::VkRHITexture::createNonOwning(vkDev, img,
+                        rhi::toRhiFormat(fmt), rt.extent.width, rt.extent.height, 1);
+                    rhiCmd.textureBarrier(*tex, oldL, newL);
+                };
                 if (!m_renderer.sdfgiBootstrapped()) {
                     auto bootstrapToGeneral = [&](VkImage img) {
                         VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
@@ -565,12 +565,8 @@ void App::setupFrameGraph() {
                     bootstrapToGeneral(m_renderer.sdfgi().udf().image());
                     m_renderer.sdfgiBootstrapped() = true;
                 }
-                transitionImage(vkCmd, m_renderer.rt().ssgi.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-                    VK_IMAGE_LAYOUT_UNDEFINED,
-                    VK_IMAGE_LAYOUT_GENERAL,
-                    VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
-                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                    VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
+                transImg(m_renderer.rt().ssgi.image(), m_renderer.rt().ssgi.format(),
+                    rhi::TextureLayout::Undefined, rhi::TextureLayout::General);
 
                 m_renderer.sdfgiPass().record(rhiCmd, m_renderer.sdfgi(), m_renderer.rt(), m_renderer.frameIndex(),
                     m_renderer.sdfgiPass().seedThreshold, m_renderer.sdfgiPass().maxDistCells,
@@ -578,13 +574,8 @@ void App::setupFrameGraph() {
                     (uint32_t)m_renderer.sdfgiPass().maxSteps,
                     m_renderer.sdfgiPass().rayMaxCells, m_renderer.sdfgiPass().hitEpsCells);
 
-                transitionImage(vkCmd, m_renderer.rt().ssgi.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-                    VK_IMAGE_LAYOUT_GENERAL,
-                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                    VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
-                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                    VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+                transImg(m_renderer.rt().ssgi.image(), m_renderer.rt().ssgi.format(),
+                    rhi::TextureLayout::General, rhi::TextureLayout::ShaderReadOnly);
             });
         });
     }
@@ -621,7 +612,15 @@ void App::setupFrameGraph() {
             b.setManualBarriers();  // 复杂 Pass：bootstrap + 条件 oldLayout 过渡
             b.write(m_fgh.restir);
             b.setExecute([this](VkCommandBuffer vkCmd, const FGResources&) {
-                    rhi::VkRHICommandBuffer rhiCmd(static_cast<rhi::VkRHIDevice&>(*m_renderer.rhiDevice()), vkCmd);
+                    auto& vkDev = static_cast<rhi::VkRHIDevice&>(*m_renderer.rhiDevice());
+                    rhi::VkRHICommandBuffer rhiCmd(vkDev, vkCmd);
+                auto& rt = m_renderer.rt();
+                auto transImg = [&](VkImage img, VkFormat fmt,
+                                    rhi::TextureLayout oldL, rhi::TextureLayout newL) {
+                    auto tex = rhi::VkRHITexture::createNonOwning(vkDev, img,
+                        rhi::toRhiFormat(fmt), rt.extent.width, rt.extent.height, 1);
+                    rhiCmd.textureBarrier(*tex, oldL, newL);
+                };
                 m_renderer.restir().updateLights(m_renderer.demoLights());
                 if (!m_renderer.restirBootstrapped()) {
                     auto bootstrapToGeneral = [&](VkImage img) {
@@ -642,16 +641,11 @@ void App::setupFrameGraph() {
                     bootstrapToGeneral(m_renderer.restir().reservoirB().image());
                     m_renderer.restirBootstrapped() = true;
                 }
-                VkImageLayout restirOld = m_renderer.restirOutInited()
-                    ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
-                    : VK_IMAGE_LAYOUT_UNDEFINED;
-                transitionImage(vkCmd, m_renderer.rt().restir.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-                    restirOld, VK_IMAGE_LAYOUT_GENERAL,
-                    m_renderer.restirOutInited() ? VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT
-                                       : VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT,
-                    m_renderer.restirOutInited() ? VK_ACCESS_2_SHADER_SAMPLED_READ_BIT : 0,
-                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                    VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
+                rhi::TextureLayout restirOld = m_renderer.restirOutInited()
+                    ? rhi::TextureLayout::ShaderReadOnly
+                    : rhi::TextureLayout::Undefined;
+                transImg(m_renderer.rt().restir.image(), m_renderer.rt().restir.format(),
+                    restirOld, rhi::TextureLayout::General);
                 m_renderer.restirOutInited() = true;
 
                 uint32_t numLights = (uint32_t)m_renderer.demoLights().size();
@@ -666,13 +660,8 @@ void App::setupFrameGraph() {
                     m_renderer.frameIndex(),
                     useRtVis);
 
-                transitionImage(vkCmd, m_renderer.rt().restir.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-                    VK_IMAGE_LAYOUT_GENERAL,
-                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                    VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
-                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                    VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+                transImg(m_renderer.rt().restir.image(), m_renderer.rt().restir.format(),
+                    rhi::TextureLayout::General, rhi::TextureLayout::ShaderReadOnly);
             });
         });
     } else if (!fwd && !m_renderer.restirPass().enabled) {
@@ -955,31 +944,36 @@ void App::setupFrameGraph() {
             b.setPassType(FGPassType::Compute);
             b.setManualBarriers();  // 复杂 Pass：compute + exit transition
             b.setExecute([this](VkCommandBuffer vkCmd, const FGResources&) {
-                    rhi::VkRHICommandBuffer rhiCmd(static_cast<rhi::VkRHIDevice&>(*m_renderer.rhiDevice()), vkCmd);
+                    auto& vkDev = static_cast<rhi::VkRHIDevice&>(*m_renderer.rhiDevice());
+                    rhi::VkRHICommandBuffer rhiCmd(vkDev, vkCmd);
                 m_renderer.lpvInject().record(rhiCmd, m_renderer.kLpvResolution,
                     m_renderer.lpvGridMin(), m_renderer.lpvCellSize());
 
-                transitionImage(vkCmd, m_renderer.lpv().gv().image(), VK_IMAGE_ASPECT_COLOR_BIT,
-                    VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                    VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
-                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                    VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+                {
+                    auto gvTex = rhi::VkRHITexture::createNonOwning(vkDev,
+                        m_renderer.lpv().gv().image(),
+                        rhi::toRhiFormat(m_renderer.lpv().gv().format()),
+                        m_renderer.kLpvResolution, m_renderer.kLpvResolution, 1);
+                    rhiCmd.textureBarrier(*gvTex,
+                        rhi::TextureLayout::General, rhi::TextureLayout::ShaderReadOnly);
+                }
             });
         });
         m_fg.addPass("LPV-Propagate", [&](FGBuilder& b) {
             b.setPassType(FGPassType::Compute);
             b.setManualBarriers();  // 复杂 Pass：multi-iteration ping-pong barrier
             b.setExecute([this](VkCommandBuffer vkCmd, const FGResources&) {
-                    rhi::VkRHICommandBuffer rhiCmd(static_cast<rhi::VkRHIDevice&>(*m_renderer.rhiDevice()), vkCmd);
+                    auto& vkDev = static_cast<rhi::VkRHIDevice&>(*m_renderer.rhiDevice());
+                    rhi::VkRHICommandBuffer rhiCmd(vkDev, vkCmd);
+                auto lpvRes = m_renderer.kLpvResolution;
                 auto barrierLpv = [&](const LpvGrid& g,
-                                      VkImageLayout oldL, VkImageLayout newL,
-                                      VkPipelineStageFlags2 srcStg, VkAccessFlags2 srcAcc,
-                                      VkPipelineStageFlags2 dstStg, VkAccessFlags2 dstAcc) {
+                                      rhi::TextureLayout oldL, rhi::TextureLayout newL) {
                     VkImage imgs[3] = {g.lpvR.image(), g.lpvG.image(), g.lpvB.image()};
                     for (auto img : imgs) {
-                        transitionImage(vkCmd, img, VK_IMAGE_ASPECT_COLOR_BIT,
-                            oldL, newL, srcStg, srcAcc, dstStg, dstAcc);
+                        auto tex = rhi::VkRHITexture::createNonOwning(vkDev, img,
+                            rhi::toRhiFormat(VK_FORMAT_R16G16B16A16_SFLOAT),
+                            lpvRes, lpvRes, 1);
+                        rhiCmd.textureBarrier(*tex, oldL, newL);
                     }
                 };
 
@@ -988,23 +982,11 @@ void App::setupFrameGraph() {
                     LpvGrid& src = m_renderer.lpv().current();
                     LpvGrid& dst = m_renderer.lpv().next();
 
-                    // 首次迭代 src 布局未知，使用 UNDEFINED；后续迭代 src 来自上轮 dst 写入的 GENERAL
-                    VkImageLayout srcOldL = (it == 0) ? VK_IMAGE_LAYOUT_UNDEFINED
-                                                      : VK_IMAGE_LAYOUT_GENERAL;
-                    VkPipelineStageFlags2 srcOldS = (it == 0) ? VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT
-                                                              : VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-                    VkAccessFlags2 srcOldA = (it == 0) ? 0
-                                                       : VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-                    barrierLpv(src,
-                        srcOldL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                        srcOldS, srcOldA,
-                        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                        VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
-                    barrierLpv(dst,
-                        VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
-                        VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
-                        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                        VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
+                    // 首次迭代 src 布局未知，使用 Undefined；后续迭代 src 来自上轮 dst 写入的 General
+                    rhi::TextureLayout srcOldL = (it == 0) ? rhi::TextureLayout::Undefined
+                                                           : rhi::TextureLayout::General;
+                    barrierLpv(src, srcOldL, rhi::TextureLayout::ShaderReadOnly);
+                    barrierLpv(dst, rhi::TextureLayout::Undefined, rhi::TextureLayout::General);
 
                     m_renderer.lpvProp().record(rhiCmd, m_renderer.lpv().curIdx(),
                         m_renderer.kLpvResolution, m_renderer.lpvProp().occlusionAmplifier,
@@ -1013,11 +995,7 @@ void App::setupFrameGraph() {
                 }
 
                 barrierLpv(m_renderer.lpv().current(),
-                    VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                    VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
-                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                    VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+                    rhi::TextureLayout::General, rhi::TextureLayout::ShaderReadOnly);
             });
         });
     }
@@ -1098,36 +1076,30 @@ void App::setupFrameGraph() {
             b.setExitLayout(m_fgh.hdrColor, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
             b.setExitLayout(m_fgh.depth, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
             b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
-                VkImageLayout depthOld = (m_renderer.frameIndex() == 0)
-                    ? VK_IMAGE_LAYOUT_UNDEFINED
-                    : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-                transitionImage(cmd, m_renderer.rt().depth.image(), VK_IMAGE_ASPECT_DEPTH_BIT,
-                    depthOld, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
-                    VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
-                    VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
-                    VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT,
-                    VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT);
-                VkImageLayout hdrOld = (m_renderer.frameIndex() == 0)
-                    ? VK_IMAGE_LAYOUT_UNDEFINED
-                    : VK_IMAGE_LAYOUT_GENERAL;
-                transitionImage(cmd, m_renderer.rt().hdrColor.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-                    hdrOld, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                    VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
-                    VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-                    VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT |
-                        VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT);
-                {
-                    rhi::VkRHICommandBuffer rhiCmd(static_cast<rhi::VkRHIDevice&>(*m_renderer.rhiDevice()), cmd);
-                    m_renderer.skybox().record(rhiCmd, m_renderer.rt());
-                }
-                transitionImage(cmd, m_renderer.rt().depth.image(), VK_IMAGE_ASPECT_DEPTH_BIT,
-                    VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
-                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                    VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT,
-                    VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT,
-                    VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
-                    VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+                auto& vkDev = static_cast<rhi::VkRHIDevice&>(*m_renderer.rhiDevice());
+                rhi::VkRHICommandBuffer rhiCmd(vkDev, cmd);
+                auto& rt = m_renderer.rt();
+
+                rhi::TextureLayout depthOld = (m_renderer.frameIndex() == 0)
+                    ? rhi::TextureLayout::Undefined
+                    : rhi::TextureLayout::ShaderReadOnly;
+                auto depthTex = rhi::VkRHITexture::createNonOwning(vkDev,
+                    rt.depth.image(), rhi::Format::D32_SFLOAT,
+                    rt.extent.width, rt.extent.height, 1);
+                rhiCmd.textureBarrier(*depthTex, depthOld, rhi::TextureLayout::DepthAttachment);
+
+                rhi::TextureLayout hdrOld = (m_renderer.frameIndex() == 0)
+                    ? rhi::TextureLayout::Undefined
+                    : rhi::TextureLayout::General;
+                auto hdrTex = rhi::VkRHITexture::createNonOwning(vkDev,
+                    rt.hdrColor.image(), rhi::toRhiFormat(rt.hdrColor.format()),
+                    rt.extent.width, rt.extent.height, 1);
+                rhiCmd.textureBarrier(*hdrTex, hdrOld, rhi::TextureLayout::ColorAttachment);
+
+                m_renderer.skybox().record(rhiCmd, rt);
+
+                rhiCmd.textureBarrier(*depthTex, rhi::TextureLayout::DepthAttachment,
+                    rhi::TextureLayout::ShaderReadOnly);
             });
         });
     }
