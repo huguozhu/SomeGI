@@ -537,8 +537,8 @@ void FGExecutor::saveResourceStates(const std::vector<FGResourceNode*>& resource
 // ════════════════════════════════════════════════════════════════
 
 void FGExecutor::readbackTimestamps() {
-    // 读取上一帧写入的 slot（当前写入 slot 的对侧），其 GPU fence 已由主循环等待
-    uint32_t readSlot = 1 - m_tsSlot;
+    // 读取上一帧写入的 slot（m_tsSlot 尚未更新，从 m_currentFrame 推算）
+    uint32_t readSlot = (m_currentFrame + 1) % 2;
     uint32_t readBase = readSlot * m_tsSlotCount;
     uint32_t tsCount = m_tsCount[readSlot];
 
