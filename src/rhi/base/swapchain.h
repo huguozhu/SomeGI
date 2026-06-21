@@ -11,7 +11,8 @@ class RHITexture;
 class RHITextureView;
 
 struct SwapchainFrame {
-    uint32_t frameInFlight;
+    uint32_t frameInFlight;   // sync slot index (0..N-1)
+    uint32_t imageIndex = 0;  // swapchain image index
     std::unique_ptr<RHITexture> texture;
     std::unique_ptr<RHITextureView> view;
     void* imageAvailable = nullptr;   // VkSemaphore：submit 时 wait

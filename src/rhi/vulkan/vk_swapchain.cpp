@@ -100,6 +100,7 @@ SwapchainFrame VkRHISwapchain::acquireNextFrame() {
     if (r == VK_ERROR_OUT_OF_DATE_KHR || r == VK_SUBOPTIMAL_KHR) { f.needsResize = true; return f; }
     VK_CHECK(r);
 
+    f.imageIndex = imgIdx;
     f.texture = nullptr; // swapchain images are not RHITexture wrappers
     f.view = std::unique_ptr<RHITextureView>(new VkRHITextureView(m_device));
     static_cast<VkRHITextureView*>(f.view.get())->setView(m_views[imgIdx]->vkView());
@@ -118,8 +119,7 @@ void VkRHISwapchain::present(const SwapchainFrame& frame) {
     pi.pWaitSemaphores = &sig;
     pi.swapchainCount = 1;
     pi.pSwapchains = &m_swapchain;
-    uint32_t idx = frame.frameInFlight;
-    pi.pImageIndices = &idx;
+    pi.pImageIndices = &frame.imageIndex;
     vkQueuePresentKHR(m_device.vkQueue(), &pi);
 }
 

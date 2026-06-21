@@ -71,7 +71,7 @@ int main() {
 
         // Wrap swapchain image as non-owning RHITexture for barriers
         auto swTex = rhi::VkRHITexture::createNonOwning(rhiDevice,
-            swapchain.vkImage(frame.frameInFlight),
+            swapchain.vkImage(frame.imageIndex),
             pSwapchain->format(), frame.width, frame.height, 1);
 
         // Undefined → ColorAttachment
