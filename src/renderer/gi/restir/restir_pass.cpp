@@ -10,7 +10,7 @@
 #include "rhi/vulkan/vk_buffer.h"
 #include "rhi/vulkan/vk_command.h"
 #include "rhi/vulkan/vk_pso.h"
-#include "core/shader.h"
+#include "core/path_util.h"
 #include <array>
 namespace somegi {
 namespace { struct InitPC{uint32_t outX,outY;float invX,invY;uint32_t numLights,numCandidates,frameIndex,pad0;};static_assert(sizeof(InitPC)==32);

@@ -1,7 +1,7 @@
 // LightingPass RHI 实现 — 34 bindings set=0 + IBL set=1。record 通过 RHI 桥接 Vk。
 #include "renderer/core/lighting_pass.h"
 #include "core/device.h"
-#include "core/shader.h"
+#include "core/path_util.h"
 #include "rhi/vulkan/vk_device.h"
 #include "rhi/vulkan/vk_shader.h"
 #include "rhi/vulkan/vk_texture.h"

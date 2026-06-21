@@ -14,7 +14,7 @@
 #include "rhi/vulkan/vk_buffer.h"
 #include "rhi/vulkan/vk_command.h"
 #include "rhi/base/sampler.h"
-#include "core/shader.h"
+#include "core/path_util.h"
 #include <array>
 namespace somegi {
 static constexpr uint32_t kMaxTextures = 128;

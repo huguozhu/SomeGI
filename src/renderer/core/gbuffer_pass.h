@@ -5,7 +5,6 @@
 #include "rhi/base/pipeline_state.h"
 #include "rhi/base/device.h"
 #include "core/buffer.h"
-#include "core/shader.h"
 #include "scene/scene.h"
 #include "renderer/core/render_targets.h"
 #include "renderer/core/frame_ubo.h"

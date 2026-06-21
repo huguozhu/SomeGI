@@ -12,7 +12,7 @@
 #include "rhi/vulkan/vk_buffer.h"
 #include "rhi/vulkan/vk_command.h"
 #include "rhi/base/sampler.h"
-#include "core/shader.h"
+#include "core/path_util.h"
 namespace somegi {
 namespace { struct GatherPC { float invScreenSizeX,invScreenSizeY,probeTileSize; uint32_t probeGridW,probeGridH,debugMode; };
 static_assert(sizeof(GatherPC)==24); }

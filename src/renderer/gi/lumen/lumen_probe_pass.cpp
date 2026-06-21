@@ -7,7 +7,7 @@
 #include "rhi/vulkan/vk_acceleration_structure.h"
 #include "rhi/base/command_buffer.h"
 #include "core/device.h"
-#include "core/shader.h"
+#include "core/path_util.h"
 #include "scene/scene_gpu.h"
 #include "renderer/gi/vxgi/vxgi_resources.h"
 #include "renderer/gi/rt/scene_rt_as.h"

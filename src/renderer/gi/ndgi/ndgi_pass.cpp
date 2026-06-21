@@ -15,7 +15,7 @@
 #include "rhi/vulkan/vk_buffer.h"
 #include "rhi/vulkan/vk_pso.h"
 #include "rhi/vulkan/vk_sampler.h"
-#include "core/shader.h"
+#include "core/path_util.h"
 #include <array>
 namespace somegi {
 NdgiPass::~NdgiPass()=default;

@@ -12,7 +12,7 @@
 #include "rhi/vulkan/vk_texture.h"
 #include "rhi/vulkan/vk_buffer.h"
 #include "rhi/vulkan/vk_pso.h"
-#include "core/shader.h"
+#include "core/path_util.h"
 #include <array>
 namespace somegi {
 namespace { struct SeedPC{uint32_t res,_p0,_p1,_p2;}; struct JfaPC{uint32_t res,step,_p0,_p1;}; struct FinalizePC{uint32_t res;float maxDistCells;uint32_t _p0,_p1;}; struct TracePC{uint32_t outSizeX,outSizeY,numRays,maxSteps;float invOutSizeX,invOutSizeY,rayMaxCells,hitEpsCells;uint32_t frameIndex,_p0,_p1,_p2;}; }

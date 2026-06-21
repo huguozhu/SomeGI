@@ -11,7 +11,7 @@
 #include "rhi/vulkan/vk_texture.h"
 #include "rhi/vulkan/vk_buffer.h"
 #include "rhi/vulkan/vk_pso.h"
-#include "core/shader.h"
+#include "core/path_util.h"
 #include <array>
 namespace somegi {
 namespace { struct UpdatePC { float ddgiOriginX,ddgiOriginY,ddgiOriginZ,_p0,ddgiSpacingX,ddgiSpacingY,ddgiSpacingZ,_p1; uint32_t probesX,probesY,probesZ,raysPerProbe; float randomRotation,voxelGridDim,vxgiCellSize; uint32_t vxgiResolution; float vxgiGridMinX,vxgiGridMinY,vxgiGridMinZ,_p2; };

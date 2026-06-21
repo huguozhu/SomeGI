@@ -10,7 +10,7 @@
 #include "rhi/vulkan/vk_command.h"
 #include "rhi/base/sampler.h"
 #include "rhi/vulkan/vk_pso.h"
-#include "core/shader.h"
+#include "core/path_util.h"
 #include <array>
 namespace somegi {
 namespace { struct RelightPC { uint32_t gridRes,mipLevels; float cellSize,bounceStrength,gridMinX,gridMinY,gridMinZ,_p0; };

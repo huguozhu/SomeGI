@@ -12,7 +12,7 @@
 #include "rhi/vulkan/vk_texture.h"
 #include "rhi/vulkan/vk_command.h"
 #include "rhi/base/sampler.h"
-#include "core/shader.h"
+#include "core/path_util.h"
 #include <array>
 namespace somegi {
 namespace { struct BakePC { float prtGridMinX,prtGridMinY,prtGridMinZ,prtCellSize; uint32_t prtResolution,numSamples; float voxelGridDim; uint32_t _pad0; float vxgiGridMinX,vxgiGridMinY,vxgiGridMinZ,vxgiCellSize; uint32_t vxgiResolution,_p1,_p2,_p3; };

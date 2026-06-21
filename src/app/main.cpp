@@ -1,6 +1,5 @@
 #include "app.h"
 #include "core/screenshot.h"
-#include "core/shader.h"
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>

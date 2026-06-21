@@ -13,7 +13,7 @@
 #include "rhi/vulkan/vk_buffer.h"
 #include "rhi/vulkan/vk_command.h"
 #include "rhi/base/sampler.h"
-#include "core/shader.h"
+#include "core/path_util.h"
 #include <array>
 namespace somegi {
 namespace { struct FilterPC { float invScreenSizeX,invScreenSizeY,probeTileSize; uint32_t probeGridW,probeGridH; float sigmaDepth,normalPower,sigmaDist,temporalAlpha; };

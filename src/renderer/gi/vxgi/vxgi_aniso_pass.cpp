@@ -9,7 +9,7 @@
 #include "rhi/vulkan/vk_shader.h"
 #include "rhi/vulkan/vk_texture.h"
 #include "rhi/vulkan/vk_command.h"
-#include "core/shader.h"
+#include "core/path_util.h"
 #include <array>
 namespace somegi {
 namespace { struct AnisoPC { uint32_t dstSize,useAnisoSrc,srcLevel,_pad; }; static_assert(sizeof(AnisoPC)==16); }
