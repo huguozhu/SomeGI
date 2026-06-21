@@ -45,15 +45,15 @@ void DdgiPass::init(rhi::RHIDevice& d){ m_rhiDevice=&d; auto& vkD=static_cast<rh
 }
 void DdgiPass::destroy(){ m_linearClamp.reset();
     m_setClassify.reset(); m_setBlend.reset(); m_setUpdate.reset(); m_pipelineBlendDist.reset(); m_pipelineBlendIrr.reset(); m_pipelineClassify.reset(); m_pipelineUpdate.reset(); m_setLayoutClassify.reset(); m_setLayoutBlend.reset(); m_setLayout.reset(); m_rhiDevice=nullptr; }
-void DdgiPass::bindResources(const DdgiResources& ddgi,const VxgiResources& vxgi){ auto& vkD=static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
-    auto vox=rhi::VkRHITextureView::createNonOwning(vkD,vxgi.fullView());
-    auto irr=rhi::VkRHITextureView::createNonOwning(vkD,ddgi.irradiance().view());
-    auto dist=rhi::VkRHITextureView::createNonOwning(vkD,ddgi.distance().view());
-    auto rb=rhi::VkRHIBuffer::createNonOwning(vkD,ddgi.rayBuffer().handle(),VK_WHOLE_SIZE);
-    auto ps=rhi::VkRHIBuffer::createNonOwning(vkD,ddgi.probeStates().handle(),VK_WHOLE_SIZE);
-    m_setUpdate->write({{0,rhi::DescriptorType::SampledImage,vox.get()},{1,rhi::DescriptorType::Sampler,nullptr,nullptr,0,0,m_linearClamp.get()},{2,rhi::DescriptorType::StorageBuffer,nullptr,rb.get()}});
-    m_setBlend->write({{0,rhi::DescriptorType::StorageBuffer,nullptr,rb.get()},{1,rhi::DescriptorType::StorageImage,irr.get()},{2,rhi::DescriptorType::StorageImage,dist.get()}});
-    m_setClassify->write({{0,rhi::DescriptorType::StorageBuffer,nullptr,rb.get()},{1,rhi::DescriptorType::StorageBuffer,nullptr,ps.get()}});
+void DdgiPass::bindResources(const DdgiResources& ddgi,const VxgiResources& vxgi){
+    auto vox=vxgi.rhiView();
+    auto irr=ddgi.irradianceRhiView();
+    auto dist=ddgi.distanceRhiView();
+    auto rb=ddgi.rayBufferRhi();
+    auto ps=ddgi.probeStatesRhi();
+    m_setUpdate->write({{0,rhi::DescriptorType::SampledImage,vox},{1,rhi::DescriptorType::Sampler,nullptr,nullptr,0,0,m_linearClamp.get()},{2,rhi::DescriptorType::StorageBuffer,nullptr,rb}});
+    m_setBlend->write({{0,rhi::DescriptorType::StorageBuffer,nullptr,rb},{1,rhi::DescriptorType::StorageImage,irr},{2,rhi::DescriptorType::StorageImage,dist}});
+    m_setClassify->write({{0,rhi::DescriptorType::StorageBuffer,nullptr,rb},{1,rhi::DescriptorType::StorageBuffer,nullptr,ps}});
 }
 // record — 纯 RHI，不依赖 VkCompat
 void DdgiPass::record(rhi::RHICommandBuffer& cmd, const DdgiResources&, const glm::vec3& dO, const glm::vec3& dS, const glm::vec3& vM, float vC, uint32_t vR, float rR, uint32_t) {

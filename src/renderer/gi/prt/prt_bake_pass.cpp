@@ -29,8 +29,8 @@ void PrtBakePass::init(rhi::RHIDevice& d){ m_rhiDevice=&d; auto& vkD=static_cast
     m_pipeline=d.createComputePSO(pd);
 }
 void PrtBakePass::destroy(){ m_linearClamp.reset(); m_set.reset(); m_pipeline.reset(); m_setLayout.reset(); m_rhiDevice=nullptr; }
-void PrtBakePass::bindResources(const VxgiResources& vxgi,const PrtResources& prt){ auto& vkD=static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
-    m_set->write({{0,rhi::DescriptorType::SampledImage,rhi::VkRHITextureView::createNonOwning(vkD,vxgi.fullView()).get()},{1,rhi::DescriptorType::Sampler,nullptr,nullptr,0,0,m_linearClamp.get()},{2,rhi::DescriptorType::StorageImage,rhi::VkRHITextureView::createNonOwning(vkD,prt.view()).get()},{3,rhi::DescriptorType::StorageImage,rhi::VkRHITextureView::createNonOwning(vkD,prt.viewB()).get()},{4,rhi::DescriptorType::StorageImage,rhi::VkRHITextureView::createNonOwning(vkD,prt.viewC()).get()},{5,rhi::DescriptorType::StorageImage,rhi::VkRHITextureView::createNonOwning(vkD,prt.viewD()).get()},{6,rhi::DescriptorType::StorageImage,rhi::VkRHITextureView::createNonOwning(vkD,prt.viewE()).get()}});
+void PrtBakePass::bindResources(const VxgiResources& vxgi,const PrtResources& prt){
+    m_set->write({{0,rhi::DescriptorType::SampledImage,vxgi.rhiView()},{1,rhi::DescriptorType::Sampler,nullptr,nullptr,0,0,m_linearClamp.get()},{2,rhi::DescriptorType::StorageImage,prt.rhiView()},{3,rhi::DescriptorType::StorageImage,prt.rhiViewB()},{4,rhi::DescriptorType::StorageImage,prt.rhiViewC()},{5,rhi::DescriptorType::StorageImage,prt.rhiViewD()},{6,rhi::DescriptorType::StorageImage,prt.rhiViewE()}});
 }
 void PrtBakePass::record(rhi::RHICommandBuffer& cmd,const glm::vec3& pgm,float pcs,uint32_t pr,const glm::vec3& vgm,float vcs,uint32_t vr,uint32_t ns){ if(!m_pipeline||!m_set)return;
     cmd.bindPipelineState(*m_pipeline); cmd.bindDescriptorSet(0,*m_set);

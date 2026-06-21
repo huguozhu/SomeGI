@@ -284,7 +284,7 @@ void GBufferPass::bindScene(Device& d, const SceneGpu& gpu, uint32_t textureCoun
     auto& vkD = static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
 
     auto uboRHI   = rhi::VkRHIBuffer::createNonOwning(vkD, m_frameUbo.handle(), VK_WHOLE_SIZE);
-    auto matRHI   = rhi::VkRHIBuffer::createNonOwning(vkD, gpu.materialBuffer.handle(), VK_WHOLE_SIZE);
+    auto matRHI   = gpu.rhiMaterialBuffer();
     auto sampRHI  = rhi::VkRHISampler::createNonOwning(vkD, gpu.linearSampler);
 
     // 纹理数组 views
@@ -300,7 +300,7 @@ void GBufferPass::bindScene(Device& d, const SceneGpu& gpu, uint32_t textureCoun
 
     m_set->write({
         {0,  rhi::DescriptorType::UniformBuffer, nullptr, uboRHI.get()},
-        {1,  rhi::DescriptorType::StorageBuffer, nullptr, matRHI.get()},
+        {1,  rhi::DescriptorType::StorageBuffer, nullptr, matRHI},
         {2,  rhi::DescriptorType::Sampler,       nullptr, nullptr, 0, 0, sampRHI.get()},
         {3,  rhi::DescriptorType::SampledImage,  nullptr, nullptr, 0, 0, nullptr, nullptr, m_maxTextures, texViewPtrs.data()},
         // binding 10 (DrawData) 在 bindDrawData 中写入
@@ -486,10 +486,8 @@ void GBufferPass::record(rhi::RHICommandBuffer& cmd, const RenderTargets& rt,
         // 顶点/索引缓冲路径（RHI）
         cmd.bindPipelineState(*m_pipeline);
         cmd.bindDescriptorSet(0, *m_set);
-        auto vb = rhi::VkRHIBuffer::createNonOwning(vkDev, gpu.vertexBuffer.handle(), VK_WHOLE_SIZE);
-        auto ib = rhi::VkRHIBuffer::createNonOwning(vkDev, gpu.indexBuffer.handle(), VK_WHOLE_SIZE);
-        cmd.bindVertexBuffer(0, *vb);
-        cmd.bindIndexBuffer(*ib, 0, false);
+        cmd.bindVertexBuffer(0, *gpu.rhiVertexBuffer());
+        cmd.bindIndexBuffer(*gpu.rhiIndexBuffer(), 0, false);
         cmd.drawIndexedIndirectCount(indirectBuf, 0, indirectBuf, 0,
                                       drawCount, sizeof(VkDrawIndexedIndirectCommand));
     }

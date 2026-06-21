@@ -561,24 +561,18 @@ void App::setupFrameGraph() {
                     ? rhi::TextureLayout::ShaderReadOnly
                     : rhi::TextureLayout::Undefined;
 
-                auto& irrImg = m_renderer.ddgi().irradiance();
-                auto irrTex = rhi::VkRHITexture::createNonOwning(vkDev, irrImg.image(),
-                    rhi::toRhiFormat(irrImg.format()), irrImg.extent().width, irrImg.extent().height, 1);
-                rhiCmd.textureBarrier(*irrTex, oldAtlasL, rhi::TextureLayout::General);
+                rhiCmd.textureBarrier(*m_renderer.ddgi().irradianceRhiTex(), oldAtlasL, rhi::TextureLayout::General);
 
-                auto& distImg = m_renderer.ddgi().distance();
-                auto distTex = rhi::VkRHITexture::createNonOwning(vkDev, distImg.image(),
-                    rhi::toRhiFormat(distImg.format()), distImg.extent().width, distImg.extent().height, 1);
-                rhiCmd.textureBarrier(*distTex, oldAtlasL, rhi::TextureLayout::General);
+                rhiCmd.textureBarrier(*m_renderer.ddgi().distanceRhiTex(), oldAtlasL, rhi::TextureLayout::General);
 
                 float jitterRot = float((m_renderer.frameIndex() % 360) * 0.0174532925);
                 m_renderer.ddgiPass().record(rhiCmd, m_renderer.ddgi(), m_renderer.ddgiOrigin(), m_renderer.ddgiSpacing(),
                     m_renderer.vxgiGridMin(), m_renderer.vxgiCellSize(), m_renderer.kVxgiResolution,
                     jitterRot, m_renderer.frameIndex());
 
-                rhiCmd.textureBarrier(*irrTex,
+                rhiCmd.textureBarrier(*m_renderer.ddgi().irradianceRhiTex(),
                     rhi::TextureLayout::General, rhi::TextureLayout::ShaderReadOnly);
-                rhiCmd.textureBarrier(*distTex,
+                rhiCmd.textureBarrier(*m_renderer.ddgi().distanceRhiTex(),
                     rhi::TextureLayout::General, rhi::TextureLayout::ShaderReadOnly);
                 m_renderer.ddgiAtlasInited() = true;
             });

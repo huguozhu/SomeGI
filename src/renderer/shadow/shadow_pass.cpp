@@ -320,12 +320,10 @@ void ShadowPass::destroyPipelines() {
 void ShadowPass::bindScene(Device&, const SceneGpu& gpu) {
     m_indexBuffer = gpu.indexBuffer.handle();
     auto& vkD = static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
-    auto vb = rhi::VkRHIBuffer::createNonOwning(vkD, gpu.vertexBuffer.handle(), VK_WHOLE_SIZE);
-    auto ib = rhi::VkRHIBuffer::createNonOwning(vkD, gpu.indexBuffer.handle(), VK_WHOLE_SIZE);
     auto dd = rhi::VkRHIBuffer::createNonOwning(vkD, gpu.drawDataBuffer.handle(), VK_WHOLE_SIZE);
     m_smSet->write({
-        {1, rhi::DescriptorType::StorageBuffer, nullptr, vb.get()},
-        {2, rhi::DescriptorType::StorageBuffer, nullptr, ib.get()},
+        {1, rhi::DescriptorType::StorageBuffer, nullptr, gpu.rhiVertexBuffer()},
+        {2, rhi::DescriptorType::StorageBuffer, nullptr, gpu.rhiIndexBuffer()},
         {3, rhi::DescriptorType::StorageBuffer, nullptr, dd.get()},
     });
 }

@@ -89,26 +89,26 @@ void LumenProbePass::bindResources(const LumenResources& res, const SceneRtAS& r
     auto nr  = rt.rhiGNormalRoughView();
     auto dp  = rt.rhiDepthView();
     auto tas = rtAS.tlas();
-    auto vox = rhi::VkRHITextureView::createNonOwning(vkD, vxgi.fullView());
-    auto rb  = rhi::VkRHIBuffer::createNonOwning(vkD, res.rayBuffer().handle(), VK_WHOLE_SIZE);
-    auto pa  = rhi::VkRHITextureView::createNonOwning(vkD, res.probeAtlas().view());
+    auto vox = vxgi.rhiView();
+    auto rb  = res.rayBufferRhi();
+    auto pa  = res.probeAtlasRhiView();
 
-    auto ax  = rhi::VkRHITextureView::createNonOwning(vkD, hasSixAxis ? vxgi.sixAxisX().view() : vxgi.fullView());
-    auto ay  = rhi::VkRHITextureView::createNonOwning(vkD, hasSixAxis ? vxgi.sixAxisY().view() : vxgi.fullView());
-    auto az  = rhi::VkRHITextureView::createNonOwning(vkD, hasSixAxis ? vxgi.sixAxisZ().view() : vxgi.fullView());
+    auto ax  = hasSixAxis ? vxgi.sixAxisXRhiView() : vxgi.rhiView();
+    auto ay  = hasSixAxis ? vxgi.sixAxisYRhiView() : vxgi.rhiView();
+    auto az  = hasSixAxis ? vxgi.sixAxisZRhiView() : vxgi.rhiView();
 
     m_set->write({
         {0,  DS::UniformBuffer,        nullptr, ub.get()},
         {1,  DS::SampledImage,         nr},
         {2,  DS::SampledImage,         dp},
         {3,  DS::AccelerationStructure, nullptr, nullptr, 0, 0, nullptr, tas},
-        {4,  DS::SampledImage,         vox.get()},
+        {4,  DS::SampledImage,         vox},
         {5,  DS::Sampler,              nullptr, nullptr, 0, 0, m_linearClamp.get()},
-        {6,  DS::StorageBuffer,        nullptr, rb.get()},
-        {7,  DS::StorageImage,         pa.get()},
-        {8,  DS::SampledImage,         ax.get()},
-        {9,  DS::SampledImage,         ay.get()},
-        {10, DS::SampledImage,         az.get()},
+        {6,  DS::StorageBuffer,        nullptr, rb},
+        {7,  DS::StorageImage,         pa},
+        {8,  DS::SampledImage,         ax},
+        {9,  DS::SampledImage,         ay},
+        {10, DS::SampledImage,         az},
     });
 }
 

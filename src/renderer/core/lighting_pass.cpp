@@ -174,19 +174,19 @@ void LightingPass::bindFrame(const RenderTargets& rt, VkBuffer frameUbo,
     auto sgV  = rt.rhiSsgiView();
     auto rmV  = rt.rhiRsmGIView();
 
-    auto lpvRV = rhi::VkRHITextureView::createNonOwning(vkD, lpv0.lpvR.view());
-    auto lpvGV = rhi::VkRHITextureView::createNonOwning(vkD, lpv0.lpvG.view());
-    auto lpvBV = rhi::VkRHITextureView::createNonOwning(vkD, lpv0.lpvB.view());
-    auto vxV   = rhi::VkRHITextureView::createNonOwning(vkD, vxgi.fullView());
-    auto prtV  = rhi::VkRHITextureView::createNonOwning(vkD, prt.view());
-    auto ddIrV = rhi::VkRHITextureView::createNonOwning(vkD, ddgi.irradiance().view());
-    auto ddDsV = rhi::VkRHITextureView::createNonOwning(vkD, ddgi.distance().view());
-    auto ddPSB = rhi::VkRHIBuffer::createNonOwning(vkD, ddgiPS, VK_WHOLE_SIZE);
-    auto vaV   = rhi::VkRHITextureView::createNonOwning(vkD, vxgi.anisoFullView());
-    auto prB   = rhi::VkRHITextureView::createNonOwning(vkD, prt.viewB());
-    auto prC   = rhi::VkRHITextureView::createNonOwning(vkD, prt.viewC());
-    auto prD   = rhi::VkRHITextureView::createNonOwning(vkD, prt.viewD());
-    auto prE   = rhi::VkRHITextureView::createNonOwning(vkD, prt.viewE());
+    auto lpvRV = lpv0.lpvRView.get();
+    auto lpvGV = lpv0.lpvGView.get();
+    auto lpvBV = lpv0.lpvBView.get();
+    auto vxV   = vxgi.rhiView();
+    auto prtV  = prt.rhiView();
+    auto ddIrV = ddgi.irradianceRhiView();
+    auto ddDsV = ddgi.distanceRhiView();
+    auto ddPSB = ddgi.probeStatesRhi();
+    auto vaV   = vxgi.anisoRhiView();
+    auto prB   = prt.rhiViewB();
+    auto prC   = prt.rhiViewC();
+    auto prD   = prt.rhiViewD();
+    auto prE   = prt.rhiViewE();
     auto rsV   = rt.rhiRestirView();
     auto rtV   = rt.rhiRtGIView();
     auto lpS   = rhi::VkRHISampler::createNonOwning(vkD, (VkSampler)(uintptr_t)m_lpvSampler->nativeHandle());
@@ -204,20 +204,20 @@ void LightingPass::bindFrame(const RenderTargets& rt, VkBuffer frameUbo,
         {7, rhi::DescriptorType::SampledImage, srV},
         {8, rhi::DescriptorType::SampledImage, sgV},
         {9, rhi::DescriptorType::SampledImage, rmV},
-        {10, rhi::DescriptorType::SampledImage, lpvRV.get()},
-        {11, rhi::DescriptorType::SampledImage, lpvGV.get()},
-        {12, rhi::DescriptorType::SampledImage, lpvBV.get()},
+        {10, rhi::DescriptorType::SampledImage, lpvRV},
+        {11, rhi::DescriptorType::SampledImage, lpvGV},
+        {12, rhi::DescriptorType::SampledImage, lpvBV},
         {13, rhi::DescriptorType::Sampler, nullptr, nullptr, 0, 0, lpS.get()},
-        {14, rhi::DescriptorType::SampledImage, vxV.get()},
-        {15, rhi::DescriptorType::SampledImage, prtV.get()},
-        {16, rhi::DescriptorType::SampledImage, ddIrV.get()},
-        {17, rhi::DescriptorType::SampledImage, ddDsV.get()},
-        {18, rhi::DescriptorType::StorageBuffer, nullptr, ddPSB.get()},
-        {19, rhi::DescriptorType::SampledImage, vaV.get()},
-        {20, rhi::DescriptorType::SampledImage, prB.get()},
-        {21, rhi::DescriptorType::SampledImage, prC.get()},
-        {22, rhi::DescriptorType::SampledImage, prD.get()},
-        {23, rhi::DescriptorType::SampledImage, prE.get()},
+        {14, rhi::DescriptorType::SampledImage, vxV},
+        {15, rhi::DescriptorType::SampledImage, prtV},
+        {16, rhi::DescriptorType::SampledImage, ddIrV},
+        {17, rhi::DescriptorType::SampledImage, ddDsV},
+        {18, rhi::DescriptorType::StorageBuffer, nullptr, ddPSB},
+        {19, rhi::DescriptorType::SampledImage, vaV},
+        {20, rhi::DescriptorType::SampledImage, prB},
+        {21, rhi::DescriptorType::SampledImage, prC},
+        {22, rhi::DescriptorType::SampledImage, prD},
+        {23, rhi::DescriptorType::SampledImage, prE},
         {24, rhi::DescriptorType::SampledImage, rsV},
         {25, rhi::DescriptorType::SampledImage, rtV},
         {26, rhi::DescriptorType::SampledImage, nrV}, // duplicate: shader unused

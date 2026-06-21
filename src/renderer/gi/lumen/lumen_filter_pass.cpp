@@ -31,7 +31,7 @@ void LumenFilterPass::init(rhi::RHIDevice& d){ m_rhiDevice=&d; auto& vkD=static_
 }
 void LumenFilterPass::destroy(){ m_pointClamp.reset(); m_set.reset(); m_pipeline.reset(); m_setLayout.reset(); m_rhiDevice=nullptr; }
 void LumenFilterPass::bindResources(const LumenResources& res,const RenderTargets& rt,VkBuffer frameUbo){ auto& vkD=static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
-    m_set->write({{0,rhi::DescriptorType::UniformBuffer,nullptr,rhi::VkRHIBuffer::createNonOwning(vkD,frameUbo,VK_WHOLE_SIZE).get()},{1,rhi::DescriptorType::SampledImage,rt.rhiGNormalRoughView()},{2,rhi::DescriptorType::SampledImage,rt.rhiDepthView()},{3,rhi::DescriptorType::SampledImage,rhi::VkRHITextureView::createNonOwning(vkD,res.probeAtlas().view()).get()},{4,rhi::DescriptorType::StorageImage,rhi::VkRHITextureView::createNonOwning(vkD,res.filteredAtlas().view()).get()},{5,rhi::DescriptorType::SampledImage,rhi::VkRHITextureView::createNonOwning(vkD,res.prevAtlas().view()).get()},{6,rhi::DescriptorType::Sampler,nullptr,nullptr,0,0,m_pointClamp.get()}});
+    m_set->write({{0,rhi::DescriptorType::UniformBuffer,nullptr,rhi::VkRHIBuffer::createNonOwning(vkD,frameUbo,VK_WHOLE_SIZE).get()},{1,rhi::DescriptorType::SampledImage,rt.rhiGNormalRoughView()},{2,rhi::DescriptorType::SampledImage,rt.rhiDepthView()},{3,rhi::DescriptorType::SampledImage,res.probeAtlasRhiView()},{4,rhi::DescriptorType::StorageImage,res.filteredAtlasRhiView()},{5,rhi::DescriptorType::SampledImage,res.prevAtlasRhiView()},{6,rhi::DescriptorType::Sampler,nullptr,nullptr,0,0,m_pointClamp.get()}});
 }
 void LumenFilterPass::record(rhi::RHICommandBuffer& cmd,const LumenResources& res,const RenderTargets& rt){ if(!m_pipeline||!m_set)return;
     cmd.bindPipelineState(*m_pipeline); cmd.bindDescriptorSet(0,*m_set);

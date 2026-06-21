@@ -29,8 +29,8 @@ void VxgiResolve6AxisPass::init(rhi::RHIDevice& d){ m_rhiDevice=&d; auto& vkD=st
     m_pipeline=d.createComputePSO(pd);
 }
 void VxgiResolve6AxisPass::destroy(){ m_linearClamp.reset(); m_set.reset(); m_pipeline.reset(); m_setLayout.reset(); m_rhiDevice=nullptr; }
-void VxgiResolve6AxisPass::bindResources(const VxgiResources& vxgi){ auto& vkD=static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
-    m_set->write({{0,rhi::DescriptorType::SampledImage,rhi::VkRHITextureView::createNonOwning(vkD,vxgi.fullView()).get()},{1,rhi::DescriptorType::SampledImage,rhi::VkRHITextureView::createNonOwning(vkD,vxgi.anisoFullView()).get()},{2,rhi::DescriptorType::Sampler,nullptr,nullptr,0,0,m_linearClamp.get()},{3,rhi::DescriptorType::StorageImage,rhi::VkRHITextureView::createNonOwning(vkD,vxgi.sixAxisX().view()).get()},{4,rhi::DescriptorType::StorageImage,rhi::VkRHITextureView::createNonOwning(vkD,vxgi.sixAxisY().view()).get()},{5,rhi::DescriptorType::StorageImage,rhi::VkRHITextureView::createNonOwning(vkD,vxgi.sixAxisZ().view()).get()}});
+void VxgiResolve6AxisPass::bindResources(const VxgiResources& vxgi){
+    m_set->write({{0,rhi::DescriptorType::SampledImage,vxgi.rhiView()},{1,rhi::DescriptorType::SampledImage,vxgi.anisoRhiView()},{2,rhi::DescriptorType::Sampler,nullptr,nullptr,0,0,m_linearClamp.get()},{3,rhi::DescriptorType::StorageImage,vxgi.sixAxisXRhiView()},{4,rhi::DescriptorType::StorageImage,vxgi.sixAxisYRhiView()},{5,rhi::DescriptorType::StorageImage,vxgi.sixAxisZRhiView()}});
 }
 void VxgiResolve6AxisPass::record(rhi::RHICommandBuffer& cmd,uint32_t gr,uint32_t ml,float cs,const glm::vec3& gm,float st){ if(!m_pipeline||!m_set)return;
     cmd.bindPipelineState(*m_pipeline); cmd.bindDescriptorSet(0,*m_set);

@@ -44,12 +44,12 @@ void LpvPropagatePass::bindResources(const LpvGrid& g0, const LpvGrid& g1, const
     auto& vkD=static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
     auto writeOne = [&](int si, const LpvGrid& src, const LpvGrid& dst) {
         m_sets[si]->write({
-            {0, rhi::DescriptorType::SampledImage, rhi::VkRHITextureView::createNonOwning(vkD,src.lpvR.view()).get()},
-            {1, rhi::DescriptorType::SampledImage, rhi::VkRHITextureView::createNonOwning(vkD,src.lpvG.view()).get()},
-            {2, rhi::DescriptorType::SampledImage, rhi::VkRHITextureView::createNonOwning(vkD,src.lpvB.view()).get()},
-            {3, rhi::DescriptorType::StorageImage, rhi::VkRHITextureView::createNonOwning(vkD,dst.lpvR.view()).get()},
-            {4, rhi::DescriptorType::StorageImage, rhi::VkRHITextureView::createNonOwning(vkD,dst.lpvG.view()).get()},
-            {5, rhi::DescriptorType::StorageImage, rhi::VkRHITextureView::createNonOwning(vkD,dst.lpvB.view()).get()},
+            {0, rhi::DescriptorType::SampledImage, src.lpvRView.get()},
+            {1, rhi::DescriptorType::SampledImage, src.lpvGView.get()},
+            {2, rhi::DescriptorType::SampledImage, src.lpvBView.get()},
+            {3, rhi::DescriptorType::StorageImage, dst.lpvRView.get()},
+            {4, rhi::DescriptorType::StorageImage, dst.lpvGView.get()},
+            {5, rhi::DescriptorType::StorageImage, dst.lpvBView.get()},
             {6, rhi::DescriptorType::SampledImage, rhi::VkRHITextureView::createNonOwning(vkD,gv.view()).get()},
         });
     };

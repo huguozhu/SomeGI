@@ -39,9 +39,9 @@ void LpvInjectPass::bindResources(VkImageView rsmPosView, VkImageView rsmNView, 
         {0,rhi::DescriptorType::SampledImage,rhi::VkRHITextureView::createNonOwning(vkD,rsmPosView).get()},
         {1,rhi::DescriptorType::SampledImage,rhi::VkRHITextureView::createNonOwning(vkD,rsmNView).get()},
         {2,rhi::DescriptorType::SampledImage,rhi::VkRHITextureView::createNonOwning(vkD,rsmFluxView).get()},
-        {3,rhi::DescriptorType::StorageImage,rhi::VkRHITextureView::createNonOwning(vkD,grid.lpvR.view()).get()},
-        {4,rhi::DescriptorType::StorageImage,rhi::VkRHITextureView::createNonOwning(vkD,grid.lpvG.view()).get()},
-        {5,rhi::DescriptorType::StorageImage,rhi::VkRHITextureView::createNonOwning(vkD,grid.lpvB.view()).get()},
+        {3,rhi::DescriptorType::StorageImage,grid.lpvRView.get()},
+        {4,rhi::DescriptorType::StorageImage,grid.lpvGView.get()},
+        {5,rhi::DescriptorType::StorageImage,grid.lpvBView.get()},
         {6,rhi::DescriptorType::StorageImage,rhi::VkRHITextureView::createNonOwning(vkD,gv.view()).get()},
     });
     m_lpvR=&grid.lpvR; m_lpvG=&grid.lpvG; m_lpvB=&grid.lpvB; m_gv=&gv;

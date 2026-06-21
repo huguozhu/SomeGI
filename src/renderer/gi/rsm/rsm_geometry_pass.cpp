@@ -95,12 +95,12 @@ void RsmGeometryPass::destroy() {
 
 void RsmGeometryPass::bindScene(const SceneGpu& gpu, uint32_t tc) {
     auto& vkD=static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
-    auto matBuf=rhi::VkRHIBuffer::createNonOwning(vkD,gpu.materialBuffer.handle(),VK_WHOLE_SIZE);
+    auto matBuf=gpu.rhiMaterialBuffer();
     m_texViews.clear(); m_texViewPtrs.clear(); m_texViews.reserve(m_maxTextures); m_texViewPtrs.reserve(m_maxTextures);
     for(uint32_t i=0;i<m_maxTextures;++i){ VkImageView v=(i<tc&&i<gpu.images.size())?gpu.images[i].view():gpu.whiteTex.view(); m_texViews.push_back(rhi::VkRHITextureView::createNonOwning(vkD,v)); m_texViewPtrs.push_back(m_texViews.back().get()); }
     auto rsmSampler = rhi::VkRHISampler::createNonOwning(vkD, gpu.linearSampler);
     rhi::DescriptorWrite w[3]={};
-    w[0]={1,rhi::DescriptorType::StorageBuffer,nullptr,matBuf.get()};
+    w[0]={1,rhi::DescriptorType::StorageBuffer,nullptr,matBuf};
     w[1]={2,rhi::DescriptorType::Sampler,nullptr,nullptr,0,0,rsmSampler.get()};
     w[2]={3,rhi::DescriptorType::SampledImage,nullptr,nullptr,0,0,nullptr,nullptr,m_maxTextures,m_texViewPtrs.data()};
     m_set->write({w,w+3});
@@ -131,7 +131,6 @@ void RsmGeometryPass::updateLight(const glm::vec3& aabbMin, const glm::vec3& aab
 
 void RsmGeometryPass::record(rhi::RHICommandBuffer& cmd, const rhi::RHIBuffer& indirectBuf, uint32_t drawCount, const SceneGpu& gpu) {
     if(!drawCount||!m_pipeline)return;
-    auto& vkD=static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
 
     // Pre-render barriers: Undefined → Color/Depth attachment
     cmd.textureBarrier(*m_positionTex, rhi::TextureLayout::Undefined, rhi::TextureLayout::ColorAttachment);
@@ -150,9 +149,7 @@ void RsmGeometryPass::record(rhi::RHICommandBuffer& cmd, const rhi::RHIBuffer& i
     cmd.setViewport(0,0,(float)kRsmSize,(float)kRsmSize);
     cmd.setScissor(0,0,kRsmSize,kRsmSize);
     cmd.bindPipelineState(*m_pipeline); cmd.bindDescriptorSet(0,*m_set);
-    auto vb=rhi::VkRHIBuffer::createNonOwning(vkD,gpu.vertexBuffer.handle(),VK_WHOLE_SIZE);
-    auto ib=rhi::VkRHIBuffer::createNonOwning(vkD,gpu.indexBuffer.handle(),VK_WHOLE_SIZE);
-    cmd.bindVertexBuffer(0,*vb); cmd.bindIndexBuffer(*ib,0,false);
+    cmd.bindVertexBuffer(0,*gpu.rhiVertexBuffer()); cmd.bindIndexBuffer(*gpu.rhiIndexBuffer(),0,false);
     cmd.drawIndexedIndirectCount(indirectBuf,0,indirectBuf,0,drawCount,sizeof(VkDrawIndexedIndirectCommand));
     cmd.endRendering();
 

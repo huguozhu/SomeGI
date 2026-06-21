@@ -156,13 +156,13 @@ void ForwardPass::bindIblResources(Device& d, const IblResources& ibl) {
 
 void ForwardPass::bindScene(Device&, const SceneGpu& gpu, uint32_t tc) {
     auto& vkD=static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
-    auto mat=rhi::VkRHIBuffer::createNonOwning(vkD,gpu.materialBuffer.handle(),VK_WHOLE_SIZE);
+    auto mat=gpu.rhiMaterialBuffer();
     auto ibs=rhi::VkRHISampler::createNonOwning(vkD,gpu.linearSampler);
     auto ubo=rhi::VkRHIBuffer::createNonOwning(vkD,m_frameUbo.handle(),sizeof(FrameUBO));
     m_texViews.clear(); m_texViewPtrs.clear(); m_texViews.reserve(m_maxTextures); m_texViewPtrs.reserve(m_maxTextures);
     for(uint32_t i=0;i<m_maxTextures;++i){ VkImageView v=(i<tc&&i<gpu.images.size())?gpu.images[i].view():gpu.whiteTex.view(); m_texViews.push_back(rhi::VkRHITextureView::createNonOwning(vkD,v)); m_texViewPtrs.push_back(m_texViews.back().get()); }
     auto dumB=rhi::VkRHIBuffer::createNonOwning(vkD,m_dummySBuf.handle(),4);
-    m_set->write({{0,rhi::DescriptorType::UniformBuffer,nullptr,ubo.get()},{1,rhi::DescriptorType::StorageBuffer,nullptr,mat.get()},{2,rhi::DescriptorType::Sampler,nullptr,nullptr,0,0,ibs.get()},{3,rhi::DescriptorType::SampledImage,nullptr,nullptr,0,0,nullptr,nullptr,m_maxTextures,m_texViewPtrs.data()},{4,rhi::DescriptorType::StorageBuffer,nullptr,dumB.get()},{5,rhi::DescriptorType::StorageBuffer,nullptr,dumB.get()},{6,rhi::DescriptorType::StorageBuffer,nullptr,dumB.get()},{7,rhi::DescriptorType::StorageBuffer,nullptr,dumB.get()},{8,rhi::DescriptorType::StorageBuffer,nullptr,dumB.get()},{9,rhi::DescriptorType::StorageBuffer,nullptr,dumB.get()}});
+    m_set->write({{0,rhi::DescriptorType::UniformBuffer,nullptr,ubo.get()},{1,rhi::DescriptorType::StorageBuffer,nullptr,mat},{2,rhi::DescriptorType::Sampler,nullptr,nullptr,0,0,ibs.get()},{3,rhi::DescriptorType::SampledImage,nullptr,nullptr,0,0,nullptr,nullptr,m_maxTextures,m_texViewPtrs.data()},{4,rhi::DescriptorType::StorageBuffer,nullptr,dumB.get()},{5,rhi::DescriptorType::StorageBuffer,nullptr,dumB.get()},{6,rhi::DescriptorType::StorageBuffer,nullptr,dumB.get()},{7,rhi::DescriptorType::StorageBuffer,nullptr,dumB.get()},{8,rhi::DescriptorType::StorageBuffer,nullptr,dumB.get()},{9,rhi::DescriptorType::StorageBuffer,nullptr,dumB.get()}});
 }
 
 void ForwardPass::bindDrawData(Device&, VkBuffer db) {
@@ -184,7 +184,6 @@ void ForwardPass::setNdgiWeights(Device&, VkBuffer w1,VkBuffer b1,VkBuffer w2,Vk
 // RHI 路径：前向渲染（1 颜色附件 + 深度）
 void ForwardPass::record(rhi::RHICommandBuffer& cmd, const RenderTargets& rt, const rhi::RHIBuffer& ib, uint32_t dc, const SceneGpu& gpu) {
     if(!m_pipeline||!m_set||!m_iblSet) return;
-    auto& vkDev = static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
 
     rhi::RenderingAttachmentInfo cAttach{};
     cAttach.view = rt.rhiHdrColorView();
@@ -205,10 +204,8 @@ void ForwardPass::record(rhi::RHICommandBuffer& cmd, const RenderTargets& rt, co
     const rhi::RHIDescriptorSet* sets[2] = {m_set.get(), m_iblSet.get()};
     cmd.bindDescriptorSets(0, 2, sets);
 
-    auto vb = rhi::VkRHIBuffer::createNonOwning(vkDev, gpu.vertexBuffer.handle(), VK_WHOLE_SIZE);
-    auto ibo = rhi::VkRHIBuffer::createNonOwning(vkDev, gpu.indexBuffer.handle(), VK_WHOLE_SIZE);
-    cmd.bindVertexBuffer(0, *vb);
-    cmd.bindIndexBuffer(*ibo, 0, false);
+    cmd.bindVertexBuffer(0, *gpu.rhiVertexBuffer());
+    cmd.bindIndexBuffer(*gpu.rhiIndexBuffer(), 0, false);
     cmd.drawIndexedIndirectCount(ib, 0, ib, 0, dc, sizeof(VkDrawIndexedIndirectCommand));
 
     cmd.endRendering();
