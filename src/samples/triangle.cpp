@@ -5,7 +5,6 @@
 #include "rhi/vulkan/vk_command.h"
 #include "rhi/vulkan/vk_pso.h"
 #include "rhi/vulkan/vk_descriptor.h"
-#include "rhi/vulkan/vk_context.h"
 #include "rhi/vulkan/vk_texture.h"
 #include "rhi/vulkan/vk_fence.h"
 #include "core/window.h"
@@ -31,14 +30,11 @@ int main() {
     Window window(wd);
     rhi::VkRHIDevice rhiDevice(&window, true);
 
-    // ── 2. Swapchain (surface already in device from constructor) ──
+    // ── 2. Swapchain ──
     auto pSwapchain = rhiDevice.createSwapchain(nullptr, wd.width, wd.height);
     auto& swapchain = static_cast<rhi::VkRHISwapchain&>(*pSwapchain);
 
-    // ── 3. Command context ──
-    rhi::VkContext ctx(rhiDevice, 2);
-
-    // ── 4. Shaders ──
+    // ── 3. Shaders ──
     auto vertSpv = loadSpv("triangle.vert.spv");
     auto fragSpv = loadSpv("triangle.frag.spv");
     rhi::ShaderDesc sd;
@@ -47,7 +43,7 @@ int main() {
     sd.stage = rhi::ShaderStage::Fragment;
     auto fs = rhiDevice.createShader(sd, fragSpv.data(), fragSpv.size() * 4);
 
-    // ── 5. Pipeline (dynamic rendering, no vertex buffers) ──
+    // ── 4. Pipeline ──
     rhi::DescSetLayoutDesc ld; ld.debugName = "Empty";
     auto setLayout = rhiDevice.createDescriptorSetLayout(ld);
 
@@ -59,6 +55,11 @@ int main() {
     pd.descriptorSetLayouts = {setLayout.get()};
     auto pso = rhiDevice.createGraphicsPSO(pd);
 
+    // ── 5. Command buffer (single, reused each frame) ──
+    auto cmdPool = rhiDevice.createCommandPool();
+    auto* rawCmd = cmdPool->allocateRaw();
+    auto& cmd = static_cast<rhi::VkRHICommandBuffer&>(*rawCmd);
+
     // ── 6. Main loop ──
     uint32_t frameIdx = 0;
     while (!window.shouldClose()) {
@@ -67,9 +68,10 @@ int main() {
         auto frame = pSwapchain->acquireNextFrame();
         if (frame.needsResize) { pSwapchain->recreate(); continue; }
 
-        auto& cmd = ctx.beginFrame(frame.frameInFlight);
+        // Begin command buffer
+        cmd.reset();
+        cmd.begin();
 
-        // Wrap swapchain image as non-owning RHITexture for barriers
         auto swTex = rhi::VkRHITexture::createNonOwning(rhiDevice,
             swapchain.vkImage(frame.imageIndex),
             pSwapchain->format(), frame.width, frame.height, 1);
@@ -95,8 +97,9 @@ int main() {
         cmd.textureBarrier(*swTex,
             rhi::TextureLayout::ColorAttachment, rhi::TextureLayout::Present);
 
-        // End + submit via context (internally handles vkEndCommandBuffer)
         cmd.end();
+
+        // Submit
         rhi::SubmitDesc sd;
         sd.commandBuffer = &cmd;
         sd.waitSemaphore = static_cast<rhi::RHISemaphore*>(frame.imageAvailable);
@@ -104,7 +107,7 @@ int main() {
         rhiDevice.submit(sd);
         pSwapchain->present(frame);
 
-        // Wait for GPU via inFlight fence
+        // CPU-GPU sync via swapchain inFlight fence
         vkWaitForFences(rhiDevice.vkDevice(), 1,
             static_cast<VkFence*>(frame.inFlightFence), VK_TRUE, UINT64_MAX);
 
