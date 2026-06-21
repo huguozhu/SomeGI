@@ -8,6 +8,7 @@
 #include "rhi/base/pipeline_state.h"
 #include "rhi/base/descriptor.h"
 #include "rhi/base/buffer.h"
+#include "rhi/vulkan/vulkan_context.h"
 #include "renderer/core/render_targets.h"
 #include "renderer/core/tonemap_pass.h"
 #define GLFW_EXPOSE_NATIVE_WIN32
@@ -108,20 +109,21 @@ App::App() {
         std::printf("[init] HW RT not supported — RayTracing GI + Lumen-lite unavailable\n");
     }
 
+    // 临时命令池：FrameRenderer::init 需要 VkCommandPool（用于 oneShotSubmit），
+    // 随后由 VulkanContext 接管帧级 cmd buffer 管理。
     VkCommandPoolCreateInfo pci{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
     pci.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
     pci.queueFamilyIndex = m_device->graphicsQueueFamily();
-    VK_CHECK(vkCreateCommandPool(m_device->device(), &pci, nullptr, &m_pool));
+    VkCommandPool tempPool = VK_NULL_HANDLE;
+    VK_CHECK(vkCreateCommandPool(m_device->device(), &pci, nullptr, &tempPool));
 
-    VkCommandBufferAllocateInfo ai{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
-    ai.commandPool = m_pool;
-    ai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-    ai.commandBufferCount = kFramesInFlight;
-    VK_CHECK(vkAllocateCommandBuffers(m_device->device(), &ai, m_cmds));
-
-    // Delegate all rendering setup to FrameRenderer
-    m_renderer.init(*m_device, m_pool, m_swap->extent(), m_msaaSamples,
+    // Delegate all rendering setup to FrameRenderer（内部创建 VkRHIDevice）
+    m_renderer.init(*m_device, tempPool, m_swap->extent(), m_msaaSamples,
                     rtSupported, m_swap->format(), m_window->handle());
+
+    // RHI 命令上下文：接管帧级 cmd buffer + fence 管理
+    auto& vkDevRhi = static_cast<rhi::VkRHIDevice&>(*m_renderer.rhiDevice());
+    m_context = std::make_unique<rhi::VulkanContext>(vkDevRhi, kFramesInFlight);
 
     // 应用依赖 renderer 的持久化设置
     if (loadedCfg.useMeshShader && m_renderer.meshShaderSupported())
@@ -194,7 +196,7 @@ void App::bakeEnvIbl() {
         makeFallbackSky(env);
     }
     IblBaker baker;
-    baker.bake(*m_device, m_pool, env, m_renderer.envIbl(), m_renderer.rhiDevice());
+    baker.bake(*m_device, static_cast<rhi::VulkanContext&>(*m_context).vkCommandPool(), env, m_renderer.envIbl(), m_renderer.rhiDevice());
 }
 
 bool App::loadAndUploadScene(const std::filesystem::path& gltfPath, std::string& outErr) {
@@ -209,7 +211,7 @@ bool App::loadAndUploadScene(const std::filesystem::path& gltfPath, std::string&
         m_scene.aabbMax.x, m_scene.aabbMax.y, m_scene.aabbMax.z);
 
     std::printf("[scene] uploading to GPU...\n");
-    uploadScene(*m_device, m_pool, m_scene, m_sceneGpu, m_useMipmaps, m_renderer.rhiDevice());
+    uploadScene(*m_device, static_cast<rhi::VulkanContext&>(*m_context).vkCommandPool(), m_scene, m_sceneGpu, m_useMipmaps, m_renderer.rhiDevice());
     std::printf("[scene] GPU upload done.\n");
     return true;
 }
@@ -271,7 +273,7 @@ void App::applySceneSelection() {
 
     // M9：场景已加载，构建加速结构 + bindFrame（仅 HW 支持时）。
     if (m_renderer.rtSupported()) {
-        m_renderer.rtAS().build(*m_device, *m_renderer.rhiDevice(), m_pool, m_scene, m_sceneGpu);
+        m_renderer.rtAS().build(*m_device, *m_renderer.rhiDevice(), static_cast<rhi::VulkanContext&>(*m_context).vkCommandPool(), m_scene, m_sceneGpu);
         m_renderer.rtGiBound() = (m_renderer.rtAS().instanceCount() > 0);
         if (m_renderer.rtGiBound()) {
             m_renderer.rtGi().bindFrame(m_renderer.rt(), m_renderer.gbuffer().frameUboHandle(), m_renderer.rtAS(), m_sceneGpu);
@@ -502,7 +504,7 @@ void App::cleanup() {
     m_indirectBuf.reset();
     m_indirectBufSun.reset();
     m_countBuf.reset();
-    if (m_pool) vkDestroyCommandPool(m_device->device(), m_pool, nullptr);
+    m_context.reset();  // 销毁命令上下文（自动清理 pool + cmd buffers + fence）
     if (m_imguiFence) vkDestroyFence(m_device->device(), m_imguiFence, nullptr);
     if (m_imguiCmds[0]) vkFreeCommandBuffers(m_device->device(), m_imguiPool, kFramesInFlight, m_imguiCmds);
     if (m_imguiPool) vkDestroyCommandPool(m_device->device(), m_imguiPool, nullptr);
@@ -1364,15 +1366,10 @@ void App::run() {
         FrameUBO ubo{};
         buildFrameUBO(ubo);
 
-        // ---- Begin command buffer ----
-        VkCommandBuffer cmd = m_cmds[frame.frameInFlight];
-        vkResetCommandBuffer(cmd, VK_COMMAND_BUFFER_RESET_RELEASE_RESOURCES_BIT);
-        VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
-        bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-        VK_CHECK(vkBeginCommandBuffer(cmd, &bi));
-        // RHI 包装器：供 RenderPipeline/FG 等通过 executeRHI 消费
-        auto& vkDev = static_cast<rhi::VkRHIDevice&>(*m_renderer.rhiDevice());
-        rhi::VkRHICommandBuffer rhiCmd(vkDev, cmd);
+        // ---- Begin frame (context 内自动 reset+begin cmd buffer) ----
+        auto& rhiCtx = static_cast<rhi::VulkanContext&>(*m_context);
+        auto& rhiCmd = rhiCtx.beginFrame(frame.frameInFlight);
+        VkCommandBuffer cmd = rhiCtx.vkCommandBuffer(frame.frameInFlight);
 
         // ---- Timestamp readback from previous frame ----
         // 使用 RHI getResults（内部 WAIT_BIT）：保证所有写入 slot 的结果可用。
@@ -1413,8 +1410,6 @@ void App::run() {
 
         // ---- Reset timestamp pool + write start ----
         {
-            auto& vkDev = static_cast<rhi::VkRHIDevice&>(*m_renderer.rhiDevice());
-            rhi::VkRHICommandBuffer rhiCmd(vkDev, cmd);
             rhiCmd.resetQueryPool(*m_renderer.timestampPool(), qBase, m_renderer.kTimestampSlots);
             rhiCmd.writeTimestamp(*m_renderer.timestampPool(), qBase + m_renderer.kTsStart);
         }
@@ -1468,27 +1463,16 @@ void App::run() {
         // ---- Post-processing (tonemap + AA + blit) ----
         recordPostProcessing(cmd);
 
-        // ---- Finalize + submit main window ----
+        // ---- Finalize + submit main window (via RHI context) ----
         m_renderer.timestampValid(m_frameCtx.frameInFlight) = true;
-        VK_CHECK(vkEndCommandBuffer(cmd));
-
-        VkCommandBufferSubmitInfo csi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO};
-        csi.commandBuffer = cmd;
-        VkSemaphoreSubmitInfo waitS{VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO};
-        waitS.semaphore = frame.sync->imageAvailable;
-        waitS.stageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
-        VkSemaphoreSubmitInfo signalS{VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO};
-        signalS.semaphore = frame.renderFinished;
-        signalS.stageMask = VK_PIPELINE_STAGE_2_ALL_GRAPHICS_BIT;
-        VkSubmitInfo2 si{VK_STRUCTURE_TYPE_SUBMIT_INFO_2};
-        si.waitSemaphoreInfoCount = 1;     si.pWaitSemaphoreInfos = &waitS;
-        si.signalSemaphoreInfoCount = 1;   si.pSignalSemaphoreInfos = &signalS;
-        si.commandBufferInfoCount = 1;     si.pCommandBufferInfos = &csi;
-        VK_CHECK(vkQueueSubmit2(m_device->graphicsQueue(), 1, &si, frame.sync->inFlight));
-
-        // 等待 GPU 完成本帧所有工作，确保 timestamp query 结果可读
-        // （FG readbackTimestamps 下一帧会读取本帧 query，依赖此 fence）
-        vkWaitForFences(m_device->device(), 1, &frame.sync->inFlight, VK_TRUE, UINT64_MAX);
+        rhiCtx.endFrame(frame.frameInFlight,
+            frame.sync->imageAvailable, frame.renderFinished);
+        // 将 swapchain fence 与 context 内部 fence 同步：
+        // acquireNextFrame 依赖此 fence 确保上一帧 GPU 工作完成
+        {
+            VkSubmitInfo2 si{VK_STRUCTURE_TYPE_SUBMIT_INFO_2};
+            VK_CHECK(vkQueueSubmit2(m_device->graphicsQueue(), 1, &si, frame.sync->inFlight));
+        }
 
         // ---- Screenshot capture (post-submit, pre-present) ----
         if (m_screenshot.shouldCapture() && !m_swap->hdrEnabled()) {

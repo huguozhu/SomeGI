@@ -3,6 +3,7 @@
 #include "core/device.h"
 #include "core/swapchain.h"
 #include "scene/upload.h"
+#include "rhi/vulkan/vulkan_context.h"
 #include "scene/scene_gpu.h"
 #include <imgui.h>
 
@@ -184,7 +185,7 @@ void App::buildUI() {
                 m_sceneGpu.vertexBuffer.reset();
                 m_sceneGpu.indexBuffer.reset();
                 m_sceneGpu.materialBuffer.reset();
-                uploadScene(*m_device, m_pool, m_scene, m_sceneGpu, m_useMipmaps, m_renderer.rhiDevice());
+                uploadScene(*m_device, static_cast<rhi::VulkanContext&>(*m_context).vkCommandPool(), m_scene, m_sceneGpu, m_useMipmaps, m_renderer.rhiDevice());
                 m_renderer.gbuffer().bindScene(*m_device, m_sceneGpu, (uint32_t)m_sceneGpu.images.size());
                 m_renderer.rsmGeom().bindScene(m_sceneGpu, (uint32_t)m_sceneGpu.images.size());
                 m_renderer.vxgiVoxelize().bindScene(m_sceneGpu, (uint32_t)m_sceneGpu.images.size(), m_renderer.vxgi());

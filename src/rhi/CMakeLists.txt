@@ -15,6 +15,8 @@ add_library(somegi_rhi OBJECT
     vulkan/vk_command.cpp
     vulkan/vk_fence.cpp
     vulkan/vk_query_pool.cpp
+    # Phase 4: Context (命令录制上下文)
+    vulkan/vulkan_context.cpp
 )
 
 # D3D12 后端（仅 Windows）

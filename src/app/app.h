@@ -8,6 +8,7 @@
 #include "renderer/core/frame_context.h"
 #include "renderer/core/frame_renderer.h"
 #include "renderer/fg/fg_graph.h"
+#include "rhi/base/context.h"
 #include "app/benchmark_runner.h"
 #include <map>
 #include <memory>
@@ -72,8 +73,8 @@ private:
     std::unique_ptr<Window> m_window;
     std::unique_ptr<Device> m_device;
     std::unique_ptr<Swapchain> m_swap;
-    VkCommandPool m_pool = VK_NULL_HANDLE;
-    VkCommandBuffer m_cmds[kFramesInFlight]{};
+    // RHI 命令上下文（管理命令池 + cmd buffer + fence，替代直接 Vulkan 调用）
+    std::unique_ptr<rhi::RHIContext> m_context;
 
     // ---- Scene + Camera ----
     SceneCpu m_scene;
