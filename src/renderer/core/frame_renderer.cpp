@@ -908,7 +908,10 @@ void FrameRenderer::registerPipelineSteps() {
             vxgiInject().record(cmd, kVxgiResolution, vxgiGridMin(), vxgiCellSize());
 
             // 4. Mipmap: iterate src mip i → dst mip i+1
-            vxgiMipmap().record(cmd, vxgi());
+            {
+                rhi::VkRHICommandBuffer rhiCmd(static_cast<rhi::VkRHIDevice&>(*rhiDevice()), cmd);
+                vxgiMipmap().record(rhiCmd, vxgi());
+            }
 
             // 5. Final mip → SHADER_READ_ONLY
             {

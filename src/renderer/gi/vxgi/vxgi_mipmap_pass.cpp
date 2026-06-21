@@ -48,23 +48,13 @@ void VxgiMipmapPass::bindResources(const VxgiResources& vxgi) {
 
 void VxgiMipmapPass::record(rhi::RHICommandBuffer& cmd, const VxgiResources& vxgi) {
     if(!m_pipeline)return;
-    VkCommandBuffer vkCmd=(VkCommandBuffer)(uintptr_t)cmd.nativeHandle();
-    auto bm=[&](uint32_t mip,VkImageLayout ol,VkImageLayout nl,VkPipelineStageFlags2 ss,VkAccessFlags2 sa,VkPipelineStageFlags2 ds,VkAccessFlags2 da){
-        VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2}; b.srcStageMask=ss; b.srcAccessMask=sa; b.dstStageMask=ds; b.dstAccessMask=da; b.oldLayout=ol; b.newLayout=nl; b.image=vxgi.image().image(); b.subresourceRange={VK_IMAGE_ASPECT_COLOR_BIT,mip,1,0,1};
-        VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO}; di.imageMemoryBarrierCount=1; di.pImageMemoryBarriers=&b; vkCmdPipelineBarrier2(vkCmd,&di);
-    };
     cmd.bindPipelineState(*m_pipeline);
     uint32_t res=vxgi.resolution();
     for(uint32_t lv=1;lv<m_mipLevels;++lv){
-        bm(lv-1,VK_IMAGE_LAYOUT_GENERAL,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
-        bm(lv,VK_IMAGE_LAYOUT_GENERAL,VK_IMAGE_LAYOUT_GENERAL,VK_PIPELINE_STAGE_2_CLEAR_BIT,VK_ACCESS_2_TRANSFER_WRITE_BIT,VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
+        cmd.globalBarrier();
         cmd.bindDescriptorSet(0,*m_sets[lv-1]); uint32_t ds=res>>lv; if(!ds)ds=1;
         MipmapPC pc{ds}; cmd.pushConstants(rhi::ShaderStage::Compute,&pc,sizeof(pc));
         cmd.dispatch((ds+3)/4,(ds+3)/4,(ds+3)/4);
     }
-}
-
-void VxgiMipmapPass::record(VkCommandBuffer vkCmd, const VxgiResources& vxgi) {
-    rhi::VkRHICommandBuffer rhiCmd(static_cast<rhi::VkRHIDevice&>(*m_rhiDevice),vkCmd); record(rhiCmd,vxgi);
 }
 } // namespace somegi

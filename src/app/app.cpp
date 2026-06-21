@@ -742,7 +742,10 @@ void App::bakePrt() {
             m_renderer.vxgiGridMin(), m_renderer.vxgiCellSize(), m_renderer.kVxgiResolution);
 
         // 3. mipmap：内部把 src mip 转 SHADER_READ_ONLY，dst 保持 GENERAL。
-        m_renderer.vxgiMipmap().record(cmd, m_renderer.vxgi());
+        {
+            rhi::VkRHICommandBuffer rhiCmd(static_cast<rhi::VkRHIDevice&>(*m_renderer.rhiDevice()), cmd);
+            m_renderer.vxgiMipmap().record(rhiCmd, m_renderer.vxgi());
+        }
 
         // 4. mipmap 结束后状态：mip 0..mipLevels-2 已是 SHADER_READ_ONLY
         //    （mipmap 内部 barrier 转过），mip mipLevels-1 还在 GENERAL。

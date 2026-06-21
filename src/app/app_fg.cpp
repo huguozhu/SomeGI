@@ -297,7 +297,10 @@ void App::setupFrameGraph() {
                     m_renderer.vxgiGridMin(), m_renderer.vxgiCellSize());
 
                 // 4. Mipmap: iterate src mip i → dst mip i+1
-                m_renderer.vxgiMipmap().record(cmd, m_renderer.vxgi());
+                {
+                    rhi::VkRHICommandBuffer rhiCmd(static_cast<rhi::VkRHIDevice&>(*m_renderer.rhiDevice()), cmd);
+                    m_renderer.vxgiMipmap().record(rhiCmd, m_renderer.vxgi());
+                }
 
                 // 5. Final mip → SHADER_READ_ONLY
                 {
