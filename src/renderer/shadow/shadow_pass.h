@@ -68,7 +68,7 @@ public:
     void setSunDir(const glm::vec3& dir) { m_sunDir = dir; }
     void bindScene(Device& d, const SceneGpu& gpu);
     void bindFrameResources(Device& d, VkBuffer frameUbo, VkImageView depthView, VkImageView normalView);
-    void bindTLAS(Device& d, VkAccelerationStructureKHR tlas);
+    void bindTLAS(const rhi::RHIAccelerationStructure& tlas);
 
     const Image& shadowMask() const { return m_shadowMask; }
     VkSampler shadowSampler() const { return (VkSampler)(uintptr_t)m_shadowSampler->nativeHandle(); }
@@ -155,9 +155,6 @@ private:
     std::unique_ptr<rhi::RHIPipelineState> m_resolvePCSS;     // PCSS resolve
     std::unique_ptr<rhi::RHIPipelineState> m_rtHardPipeline;  // RT hard
     std::unique_ptr<rhi::RHIPipelineState> m_rtSoftPipeline;  // RT soft
-
-    // ── RT（保留 VK，未迁移到 RHIAccelerationStructure）──
-    VkAccelerationStructureKHR m_tlas = VK_NULL_HANDLE;
 
     // ── RT 可调参数
     float m_rtSunRadius = 0.03f;

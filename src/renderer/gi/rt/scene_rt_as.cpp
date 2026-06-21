@@ -2,6 +2,8 @@
 #include "core/device.h"
 #include "scene/scene_gpu.h"
 #include "scene/upload.h"
+#include "rhi/vulkan/vk_acceleration_structure.h"
+#include "rhi/vulkan/vk_device.h"
 #include <vector>
 #include <cstring>
 
@@ -23,7 +25,7 @@ VkDeviceAddress getBufferAddress(VkDevice dev, VkBuffer buf) {
 void SceneRtAS::swap(SceneRtAS& o) noexcept {
     std::swap(m_device, o.m_device);
     std::swap(m_blases, o.m_blases);
-    std::swap(m_tlas, o.m_tlas);
+    std::swap(m_tlasRHI, o.m_tlasRHI);
     m_blasBuf.swap(o.m_blasBuf);
     m_tlasBuf.swap(o.m_tlasBuf);
     m_scratchBuf.swap(o.m_scratchBuf);
@@ -38,9 +40,8 @@ void SceneRtAS::destroy() {
     for (auto as : m_blases) {
         if (as) dispatch.destroyAccelerationStructureKHR(as, nullptr);
     }
-    if (m_tlas) dispatch.destroyAccelerationStructureKHR(m_tlas, nullptr);
+    m_tlasRHI.reset();
     m_blases.clear();
-    m_tlas = VK_NULL_HANDLE;
     m_blasBuf.reset();
     m_tlasBuf.reset();
     m_scratchBuf.reset();
@@ -50,15 +51,7 @@ void SceneRtAS::destroy() {
     m_device = nullptr;
 }
 
-VkWriteDescriptorSetAccelerationStructureKHR SceneRtAS::tlasWriteInfo() const {
-    VkWriteDescriptorSetAccelerationStructureKHR ai{
-        VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR};
-    ai.accelerationStructureCount = 1;
-    ai.pAccelerationStructures = &m_tlas;
-    return ai;
-}
-
-void SceneRtAS::build(Device& d, VkCommandPool pool,
+void SceneRtAS::build(Device& d, rhi::RHIDevice& rhiDevice, VkCommandPool pool,
                       const SceneCpu& scene, const SceneGpu& sceneGpu) {
     destroy();
     m_device = &d;
@@ -290,13 +283,15 @@ void SceneRtAS::build(Device& d, VkCommandPool pool,
     m_tlasBuf = Buffer(d, tlasSizes.accelerationStructureSize, bufACCEL,
                        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
 
+    VkAccelerationStructureKHR rawTlas = VK_NULL_HANDLE;
     VkAccelerationStructureCreateInfoKHR tlasACI{
         VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR};
     tlasACI.buffer = m_tlasBuf.handle();
     tlasACI.offset = 0;
     tlasACI.size   = tlasSizes.accelerationStructureSize;
     tlasACI.type   = VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR;
-    VK_CHECK(dispatch.createAccelerationStructureKHR(&tlasACI, nullptr, &m_tlas));
+    VK_CHECK(dispatch.createAccelerationStructureKHR(&tlasACI, nullptr, &rawTlas));
+    m_tlasRHI = rhi::VkRHIAccelerationStructure::createOwning(static_cast<rhi::VkRHIDevice&>(rhiDevice), rawTlas);
 
     // ---- Step 8: build TLAS (one-shot) ----
     oneShotSubmit(d, pool, [&](VkCommandBuffer cmd) {
@@ -318,7 +313,7 @@ void SceneRtAS::build(Device& d, VkCommandPool pool,
 
         // Build TLAS.
         VkAccelerationStructureBuildGeometryInfoKHR bi = tlasBuildInfo;
-        bi.dstAccelerationStructure = m_tlas;
+        bi.dstAccelerationStructure = static_cast<VkAccelerationStructureKHR>(m_tlasRHI->nativeHandle());
         bi.scratchData.deviceAddress = scratchAddr;
 
         VkAccelerationStructureBuildRangeInfoKHR range{};

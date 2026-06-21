@@ -271,17 +271,17 @@ void App::applySceneSelection() {
 
     // M9：场景已加载，构建加速结构 + bindFrame（仅 HW 支持时）。
     if (m_renderer.rtSupported()) {
-        m_renderer.rtAS().build(*m_device, m_pool, m_scene, m_sceneGpu);
+        m_renderer.rtAS().build(*m_device, *m_renderer.rhiDevice(), m_pool, m_scene, m_sceneGpu);
         m_renderer.rtGiBound() = (m_renderer.rtAS().instanceCount() > 0);
         if (m_renderer.rtGiBound()) {
             m_renderer.rtGi().bindFrame(m_renderer.rt(), m_renderer.gbuffer().frameUboHandle(), m_renderer.rtAS(), m_sceneGpu);
         }
         // 绑定 TLAS 到 ShadowPass（RT shadow 用）
-        m_renderer.shadow().bindTLAS(*m_device, m_renderer.rtAS().tlas());
+        m_renderer.shadow().bindTLAS(*m_renderer.rtAS().tlas());
         // M10：TLAS 就绪，绑定到 ReSTIR RT shade pipeline
         if (m_renderer.rtAS().instanceCount() > 0) {
             m_renderer.restirPass().bindResourcesRt(m_renderer.restir(), m_renderer.rt(),
-                m_renderer.gbuffer().frameUboHandle(), m_renderer.rtAS().tlas());
+                m_renderer.gbuffer().frameUboHandle(), *m_renderer.rtAS().tlas());
         }
         m_renderer.ndgiPass().bindResources(m_renderer.ndgi(), m_renderer.rtAS(), m_sceneGpu, m_renderer.rt(),
             m_renderer.gbuffer().frameUboHandle());
@@ -627,7 +627,7 @@ void App::onSwapchainResized() {
         m_renderer.rtGi().bindFrame(m_renderer.rt(), m_renderer.gbuffer().frameUboHandle(), m_renderer.rtAS(), m_sceneGpu);
         // M10：resize 后重绑 ReSTIR RT shade 的 TLAS
         m_renderer.restirPass().bindResourcesRt(m_renderer.restir(), m_renderer.rt(),
-            m_renderer.gbuffer().frameUboHandle(), m_renderer.rtAS().tlas());
+            m_renderer.gbuffer().frameUboHandle(), *m_renderer.rtAS().tlas());
     }
     // L.2：swapchain resize 后 probe atlas 重建。
     if (m_renderer.rtSupported()) {

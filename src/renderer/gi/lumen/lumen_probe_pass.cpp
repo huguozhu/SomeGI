@@ -88,7 +88,7 @@ void LumenProbePass::bindResources(const LumenResources& res, const SceneRtAS& r
     auto ub  = rhi::VkRHIBuffer::createNonOwning(vkD, frameUbo, VK_WHOLE_SIZE);
     auto nr  = rhi::VkRHITextureView::createNonOwning(vkD, rt.gNormalRough.view());
     auto dp  = rhi::VkRHITextureView::createNonOwning(vkD, rt.depth.view());
-    auto tas = rhi::VkRHIAccelerationStructure::createNonOwning(vkD, rtAS.tlas());
+    auto tas = rtAS.tlas();
     auto vox = rhi::VkRHITextureView::createNonOwning(vkD, vxgi.fullView());
     auto rb  = rhi::VkRHIBuffer::createNonOwning(vkD, res.rayBuffer().handle(), VK_WHOLE_SIZE);
     auto pa  = rhi::VkRHITextureView::createNonOwning(vkD, res.probeAtlas().view());
@@ -101,7 +101,7 @@ void LumenProbePass::bindResources(const LumenResources& res, const SceneRtAS& r
         {0,  DS::UniformBuffer,        nullptr, ub.get()},
         {1,  DS::SampledImage,         nr.get()},
         {2,  DS::SampledImage,         dp.get()},
-        {3,  DS::AccelerationStructure, nullptr, nullptr, 0, 0, nullptr, tas.get()},
+        {3,  DS::AccelerationStructure, nullptr, nullptr, 0, 0, nullptr, tas},
         {4,  DS::SampledImage,         vox.get()},
         {5,  DS::Sampler,              nullptr, nullptr, 0, 0, m_linearClamp.get()},
         {6,  DS::StorageBuffer,        nullptr, rb.get()},

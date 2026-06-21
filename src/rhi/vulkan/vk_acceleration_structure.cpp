@@ -5,8 +5,8 @@ namespace somegi {
 namespace rhi {
 
 VkRHIAccelerationStructure::~VkRHIAccelerationStructure() {
-    if (m_as && m_owns) {
-        // 拥有型销毁（预留，当前仅 createNonOwning 路径，不执行）
+    if (m_as != VK_NULL_HANDLE && m_owns) {
+        m_device.dispatch().destroyAccelerationStructureKHR(m_as, nullptr);
         m_as = VK_NULL_HANDLE;
     }
 }

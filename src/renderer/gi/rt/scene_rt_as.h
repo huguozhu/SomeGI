@@ -1,11 +1,14 @@
 #pragma once
-#include "core/vk_common.h"
 #include "core/buffer.h"
 #include "scene/scene.h"
+#include "rhi/base/acceleration_structure.h"
+#include <memory>
+#include <vulkan/vulkan.h>
 
 namespace somegi {
 
 class Device;
+namespace rhi { class RHIDevice; }
 struct SceneGpu;
 
 // Per-instance data used by the RT shader to fetch material/textures on hit.
@@ -33,27 +36,24 @@ public:
 
     // Build all acceleration structures from scene data.
     // Must be called with a one-shot-compatible pool (oneShotSubmit).
-    void build(Device& d, VkCommandPool pool, const SceneCpu& scene, const SceneGpu& sceneGpu);
+    void build(Device& d, rhi::RHIDevice& rhiDevice, VkCommandPool pool, const SceneCpu& scene, const SceneGpu& sceneGpu);
 
     void destroy();
     void reset() { destroy(); }
 
     // Accessors for descriptor binding.
-    VkAccelerationStructureKHR tlas() const { return m_tlas; }
+    const rhi::RHIAccelerationStructure* tlas() const { return m_tlasRHI.get(); }
 
     // Buffer containing RtInstanceData[] — one entry per TLAS instance.
     VkBuffer instanceDataBuffer() const { return m_instanceDataBuf.handle(); }
     uint32_t instanceCount() const { return m_instanceCount; }
-
-    // Helper: fill in VkWriteDescriptorSet's pNext for the TLAS.
-    VkWriteDescriptorSetAccelerationStructureKHR tlasWriteInfo() const;
 
 private:
     Device* m_device = nullptr;
 
     // Backing storage for all BLAS and the TLAS.
     std::vector<VkAccelerationStructureKHR> m_blases;
-    VkAccelerationStructureKHR m_tlas = VK_NULL_HANDLE;
+    std::unique_ptr<rhi::RHIAccelerationStructure> m_tlasRHI;
 
     // Backing buffers (one large allocation each).
     Buffer m_blasBuf;       // VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR

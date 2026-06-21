@@ -16,6 +16,13 @@ public:
         s->m_as = as;
         return s;
     }
+    // 拥有型包装（m_tlasRHI 场景：SceneRtAS 创建 TLAS 后由 RHI wrapper 接管生命周期）
+    static std::unique_ptr<RHIAccelerationStructure> createOwning(VkRHIDevice& device, VkAccelerationStructureKHR as) {
+        auto s = std::unique_ptr<VkRHIAccelerationStructure>(new VkRHIAccelerationStructure(device));
+        s->m_owns = true;
+        s->m_as = as;
+        return s;
+    }
     ~VkRHIAccelerationStructure() override;
     void* nativeHandle() const override { return (void*)m_as; }
 private:

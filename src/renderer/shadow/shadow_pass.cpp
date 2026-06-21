@@ -346,12 +346,9 @@ void ShadowPass::bindFrameResources(Device&, VkBuffer frameUbo, VkImageView dept
     }
 }
 
-void ShadowPass::bindTLAS(Device&, VkAccelerationStructureKHR tlas) {
+void ShadowPass::bindTLAS(const rhi::RHIAccelerationStructure& tlas) {
     if (!m_rtSet) return;
-    m_tlas = tlas;
-    auto& vkD = static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
-    auto tlasRHI = rhi::VkRHIAccelerationStructure::createNonOwning(vkD, tlas);
-    m_rtSet->write({{0, rhi::DescriptorType::AccelerationStructure, nullptr, nullptr, 0, 0, nullptr, tlasRHI.get()}});
+    m_rtSet->write({{0, rhi::DescriptorType::AccelerationStructure, nullptr, nullptr, 0, 0, nullptr, &tlas}});
 }
 
 // ════════════════════════════════════════════════════════════════
