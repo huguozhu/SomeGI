@@ -1,5 +1,6 @@
 #pragma once
 #include "vk_common.h"
+#include "path_util.h"
 #include <filesystem>
 
 namespace somegi {

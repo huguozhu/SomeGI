@@ -10,7 +10,7 @@
 #include "rhi/vulkan/vk_shader.h"
 #include "rhi/vulkan/vk_texture.h"
 #include "rhi/vulkan/vk_command.h"
-#include "core/shader.h"
+#include "core/path_util.h"
 #include <array>
 namespace somegi {
 namespace { struct InjectPC { uint32_t rsmSizeX,rsmSizeY,gridRes,_pad; float gridMinX,gridMinY,gridMinZ,cellSize; };

@@ -14,7 +14,7 @@
 #include "rhi/vulkan/vk_shader.h"     // VkRHIShader::createFromFile
 #include "rhi/vulkan/vk_texture.h"    // VkRHITextureView::createNonOwning
 #include "rhi/vulkan/vk_command.h"    // VkRHICommandBuffer — VkCmd 包装
-#include "core/shader.h"              // shaderDir()
+#include "core/path_util.h"              // shaderDir()
 #include <cstring>
 
 namespace somegi {

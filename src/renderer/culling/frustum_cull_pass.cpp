@@ -14,7 +14,7 @@
 #include "rhi/vulkan/vk_shader.h"
 #include "rhi/vulkan/vk_texture.h"
 #include "rhi/vulkan/vk_buffer.h"
-#include "core/shader.h"
+#include "core/path_util.h"
 #include <array>
 #include <cstring>
 #include <cmath>

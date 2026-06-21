@@ -16,7 +16,7 @@
 #include "rhi/vulkan/vk_texture.h"
 #include "rhi/vulkan/vk_command.h"
 #include "rhi/vulkan/vk_sampler.h"
-#include "core/shader.h"
+#include "core/path_util.h"
 #include <array>
 
 namespace somegi {
