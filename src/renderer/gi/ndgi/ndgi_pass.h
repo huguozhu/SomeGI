@@ -14,11 +14,8 @@ public:
     void bindResources(const NdgiResources& res, SceneRtAS& rtAS, const SceneGpu& scene, const RenderTargets& rt, VkBuffer frameUbo);
     void writeInitDescriptors(const NdgiResources& res);
     void initWeights(rhi::RHICommandBuffer& cmd);
-    void initWeights(VkCommandBuffer cmd);
     void record(rhi::RHICommandBuffer& cmd, NdgiResources& res, uint32_t frameIndex, glm::vec3 ddgiOrigin, glm::vec3 ddgiSpacing);
-    void record(VkCommandBuffer cmd, NdgiResources& res, uint32_t frameIndex, glm::vec3 ddgiOrigin, glm::vec3 ddgiSpacing);
     void recordTraining(rhi::RHICommandBuffer& cmd, NdgiResources& res, uint32_t frameIndex);
-    void recordTraining(VkCommandBuffer cmd, NdgiResources& res, uint32_t frameIndex);
 private:
     rhi::RHIDevice* m_rhiDevice = nullptr; bool m_rtSupported = false;
     std::unique_ptr<rhi::RHIDescriptorSetLayout> m_traceDsl, m_initDsl;

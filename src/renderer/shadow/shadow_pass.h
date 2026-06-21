@@ -54,10 +54,6 @@ public:
                 const rhi::RHIBuffer& frameUbo, const SceneGpu& sceneGpu,
                 const rhi::RHIBuffer& indirectBuf, uint32_t drawCount,
                 uint32_t frameIndex = 0);
-    void record(VkCommandBuffer cmd, const RenderTargets& rt,
-                VkBuffer frameUbo, const SceneGpu& sceneGpu,
-                VkBuffer indirectBuf, uint32_t drawCount,
-                uint32_t frameIndex = 0);
 
     ShadowMethod method() const { return m_method; }
     void setMethod(ShadowMethod m) { m_method = m; }
@@ -81,31 +77,13 @@ public:
 
 private:
     void recordNone(rhi::RHICommandBuffer& cmd);
-    void recordNone(VkCommandBuffer cmd);
     void recordHardSM(rhi::RHICommandBuffer& cmd, const rhi::RHIBuffer& indirectBuf, uint32_t drawCount);
-    void recordHardSM(VkCommandBuffer cmd, const RenderTargets& rt,
-                      VkBuffer frameUbo, const SceneGpu& sceneGpu,
-                      VkBuffer indirectBuf, uint32_t drawCount);
     void recordPCF(rhi::RHICommandBuffer& cmd, const rhi::RHIBuffer& indirectBuf, uint32_t drawCount);
-    void recordPCF(VkCommandBuffer cmd, const RenderTargets& rt,
-                   VkBuffer frameUbo, const SceneGpu& sceneGpu,
-                   VkBuffer indirectBuf, uint32_t drawCount);
     void recordPCSS(rhi::RHICommandBuffer& cmd, const rhi::RHIBuffer& indirectBuf, uint32_t drawCount);
-    void recordPCSS(VkCommandBuffer cmd, const RenderTargets& rt,
-                    VkBuffer frameUbo, const SceneGpu& sceneGpu,
-                    VkBuffer indirectBuf, uint32_t drawCount);
     void recordVSM(rhi::RHICommandBuffer& cmd, const rhi::RHIBuffer& indirectBuf, uint32_t drawCount);
-    void recordVSM(VkCommandBuffer cmd, const RenderTargets& rt,
-                   VkBuffer frameUbo, const SceneGpu& sceneGpu,
-                   VkBuffer indirectBuf, uint32_t drawCount);
     void recordRTHard(rhi::RHICommandBuffer& cmd);
-    void recordRTHard(VkCommandBuffer cmd);
     void recordRTSoft(rhi::RHICommandBuffer& cmd);
-    void recordRTSoft(VkCommandBuffer cmd);
     void renderShadowMap(rhi::RHICommandBuffer& cmd, const rhi::RHIBuffer& indirectBuf, uint32_t drawCount);
-    void renderShadowMap(VkCommandBuffer cmd, VkBuffer frameUbo,
-                         const SceneGpu& sceneGpu,
-                         VkBuffer indirectBuf, uint32_t drawCount);
 
     void buildPipeline_HardSM();
     void buildPipeline_VSMGen();

@@ -24,8 +24,7 @@ public:
     auto* pipeline() { return m_pipeline.get(); } // D3D12 手动 bind
     void record(rhi::RHICommandBuffer& cmd, const RenderTargets& rt, uint32_t frameIdx,
                 bool hdrMode = false, float exposure = 1.0f);
-    void record(VkCommandBuffer cmd, const RenderTargets& rt, uint32_t frameIdx,
-                bool hdrMode = false, float exposure = 1.0f);
+
 
 private:
     rhi::RHIDevice* m_rhiDevice = nullptr;

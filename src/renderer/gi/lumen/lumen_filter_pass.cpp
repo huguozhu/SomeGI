@@ -39,5 +39,5 @@ void LumenFilterPass::record(rhi::RHICommandBuffer& cmd,const LumenResources& re
     FilterPC pc{1.f/rt.extent.width,1.f/rt.extent.height,(float)LumenResources::kProbeTileSize,res.probeGridW(),res.probeGridH(),sigmaDepth,normalPower,sigmaDist,temporalAlpha};
     cmd.pushConstants(rhi::ShaderStage::Compute,&pc,sizeof(pc)); cmd.dispatch((res.probeGridW()+3)/4,(res.probeGridH()+3)/4,1);
 }
-void LumenFilterPass::record(VkCommandBuffer vkCmd,const LumenResources& res,const RenderTargets& rt){ rhi::VkRHICommandBuffer rhiCmd(static_cast<rhi::VkRHIDevice&>(*m_rhiDevice),vkCmd); record(rhiCmd,res,rt); }
+
 } // namespace somegi

@@ -494,13 +494,5 @@ void GBufferPass::record(rhi::RHICommandBuffer& cmd, const RenderTargets& rt,
     cmd.endRendering();
 }
 
-// Vk 兼容路径：委托到 RHI 实现
-void GBufferPass::record(VkCommandBuffer vkCmd, const RenderTargets& rt,
-                         VkBuffer indirectBuf, uint32_t drawCount, const SceneGpu& gpu) {
-    auto& vkDev = static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
-    rhi::VkRHICommandBuffer rhiCmd(vkDev, vkCmd);
-    auto rhiIb = rhi::VkRHIBuffer::createNonOwning(vkDev, indirectBuf, VK_WHOLE_SIZE);
-    record(rhiCmd, rt, *rhiIb, drawCount, gpu);
-}
 
 } // namespace somegi

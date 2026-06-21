@@ -12,7 +12,6 @@ public:
     void destroy();
     void bindResources(const LumenResources& res, const RenderTargets& rt, VkBuffer frameUbo);
     void record(rhi::RHICommandBuffer& cmd, const LumenResources& res, const RenderTargets& rt);
-    void record(VkCommandBuffer cmd, const LumenResources& res, const RenderTargets& rt);
     float sigmaDepth=0.3f, normalPower=8.f, sigmaDist=200.f, temporalAlpha=0.95f;
 private:
     rhi::RHIDevice* m_rhiDevice = nullptr;

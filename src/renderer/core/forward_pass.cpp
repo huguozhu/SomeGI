@@ -217,13 +217,6 @@ void ForwardPass::record(rhi::RHICommandBuffer& cmd, const RenderTargets& rt, co
     cmd.endRendering();
 }
 
-// Vk 兼容路径：委托到 RHI 实现
-void ForwardPass::record(VkCommandBuffer vkCmd, const RenderTargets& rt, VkBuffer ib, uint32_t dc, const SceneGpu& gpu) {
-    auto& vkDev = static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
-    rhi::VkRHICommandBuffer rhiCmd(vkDev, vkCmd);
-    auto rhiIb = rhi::VkRHIBuffer::createNonOwning(vkDev, ib, VK_WHOLE_SIZE);
-    record(rhiCmd, rt, *rhiIb, dc, gpu);
-}
 
 void ForwardPass::bindHiZViews(VkImageView m1,VkImageView m2,VkImageView m3,VkImageView m4) { (void)m1;(void)m2;(void)m3;(void)m4; }
 void ForwardPass::buildMeshGroups(const std::vector<DrawEntry>&) {}

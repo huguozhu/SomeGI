@@ -19,10 +19,7 @@ public:
                 const glm::vec2& jitter, const glm::vec2& prevJitter,
                 const glm::mat4& invViewProj, const glm::mat4& prevViewProj,
                 uint32_t frameIdx, float blendAlpha = 0.9f);
-    void record(VkCommandBuffer cmd, const RenderTargets& rt,
-                const glm::vec2& jitter, const glm::vec2& prevJitter,
-                const glm::mat4& invViewProj, const glm::mat4& prevViewProj,
-                uint32_t frameIdx, float blendAlpha = 0.9f);
+
 
 private:
     rhi::RHIDevice* m_rhiDevice = nullptr;

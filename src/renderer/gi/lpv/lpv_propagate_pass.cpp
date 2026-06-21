@@ -64,7 +64,5 @@ void LpvPropagatePass::record(rhi::RHICommandBuffer& cmd, int si, uint32_t gr, f
     cmd.pushConstants(rhi::ShaderStage::Compute,&pc,sizeof(pc));
     cmd.dispatch((gr+3)/4,(gr+3)/4,(gr+3)/4);
 }
-void LpvPropagatePass::record(VkCommandBuffer vkCmd, int si, uint32_t gr, float oa, float gs) {
-    rhi::VkRHICommandBuffer rhiCmd(static_cast<rhi::VkRHIDevice&>(*m_rhiDevice),vkCmd); record(rhiCmd,si,gr,oa,gs);
-}
+
 } // namespace somegi

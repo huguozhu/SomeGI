@@ -15,7 +15,6 @@ public:
     void destroy();
     void bindScene(const SceneGpu& gpu, uint32_t textureCount, const VxgiResources& vxgi);
     void record(rhi::RHICommandBuffer& cmd, const SceneCpu& cpu, const SceneGpu& gpu, const glm::vec3& gridMin, float cellSize, uint32_t gridRes);
-    void record(VkCommandBuffer cmd, const SceneCpu& cpu, const SceneGpu& gpu, const glm::vec3& gridMin, float cellSize, uint32_t gridRes);
 private:
     rhi::RHIDevice* m_rhiDevice = nullptr; uint32_t m_maxTextures = 0;
     std::unique_ptr<rhi::RHIDescriptorSetLayout> m_setLayout;

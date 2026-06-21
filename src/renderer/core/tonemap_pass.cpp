@@ -121,10 +121,5 @@ void TonemapPass::record(rhi::RHICommandBuffer& cmd, const RenderTargets& rt, ui
     cmd.dispatch((rt.extent.width+7)/8, (rt.extent.height+7)/8, 1);
 }
 
-void TonemapPass::record(VkCommandBuffer vkCmd, const RenderTargets& rt, uint32_t fi,
-                          bool hdrMode, float exposure) {
-    rhi::VkRHICommandBuffer rhiCmd(static_cast<rhi::VkRHIDevice&>(*m_rhiDevice), vkCmd);
-    record(rhiCmd, rt, fi, hdrMode, exposure);
-}
 
 } // namespace somegi

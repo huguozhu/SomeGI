@@ -486,16 +486,18 @@ void FrameRenderer::registerPipelineSteps() {
         .name = "Shadow",
         .phase = "PrePass",
         .recordRHI = [this](rhi::RHICommandBuffer& cmd) {
-            auto vkCmd = static_cast<rhi::VkRHICommandBuffer&>(cmd).vkCmd();
             // 确保 gDepth 在 SHADER_READ_ONLY_OPTIMAL layout（首帧从 UNDEFINED 过渡）
             cmd.textureBarrier(*wrapImage(rt().depth.image(), rt().depth.format(), rt().extent.width, rt().extent.height),
                                rhi::TextureLayout::Undefined, rhi::TextureLayout::ShaderReadOnly);
             // 同理 gNormalRough（首帧 layout 不确定）
             cmd.textureBarrier(*wrapImage(rt().gNormalRough.image(), rt().gNormalRough.format(), rt().extent.width, rt().extent.height),
                                rhi::TextureLayout::Undefined, rhi::TextureLayout::ShaderReadOnly);
-            shadow().record(vkCmd, rt(),
-                gbuffer().frameUboHandle(),
-                *m_boundScene.gpu, m_boundScene.indirectBufSun, m_boundScene.drawCount,
+            auto& vkDev = static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
+            auto rhiIndirectBuf = rhi::VkRHIBuffer::createNonOwning(vkDev, m_boundScene.indirectBufSun, VK_WHOLE_SIZE);
+            auto rhiFrameUbo = rhi::VkRHIBuffer::createNonOwning(vkDev, gbuffer().frameUboHandle(), VK_WHOLE_SIZE);
+            shadow().record(cmd, rt(),
+                *rhiFrameUbo,
+                *m_boundScene.gpu, *rhiIndirectBuf, m_boundScene.drawCount,
                 frameIndex());
         }
     });
@@ -522,14 +524,15 @@ void FrameRenderer::registerPipelineSteps() {
         .enabled = false,
         .timestampSlot = kTsGBuffer,
         .recordRHI = [this](rhi::RHICommandBuffer& cmd) {
-            auto vkCmd = static_cast<rhi::VkRHICommandBuffer&>(cmd).vkCmd();
             // hdrColor → COLOR_ATTACHMENT, depth → DEPTH_ATTACHMENT
             cmd.textureBarrier(*wrapImage(rt().hdrColor.image(), rt().hdrColor.format(), rt().extent.width, rt().extent.height),
                                rhi::TextureLayout::Undefined, rhi::TextureLayout::ColorAttachment);
             cmd.textureBarrier(*wrapImage(rt().depth.image(), rt().depth.format(), rt().extent.width, rt().extent.height),
                                rhi::TextureLayout::Undefined, rhi::TextureLayout::DepthAttachment);
 
-            forward().record(vkCmd, rt(), m_boundScene.indirectBuf, m_boundScene.drawCount, *m_boundScene.gpu);
+            auto& vkDev = static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
+            auto rhiIndirectBuf = rhi::VkRHIBuffer::createNonOwning(vkDev, m_boundScene.indirectBuf, VK_WHOLE_SIZE);
+            forward().record(cmd, rt(), *rhiIndirectBuf, m_boundScene.drawCount, *m_boundScene.gpu);
 
             // hdrColor COLOR_ATTACHMENT → GENERAL（匹配延迟 Lighting 输出）
             cmd.textureBarrier(*wrapImage(rt().hdrColor.image(), rt().hdrColor.format(), rt().extent.width, rt().extent.height),
@@ -554,7 +557,6 @@ void FrameRenderer::registerPipelineSteps() {
         .phase = "PrePass",
         .timestampSlot = kTsGBuffer,
         .recordRHI = [this](rhi::RHICommandBuffer& cmd) {
-            auto vkCmd = static_cast<rhi::VkRHICommandBuffer&>(cmd).vkCmd();
             // MSAA images → attachment layout
             auto toColorAttach = [&](const Image& img) {
                 cmd.textureBarrier(*wrapImage(img.image(), img.format(), img.extent().width, img.extent().height),
@@ -569,7 +571,9 @@ void FrameRenderer::registerPipelineSteps() {
             cmd.textureBarrier(*wrapImage(rt().depth.image(), rt().depth.format(), rt().extent.width, rt().extent.height),
                                rhi::TextureLayout::Undefined, rhi::TextureLayout::DepthAttachment);
 
-            gbuffer().record(vkCmd, rt(), m_boundScene.indirectBuf, m_boundScene.drawCount, *m_boundScene.gpu);
+            auto& vkDev = static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
+            auto rhiIndirectBuf = rhi::VkRHIBuffer::createNonOwning(vkDev, m_boundScene.indirectBuf, VK_WHOLE_SIZE);
+            gbuffer().record(cmd, rt(), *rhiIndirectBuf, m_boundScene.drawCount, *m_boundScene.gpu);
 
             // Resolved GBuffer → SHADER_READ_ONLY for downstream compute
             auto toSampled = [&](const Image& img) {
@@ -592,10 +596,9 @@ void FrameRenderer::registerPipelineSteps() {
         .phase = "AO",
         .enabled = false,
         .recordRHI = [this](rhi::RHICommandBuffer& cmd) {
-            auto vkCmd = static_cast<rhi::VkRHICommandBuffer&>(cmd).vkCmd();
             cmd.textureBarrier(*wrapImage(rt().ssao.image(), rt().ssao.format(), rt().extent.width, rt().extent.height),
                                rhi::TextureLayout::Undefined, rhi::TextureLayout::General);
-            ssao().record(vkCmd, rt(),
+            ssao().record(cmd, rt(),
                 m_frameState.proj, glm::inverse(m_frameState.proj), m_frameState.view);
             cmd.textureBarrier(*wrapImage(rt().ssao.image(), rt().ssao.format(), rt().extent.width, rt().extent.height),
                                rhi::TextureLayout::General, rhi::TextureLayout::ShaderReadOnly);
@@ -607,10 +610,9 @@ void FrameRenderer::registerPipelineSteps() {
         .phase = "AO",
         .enabled = false,
         .recordRHI = [this](rhi::RHICommandBuffer& cmd) {
-            auto vkCmd = static_cast<rhi::VkRHICommandBuffer&>(cmd).vkCmd();
             cmd.textureBarrier(*wrapImage(rt().ssao.image(), rt().ssao.format(), rt().extent.width, rt().extent.height),
                                rhi::TextureLayout::Undefined, rhi::TextureLayout::General);
-            gtao().record(vkCmd, rt(),
+            gtao().record(cmd, rt(),
                 m_frameState.proj, m_frameState.view);
             cmd.textureBarrier(*wrapImage(rt().ssao.image(), rt().ssao.format(), rt().extent.width, rt().extent.height),
                                rhi::TextureLayout::General, rhi::TextureLayout::ShaderReadOnly);
@@ -639,10 +641,9 @@ void FrameRenderer::registerPipelineSteps() {
         .phase = "AO",
         .enabled = false,
         .recordRHI = [this](rhi::RHICommandBuffer& cmd) {
-            auto vkCmd = static_cast<rhi::VkRHICommandBuffer&>(cmd).vkCmd();
             cmd.textureBarrier(*wrapImage(rt().ssr.image(), rt().ssr.format(), rt().extent.width, rt().extent.height),
                                rhi::TextureLayout::Undefined, rhi::TextureLayout::General);
-            ssr().record(vkCmd, rt());
+            ssr().record(cmd, rt());
             cmd.textureBarrier(*wrapImage(rt().ssr.image(), rt().ssr.format(), rt().extent.width, rt().extent.height),
                                rhi::TextureLayout::General, rhi::TextureLayout::ShaderReadOnly);
         }
@@ -670,7 +671,6 @@ void FrameRenderer::registerPipelineSteps() {
         .phase = "AO",
         .enabled = false,
         .recordRHI = [this](rhi::RHICommandBuffer& cmd) {
-            auto vkCmd = static_cast<rhi::VkRHICommandBuffer&>(cmd).vkCmd();
             // Copy ssgi → ssgiPrev for temporal history
             cmd.textureBarrier(*wrapImage(rt().ssgi.image(), rt().ssgi.format(), rt().extent.width, rt().extent.height),
                                rhi::TextureLayout::ShaderReadOnly, rhi::TextureLayout::TransferSrc);
@@ -687,8 +687,8 @@ void FrameRenderer::registerPipelineSteps() {
             cmd.textureBarrier(*wrapImage(rt().ssgi.image(), rt().ssgi.format(), rt().extent.width, rt().extent.height),
                                rhi::TextureLayout::TransferSrc, rhi::TextureLayout::General);
 
-            if (ssgi().enabled) ssgi().record(vkCmd, rt());
-            else                gtgi().record(vkCmd, rt());
+            if (ssgi().enabled) ssgi().record(cmd, rt());
+            else                gtgi().record(cmd, rt());
 
             cmd.textureBarrier(*wrapImage(rt().ssgi.image(), rt().ssgi.format(), rt().extent.width, rt().extent.height),
                                rhi::TextureLayout::General, rhi::TextureLayout::ShaderReadOnly);
@@ -726,7 +726,6 @@ void FrameRenderer::registerPipelineSteps() {
         .phase = "GI",
         .enabled = false,
         .recordRHI = [this](rhi::RHICommandBuffer& cmd) {
-            auto vkCmd = static_cast<rhi::VkRHICommandBuffer&>(cmd).vkCmd();
             auto& vxgiImg = vxgi().image();
             // 1. Clear entire mip chain to 0
             cmd.textureBarrier(*wrapImage(vxgiImg.image(), vxgiImg.format(), vxgiImg.extent().width, vxgiImg.extent().height, vxgi().mipLevels()),
@@ -737,13 +736,13 @@ void FrameRenderer::registerPipelineSteps() {
                                rhi::TextureLayout::TransferDst, rhi::TextureLayout::General);
 
             // 2. Voxelize: scatter all primitives to mip 0
-            vxgiVoxelize().record(vkCmd, *m_boundScene.cpu, *m_boundScene.gpu,
+            vxgiVoxelize().record(cmd, *m_boundScene.cpu, *m_boundScene.gpu,
                 vxgiGridMin(), vxgiCellSize(), kVxgiResolution);
 
             // 3. Inject: RSM flux → voxel mip 0 RGB
             cmd.textureBarrier(*wrapImage(vxgiImg.image(), vxgiImg.format(), vxgiImg.extent().width, vxgiImg.extent().height, 1),
                                rhi::TextureLayout::General, rhi::TextureLayout::General);
-            vxgiInject().record(vkCmd, kVxgiResolution, vxgiGridMin(), vxgiCellSize());
+            vxgiInject().record(cmd, kVxgiResolution, vxgiGridMin(), vxgiCellSize());
 
             // 4. Mipmap: iterate src mip i → dst mip i+1
             vxgiMipmap().record(cmd, vxgi());
@@ -819,7 +818,6 @@ void FrameRenderer::registerPipelineSteps() {
         .phase = "GI",
         .enabled = false,
         .recordRHI = [this](rhi::RHICommandBuffer& cmd) {
-            auto vkCmd = static_cast<rhi::VkRHICommandBuffer&>(cmd).vkCmd();
             rhi::TextureLayout axisOldL = lumenAtlasInited()
                 ? rhi::TextureLayout::ShaderReadOnly : rhi::TextureLayout::Undefined;
 
@@ -829,7 +827,7 @@ void FrameRenderer::registerPipelineSteps() {
             };
             transAxisToGeneral(vxgi().sixAxisX()); transAxisToGeneral(vxgi().sixAxisY()); transAxisToGeneral(vxgi().sixAxisZ());
 
-            vxgi6Axis().record(vkCmd, kVxgiResolution, vxgi().mipLevels(),
+            vxgi6Axis().record(cmd, kVxgiResolution, vxgi().mipLevels(),
                 vxgiCellSize(), vxgiGridMin(), vxgiRelightStrength());
 
             auto transAxisToSRO = [&](const Image& img) {
@@ -864,7 +862,6 @@ void FrameRenderer::registerPipelineSteps() {
         .phase = "GI",
         .enabled = false,
         .recordRHI = [this](rhi::RHICommandBuffer& cmd) {
-            auto vkCmd = static_cast<rhi::VkRHICommandBuffer&>(cmd).vkCmd();
             if (!sdfgiBootstrapped()) {
                 auto bootstrapToGeneral = [&](const Image& img) {
                     cmd.textureBarrier(*wrapImage(img.image(), img.format(), img.extent().width, img.extent().height),
@@ -876,7 +873,7 @@ void FrameRenderer::registerPipelineSteps() {
             cmd.textureBarrier(*wrapImage(rt().ssgi.image(), rt().ssgi.format(), rt().extent.width, rt().extent.height),
                                rhi::TextureLayout::ShaderReadOnly, rhi::TextureLayout::General);
 
-            sdfgiPass().record(vkCmd, sdfgi(), rt(), frameIndex(),
+            sdfgiPass().record(cmd, sdfgi(), rt(), frameIndex(),
                 sdfgiPass().seedThreshold, sdfgiPass().maxDistCells,
                 (uint32_t)sdfgiPass().numRays,
                 (uint32_t)sdfgiPass().maxSteps,
@@ -895,10 +892,9 @@ void FrameRenderer::registerPipelineSteps() {
         .phase = "GI",
         .enabled = false,
         .recordRHI = [this](rhi::RHICommandBuffer& cmd) {
-            auto vkCmd = static_cast<rhi::VkRHICommandBuffer&>(cmd).vkCmd();
             cmd.textureBarrier(*wrapImage(rt().rtGI.image(), rt().rtGI.format(), rt().extent.width, rt().extent.height),
                                rhi::TextureLayout::Undefined, rhi::TextureLayout::General);
-            rtGi().record(vkCmd, rt());
+            rtGi().record(cmd, rt());
             cmd.textureBarrier(*wrapImage(rt().rtGI.image(), rt().rtGI.format(), rt().extent.width, rt().extent.height),
                                rhi::TextureLayout::General, rhi::TextureLayout::ShaderReadOnly);
         }
@@ -926,7 +922,6 @@ void FrameRenderer::registerPipelineSteps() {
         .phase = "GI",
         .enabled = false,
         .recordRHI = [this](rhi::RHICommandBuffer& cmd) {
-            auto vkCmd = static_cast<rhi::VkRHICommandBuffer&>(cmd).vkCmd();
             restir().updateLights(demoLights());
             if (!restirBootstrapped()) {
                 auto bootstrapToGeneral = [&](const Image& img) {
@@ -944,7 +939,7 @@ void FrameRenderer::registerPipelineSteps() {
 
             uint32_t numLights = (uint32_t)demoLights().size();
             bool useRtVis = rtSupported() && rtGiBound();
-            restirPass().record(vkCmd, restir(), rt(),
+            restirPass().record(cmd, restir(), rt(),
                 numLights,
                 (uint32_t)restirPass().numCandidates,
                 (uint32_t)restirPass().numNeighbors,
@@ -1078,7 +1073,6 @@ void FrameRenderer::registerPipelineSteps() {
         .phase = "GI",
         .enabled = false,
         .recordRHI = [this](rhi::RHICommandBuffer& cmd) {
-            auto vkCmd = static_cast<rhi::VkRHICommandBuffer&>(cmd).vkCmd();
             if (!lumenFilterInited()) {
                 cmd.textureBarrier(*wrapImage(lumen().prevAtlas().image(), lumen().prevAtlas().format(), lumen().atlasWidth(), lumen().atlasHeight()),
                                    rhi::TextureLayout::Undefined, rhi::TextureLayout::ShaderReadOnly);
@@ -1087,7 +1081,7 @@ void FrameRenderer::registerPipelineSteps() {
                 lumenFilter().bindResources(lumen(), rt(), gbuffer().frameUboHandle());
                 lumenFilterInited() = true;
             }
-            lumenFilter().record(vkCmd, lumen(), rt());
+            lumenFilter().record(cmd, lumen(), rt());
 
             // Copy filteredAtlas → prevAtlas for next frame
             auto imgBarrier = [&](const Image& img, rhi::TextureLayout oldL, rhi::TextureLayout newL) {
@@ -1111,7 +1105,6 @@ void FrameRenderer::registerPipelineSteps() {
         .phase = "GI",
         .enabled = false,
         .recordRHI = [this](rhi::RHICommandBuffer& cmd) {
-            auto vkCmd = static_cast<rhi::VkRHICommandBuffer&>(cmd).vkCmd();
             if (!lumenGatherInited()) {
                 lumenGather().init(*rhiDevice());
                 lumenGather().bindResources(lumen(), rt(),
@@ -1124,7 +1117,7 @@ void FrameRenderer::registerPipelineSteps() {
                 cmd.textureBarrier(*wrapImage(rt().lumenGI.image(), rt().lumenGI.format(), rt().extent.width, rt().extent.height),
                                    oldL, rhi::TextureLayout::General);
             }
-            lumenGather().record(vkCmd, lumen(), rt(), (uint32_t)lumenDebugMode());
+            lumenGather().record(cmd, lumen(), rt(), (uint32_t)lumenDebugMode());
 
             cmd.textureBarrier(*wrapImage(rt().lumenGI.image(), rt().lumenGI.format(), rt().extent.width, rt().extent.height),
                                rhi::TextureLayout::General, rhi::TextureLayout::ShaderReadOnly);
@@ -1157,8 +1150,7 @@ void FrameRenderer::registerPipelineSteps() {
         .phase = "GI",
         .enabled = false,
         .recordRHI = [this](rhi::RHICommandBuffer& cmd) {
-            auto vkCmd = static_cast<rhi::VkRHICommandBuffer&>(cmd).vkCmd();
-            lpvInject().record(vkCmd, kLpvResolution, lpvGridMin(), lpvCellSize());
+            lpvInject().record(cmd, kLpvResolution, lpvGridMin(), lpvCellSize());
 
             cmd.textureBarrier(*wrapImage(lpv().gv().image(), lpv().gv().format(), kLpvResolution, kLpvResolution),
                                rhi::TextureLayout::General, rhi::TextureLayout::ShaderReadOnly);
@@ -1179,7 +1171,7 @@ void FrameRenderer::registerPipelineSteps() {
                 barrierLpv(src, rhi::TextureLayout::General, rhi::TextureLayout::ShaderReadOnly);
                 barrierLpv(dst, rhi::TextureLayout::Undefined, rhi::TextureLayout::General);
 
-                lpvProp().record(vkCmd, lpv().curIdx(),
+                lpvProp().record(cmd, lpv().curIdx(),
                                  kLpvResolution, lpvProp().occlusionAmplifier,
                                  lpvProp().gvOcclusionStrength);
                 lpv().swap();
@@ -1210,10 +1202,9 @@ void FrameRenderer::registerPipelineSteps() {
         .phase = "GI",
         .enabled = false,
         .recordRHI = [this](rhi::RHICommandBuffer& cmd) {
-            auto vkCmd = static_cast<rhi::VkRHICommandBuffer&>(cmd).vkCmd();
             cmd.textureBarrier(*wrapImage(rt().rsmGI.image(), rt().rsmGI.format(), rt().extent.width, rt().extent.height),
                                rhi::TextureLayout::Undefined, rhi::TextureLayout::General);
-            rsmSample().record(vkCmd, rt());
+            rsmSample().record(cmd, rt());
             cmd.textureBarrier(*wrapImage(rt().rsmGI.image(), rt().rsmGI.format(), rt().extent.width, rt().extent.height),
                                rhi::TextureLayout::General, rhi::TextureLayout::ShaderReadOnly);
         }

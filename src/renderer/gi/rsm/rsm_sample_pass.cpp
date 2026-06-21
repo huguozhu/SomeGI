@@ -64,7 +64,5 @@ void RsmSamplePass::record(rhi::RHICommandBuffer& cmd, const RenderTargets& rt) 
     RsmSamplePC pc{}; pc.outSizeX=rt.extent.width; pc.outSizeY=rt.extent.height; pc.invOutSizeX=1.f/rt.extent.width; pc.invOutSizeY=1.f/rt.extent.height; pc.radius=radius; pc.sampleCount=(uint32_t)sampleCount; pc.intensity=intensity;
     cmd.pushConstants(rhi::ShaderStage::Compute,&pc,sizeof(pc)); cmd.dispatch((rt.extent.width+7)/8,(rt.extent.height+7)/8,1);
 }
-void RsmSamplePass::record(VkCommandBuffer vkCmd, const RenderTargets& rt) {
-    rhi::VkRHICommandBuffer rhiCmd(static_cast<rhi::VkRHIDevice&>(*m_rhiDevice),vkCmd); record(rhiCmd,rt);
-}
+
 } // namespace somegi

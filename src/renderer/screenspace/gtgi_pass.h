@@ -15,7 +15,6 @@ public:
     void destroy();
     void bindFrame(const RenderTargets& rt, VkBuffer frameUbo);
     void record(rhi::RHICommandBuffer& cmd, const RenderTargets& rt);
-    void record(VkCommandBuffer cmd, const RenderTargets& rt);
 
     bool enabled = false;
     int sliceCount = 4, samplesPerSlice = 6;

@@ -26,8 +26,6 @@ public:
 
     // RHI 路径
     void record(rhi::RHICommandBuffer& cmd, const RenderTargets& rt);
-    // 兼容 VkCommandBuffer
-    void record(VkCommandBuffer cmd, const RenderTargets& rt);
 
     bool  enabled         = true;
     int   maxSteps        = 32;

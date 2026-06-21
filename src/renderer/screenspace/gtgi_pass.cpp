@@ -88,9 +88,5 @@ void GtgiPass::record(rhi::RHICommandBuffer& cmd, const RenderTargets& rt) {
     cmd.dispatch((rt.extent.width+7)/8, (rt.extent.height+7)/8, 1);
 }
 
-void GtgiPass::record(VkCommandBuffer vkCmd, const RenderTargets& rt) {
-    rhi::VkRHICommandBuffer rhiCmd(static_cast<rhi::VkRHIDevice&>(*m_rhiDevice), vkCmd);
-    record(rhiCmd, rt);
-}
 
 } // namespace somegi

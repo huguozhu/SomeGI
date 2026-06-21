@@ -56,5 +56,5 @@ void RtGiPass::record(rhi::RHICommandBuffer& cmd,const RenderTargets& rt){ if(!m
     RtPC pc{(uint32_t)rt.extent.width,(uint32_t)rt.extent.height,1.f/rt.extent.width,1.f/rt.extent.height};
     cmd.pushConstants(rhi::ShaderStage::Compute,&pc,sizeof(pc)); cmd.dispatch((rt.extent.width+7)/8,(rt.extent.height+7)/8,1);
 }
-void RtGiPass::record(VkCommandBuffer vkCmd,const RenderTargets& rt){ rhi::VkRHICommandBuffer rhiCmd(static_cast<rhi::VkRHIDevice&>(*m_rhiDevice),vkCmd); record(rhiCmd,rt); }
+
 } // namespace somegi

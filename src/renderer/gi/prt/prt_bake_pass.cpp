@@ -38,5 +38,5 @@ void PrtBakePass::record(rhi::RHICommandBuffer& cmd,const glm::vec3& pgm,float p
     BakePC pc{pgm.x,pgm.y,pgm.z,pcs,pr,ns,vcs*(float)vr,0,vgm.x,vgm.y,vgm.z,vcs,vr};
     cmd.pushConstants(rhi::ShaderStage::Compute,&pc,sizeof(pc)); cmd.dispatch((pr+3)/4,(pr+3)/4,(pr+3)/4);
 }
-void PrtBakePass::record(VkCommandBuffer vkCmd,const glm::vec3& pgm,float pcs,uint32_t pr,const glm::vec3& vgm,float vcs,uint32_t vr,uint32_t ns){ rhi::VkRHICommandBuffer rhiCmd(static_cast<rhi::VkRHIDevice&>(*m_rhiDevice),vkCmd); record(rhiCmd,pgm,pcs,pr,vgm,vcs,vr,ns); }
+
 } // namespace somegi

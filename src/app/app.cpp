@@ -733,6 +733,7 @@ void App::bakePrt() {
             VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
             VK_PIPELINE_STAGE_2_CLEAR_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
         VkClearColorValue zero{};
+        rhi::VkRHICommandBuffer rhiCmd(static_cast<rhi::VkRHIDevice&>(*m_renderer.rhiDevice()), cmd);
         VkImageSubresourceRange rg{VK_IMAGE_ASPECT_COLOR_BIT, 0, m_renderer.vxgi().mipLevels(), 0, 1};
         vkCmdClearColorImage(cmd, m_renderer.vxgi().image().image(),
             VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &zero, 1, &rg);
@@ -743,14 +744,11 @@ void App::bakePrt() {
             VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
 
         // 2. voxelize：写 mip 0
-        m_renderer.vxgiVoxelize().record(cmd, m_scene, m_sceneGpu,
+        m_renderer.vxgiVoxelize().record(rhiCmd, m_scene, m_sceneGpu,
             m_renderer.vxgiGridMin(), m_renderer.vxgiCellSize(), m_renderer.kVxgiResolution);
 
         // 3. mipmap：内部把 src mip 转 SHADER_READ_ONLY，dst 保持 GENERAL。
-        {
-            rhi::VkRHICommandBuffer rhiCmd(static_cast<rhi::VkRHIDevice&>(*m_renderer.rhiDevice()), cmd);
-            m_renderer.vxgiMipmap().record(rhiCmd, m_renderer.vxgi());
-        }
+        m_renderer.vxgiMipmap().record(rhiCmd, m_renderer.vxgi());
 
         // 4. mipmap 结束后状态：mip 0..mipLevels-2 已是 SHADER_READ_ONLY
         //    （mipmap 内部 barrier 转过），mip mipLevels-1 还在 GENERAL。
@@ -793,7 +791,7 @@ void App::bakePrt() {
         }
 
         // 6. prt_bake compute（写 SH16 16 系数 → 5 atlas）
-        m_renderer.prtBake().record(cmd,
+        m_renderer.prtBake().record(rhiCmd,
             m_renderer.prtGridMin(), m_renderer.prtCellSize(), m_renderer.kPrtResolution,
             m_renderer.vxgiGridMin(), m_renderer.vxgiCellSize(), m_renderer.kVxgiResolution,
             64);
@@ -1086,7 +1084,7 @@ void App::recordPostProcessing(VkCommandBuffer cmd) {
                     VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
                     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
                 m_renderer.tonemap().bindOutput(m_renderer.rt().aaHdr.view(), m_frameCtx.frameInFlight);
-                m_renderer.tonemap().record(cmd, m_renderer.rt(), m_frameCtx.frameInFlight, true, 1.0f);
+                m_renderer.tonemap().record(rhiCmd, m_renderer.rt(), m_frameCtx.frameInFlight, true, 1.0f);
                 m_renderer.writeTimestamp(rhiCmd, m_renderer.kTsTonemap);
 
                 // aaHdr: Tonemap 写入后布局为 GENERAL → SR_O 供 TAA/SMAA 读取
@@ -1103,7 +1101,7 @@ void App::recordPostProcessing(VkCommandBuffer cmd) {
                 if (m_aaMethod == AAMethod::TAA) {
                     m_renderer.taa().bindResources(m_renderer.rt(), m_frameCtx.frameInFlight);
                     m_renderer.taa().bindOutput(m_frameCtx.swapView, m_frameCtx.frameInFlight);
-                    m_renderer.taa().record(cmd, m_renderer.rt(), m_jitter, m_prevJitter,
+                    m_renderer.taa().record(rhiCmd, m_renderer.rt(), m_jitter, m_prevJitter,
                                 m_frameCtx.invViewProj, m_prevViewProj, m_frameCtx.frameInFlight, m_taaBlendAlpha);
                     // Copy aaHdr → aaHistory for next frame
                     transitionImage(cmd, m_renderer.rt().aaHdr.image(), VK_IMAGE_ASPECT_COLOR_BIT,
@@ -1143,7 +1141,7 @@ void App::recordPostProcessing(VkCommandBuffer cmd) {
                 VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
                 VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
             m_renderer.tonemap().bindOutput(m_frameCtx.swapView, m_frameCtx.frameInFlight);
-            m_renderer.tonemap().record(cmd, m_renderer.rt(), m_frameCtx.frameInFlight, true, 1.0f);
+            m_renderer.tonemap().record(rhiCmd, m_renderer.rt(), m_frameCtx.frameInFlight, true, 1.0f);
             m_renderer.writeTimestamp(rhiCmd, m_renderer.kTsTonemap);
             m_renderer.writeTimestamp(rhiCmd, m_renderer.kTsAA);
         }
@@ -1164,7 +1162,7 @@ void App::recordPostProcessing(VkCommandBuffer cmd) {
                 VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
                 VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
             m_renderer.tonemap().bindOutput(m_renderer.rt().aaHdr.view(), m_frameCtx.frameInFlight);
-            m_renderer.tonemap().record(cmd, m_renderer.rt(), m_frameCtx.frameInFlight);
+            m_renderer.tonemap().record(rhiCmd, m_renderer.rt(), m_frameCtx.frameInFlight);
             m_renderer.writeTimestamp(rhiCmd, m_renderer.kTsTonemap);
 
             transitionImage(cmd, m_renderer.rt().aaHdr.image(), VK_IMAGE_ASPECT_COLOR_BIT,
@@ -1193,7 +1191,7 @@ void App::recordPostProcessing(VkCommandBuffer cmd) {
                     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                     VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
                 m_renderer.taa().bindResources(m_renderer.rt(), m_frameCtx.frameInFlight);
-                m_renderer.taa().record(cmd, m_renderer.rt(), m_jitter, m_prevJitter,
+                m_renderer.taa().record(rhiCmd, m_renderer.rt(), m_jitter, m_prevJitter,
                             m_frameCtx.invViewProj, m_prevViewProj, m_frameCtx.frameInFlight, m_taaBlendAlpha);
 
                 // Copy aaHdr → aaHistory for next frame
@@ -1240,7 +1238,7 @@ void App::recordPostProcessing(VkCommandBuffer cmd) {
                 VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
                 VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
             m_renderer.tonemap().bindOutput(m_renderer.rt().ldrTonemap.view(), m_frameCtx.frameInFlight);
-            m_renderer.tonemap().record(cmd, m_renderer.rt(), m_frameCtx.frameInFlight);
+            m_renderer.tonemap().record(rhiCmd, m_renderer.rt(), m_frameCtx.frameInFlight);
             m_renderer.writeTimestamp(rhiCmd, m_renderer.kTsTonemap);
             m_renderer.writeTimestamp(rhiCmd, m_renderer.kTsAA);
 

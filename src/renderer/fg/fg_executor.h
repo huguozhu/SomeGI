@@ -10,6 +10,7 @@
 #include <unordered_map>
 #include <string>
 #include <cstdint>
+#include <memory>
 
 namespace somegi {
 
@@ -17,6 +18,8 @@ class Device;
 
 namespace rhi {
 class RHICommandBuffer;
+class RHIQueryPool;
+class RHIDevice;
 }
 
 namespace fg {
@@ -37,25 +40,25 @@ class FGResources;
 // ============================================================
 class FGExecutor {
 public:
+    FGExecutor();
+    ~FGExecutor();
     void init(Device& device);
     void destroy();
+
+    // 设置 RHI 设备（供非拥有型包装和 query pool 创建使用）
+    void setRHIDevice(rhi::RHIDevice& rhiDevice) { m_rhiDevice = &rhiDevice; }
 
     // 绑定 FGDebug 用于资源布局时间线记录
     void setDebug(struct FGDebug* debug) { m_debug = debug; }
 
     // GPU timestamp 池（可选，调用 initTimestamps 后启用）
-    void initTimestamps(Device& d, uint32_t maxPasses);
+    void initTimestamps(rhi::RHIDevice& d, uint32_t maxPasses);
     const std::vector<float>& passGpuMs() const { return m_passGpuMs; }
 
-    // 执行编译后的图（原始 Vulkan 路径）
-    void execute(VkCommandBuffer cmd,
+    // 执行编译后的图（RHI 路径）
+    void execute(rhi::RHICommandBuffer& cmd,
                  FGCompiler::CompiledGraph& compiled,
                  const FGResources& viewCache);
-
-    // 执行编译后的图（RHI 路径，通过 nativeHandle() 桥接到 Vk）
-    void executeRHI(rhi::RHICommandBuffer& cmd,
-                    FGCompiler::CompiledGraph& compiled,
-                    const FGResources& viewCache);
 
     // 控制是否自动插入 barrier（默认 false，pass 内部管理 barrier）
     void setAutoBarriers(bool enabled) { m_autoBarriers = enabled; }
@@ -75,6 +78,7 @@ public:
 
 private:
     Device* m_device = nullptr;
+    rhi::RHIDevice* m_rhiDevice = nullptr;
     uint64_t m_currentFrame = 0;
     bool m_autoBarriers = false;  // 默认关闭，pass 内部管理 barrier
 
@@ -109,8 +113,8 @@ private:
     // 分配单个托管 Buffer（池中取或新建）
     Buffer* allocateBuffer(const FGResourceDesc& desc);
 
-    // 为 pass 插入前置 barrier
-    void emitBarriers(VkCommandBuffer cmd,
+    // 为 pass 插入前置 barrier（RHI 路径）
+    void emitBarriers(rhi::RHICommandBuffer& cmd,
                       const FGPassNode& pass,
                       std::vector<FGResourceNode*>& resources,
                       const FGResources& viewCache);
@@ -133,7 +137,7 @@ private:
     struct FGDebug* m_debug = nullptr;
 
     // ---- GPU Timestamp ----
-    VkQueryPool m_timestampPool = VK_NULL_HANDLE;
+    std::unique_ptr<rhi::RHIQueryPool> m_timestampPool;
     uint32_t m_maxTsPasses = 0;
     uint32_t m_tsCount = 0;           // 上帧实际写入的 pass 数
     std::vector<float> m_passGpuMs;   // 上帧每 pass 的 GPU 耗时 (ms)

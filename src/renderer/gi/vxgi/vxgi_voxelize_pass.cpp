@@ -48,5 +48,5 @@ void VxgiVoxelizePass::record(rhi::RHICommandBuffer& cmd,const SceneCpu& cpu,con
     for(auto& n:cpu.nodes){if(n.meshIndex<0)continue; const Mesh& M=cpu.meshes[n.meshIndex]; std::memcpy(pc.model,&n.worldTransform[0][0],sizeof(pc.model));
         for(auto& p:M.primitives){ pc.firstIndex=p.firstIndex; pc.indexCount=p.indexCount; pc.vertexOffset=p.vertexOffset; pc.materialIndex=p.materialIndex;
             cmd.pushConstants(rhi::ShaderStage::Compute,&pc,sizeof(pc)); uint32_t gx=(p.indexCount/3u+63u)/64u; if(gx)cmd.dispatch(gx,1,1); }}}
-void VxgiVoxelizePass::record(VkCommandBuffer vkCmd,const SceneCpu& cpu,const SceneGpu& gpu,const glm::vec3& gm,float cs,uint32_t gr){ rhi::VkRHICommandBuffer rhiCmd(static_cast<rhi::VkRHIDevice&>(*m_rhiDevice),vkCmd); record(rhiCmd,cpu,gpu,gm,cs,gr); }
+
 } // namespace somegi

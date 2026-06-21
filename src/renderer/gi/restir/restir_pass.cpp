@@ -78,10 +78,5 @@ void RestirPass::record(rhi::RHICommandBuffer& cmd,const RestirResources&,const 
     cmd.pushConstants(rhi::ShaderStage::Compute, &hpc, sizeof(hpc));
     cmd.dispatch(gx, gy, 1);
 }
-// Vk 兼容路径
-void RestirPass::record(VkCommandBuffer vkCmd,const RestirResources& res,const RenderTargets& rt,uint32_t nl,uint32_t nc,uint32_t nn,float sr,uint32_t ss,float is,uint32_t fi,bool useRt){
-    auto& vkDev = static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
-    rhi::VkRHICommandBuffer rhiCmd(vkDev, vkCmd);
-    record(rhiCmd, res, rt, nl, nc, nn, sr, ss, is, fi, useRt);
-}
+
 } // namespace somegi

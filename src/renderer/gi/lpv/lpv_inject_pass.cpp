@@ -67,10 +67,5 @@ void LpvInjectPass::record(rhi::RHICommandBuffer& cmd, uint32_t gr, const glm::v
     cmd.pushConstants(rhi::ShaderStage::Compute,&pc,sizeof(pc));
     cmd.dispatch((m_rsmSize+7)/8,(m_rsmSize+7)/8,1);
 }
-// 兼容旧调用方桥接
-void LpvInjectPass::record(VkCommandBuffer vkCmd, uint32_t gr, const glm::vec3& gMin, float cs) {
-    auto& vkD = static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
-    rhi::VkRHICommandBuffer rhiCmd(vkD, vkCmd);
-    record(rhiCmd, gr, gMin, cs);
-}
+
 } // namespace somegi

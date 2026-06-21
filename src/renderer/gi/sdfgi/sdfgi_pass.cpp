@@ -80,10 +80,5 @@ void SdfgiPass::record(rhi::RHICommandBuffer& cmd,const SdfgiResources& sf,const
     cmd.pushConstants(rhi::ShaderStage::Compute, &tpc, sizeof(tpc));
     cmd.dispatch((rt.extent.width+7)/8, (rt.extent.height+7)/8, 1);
 }
-// Vk 兼容路径
-void SdfgiPass::record(VkCommandBuffer vkCmd,const SdfgiResources& sf,const RenderTargets& rt,uint32_t fi,float st,float md,uint32_t nr,uint32_t ms,float rm,float he){
-    auto& vkDev = static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
-    rhi::VkRHICommandBuffer rhiCmd(vkDev, vkCmd);
-    record(rhiCmd, sf, rt, fi, st, md, nr, ms, rm, he);
-}
+
 } // namespace somegi

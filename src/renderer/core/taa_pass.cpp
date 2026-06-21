@@ -85,12 +85,5 @@ void TaaPass::record(rhi::RHICommandBuffer& cmd, const RenderTargets& rt,
     cmd.dispatch((rt.extent.width+7)/8, (rt.extent.height+7)/8, 1);
 }
 
-void TaaPass::record(VkCommandBuffer vkCmd, const RenderTargets& rt,
-                      const glm::vec2& j, const glm::vec2& pj,
-                      const glm::mat4& ivp, const glm::mat4& pvp,
-                      uint32_t fi, float ba) {
-    rhi::VkRHICommandBuffer rhiCmd(static_cast<rhi::VkRHIDevice&>(*m_rhiDevice), vkCmd);
-    record(rhiCmd, rt, j, pj, ivp, pvp, fi, ba);
-}
 
 } // namespace somegi

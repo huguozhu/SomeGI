@@ -34,5 +34,5 @@ void VxgiInjectPass::record(rhi::RHICommandBuffer& cmd,uint32_t gr,const glm::ve
     InjectPC pc{(uint32_t)m_rsmSize,(uint32_t)m_rsmSize,gr,0,gm.x,gm.y,gm.z,cs}; cmd.pushConstants(rhi::ShaderStage::Compute,&pc,sizeof(pc));
     cmd.dispatch((m_rsmSize+7)/8,(m_rsmSize+7)/8,1);
 }
-void VxgiInjectPass::record(VkCommandBuffer vkCmd,uint32_t gr,const glm::vec3& gm,float cs){ rhi::VkRHICommandBuffer rhiCmd(static_cast<rhi::VkRHIDevice&>(*m_rhiDevice),vkCmd); record(rhiCmd,gr,gm,cs); }
+
 } // namespace somegi

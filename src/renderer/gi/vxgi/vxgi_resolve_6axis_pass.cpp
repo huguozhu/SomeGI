@@ -38,5 +38,5 @@ void VxgiResolve6AxisPass::record(rhi::RHICommandBuffer& cmd,uint32_t gr,uint32_
     SixAxisPC pc{gr,ml,0,cs,st,gm.x,gm.y,gm.z}; cmd.pushConstants(rhi::ShaderStage::Compute,&pc,sizeof(pc));
     cmd.dispatch((gr+3)/4,(gr+3)/4,(gr+3)/4);
 }
-void VxgiResolve6AxisPass::record(VkCommandBuffer vkCmd,uint32_t gr,uint32_t ml,float cs,const glm::vec3& gm,float st){ rhi::VkRHICommandBuffer rhiCmd(static_cast<rhi::VkRHIDevice&>(*m_rhiDevice),vkCmd); record(rhiCmd,gr,ml,cs,gm,st); }
+
 } // namespace somegi

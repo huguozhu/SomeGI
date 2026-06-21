@@ -129,15 +129,5 @@ void SsaoPass::record(rhi::RHICommandBuffer& cmd, const RenderTargets& rt,
     cmd.dispatch(gx, gy, 1);
 }
 
-// ════════════════════════════════════════════════════════════════
-// 兼容 VkCommandBuffer 重载（迁移期间使用）
-// ════════════════════════════════════════════════════════════════
-void SsaoPass::record(VkCommandBuffer vkCmd, const RenderTargets& rt,
-                      const glm::mat4& proj, const glm::mat4& invProj,
-                      const glm::mat4& view) {
-    auto& vkDev = static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
-    rhi::VkRHICommandBuffer rhiCmd(vkDev, vkCmd);
-    record(rhiCmd, rt, proj, invProj, view);
-}
 
 } // namespace somegi

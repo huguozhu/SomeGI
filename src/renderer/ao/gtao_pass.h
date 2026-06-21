@@ -26,9 +26,6 @@ public:
     // RHI 路径
     void record(rhi::RHICommandBuffer& cmd, const RenderTargets& rt,
                 const glm::mat4& proj, const glm::mat4& view);
-    // 兼容 VkCommandBuffer
-    void record(VkCommandBuffer cmd, const RenderTargets& rt,
-                const glm::mat4& proj, const glm::mat4& view);
 
     bool  enabled = false;
     int   sliceCount = 4;

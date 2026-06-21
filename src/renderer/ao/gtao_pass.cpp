@@ -106,11 +106,5 @@ void GtaoPass::record(rhi::RHICommandBuffer& cmd, const RenderTargets& rt,
     cmd.dispatch(gx, gy, 1);
 }
 
-void GtaoPass::record(VkCommandBuffer vkCmd, const RenderTargets& rt,
-                      const glm::mat4& proj, const glm::mat4& view) {
-    auto& vkDev = static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
-    rhi::VkRHICommandBuffer rhiCmd(vkDev, vkCmd);
-    record(rhiCmd, rt, proj, view);
-}
 
 } // namespace somegi

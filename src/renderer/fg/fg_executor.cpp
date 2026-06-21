@@ -9,11 +9,86 @@
 #include "core/device.h"
 #include "core/image.h"
 #include "core/buffer.h"
-#include "rhi/base/command_buffer.h"  // RHICommandBuffer::nativeHandle
+#include "rhi/base/command_buffer.h"
+#include "rhi/base/device.h"
+#include "rhi/vulkan/vk_device.h"
+#include "rhi/vulkan/vk_texture.h"
+#include "rhi/vulkan/vk_buffer.h"
 #include <cstdio>
 
 namespace somegi {
 namespace fg {
+
+// ════════════════════════════════════════════════════════════════
+// Vk → RHI 映射辅助函数（局部作用域）
+// ════════════════════════════════════════════════════════════════
+
+static rhi::TextureLayout toRhiLayout(VkImageLayout l) {
+    switch (l) {
+        case VK_IMAGE_LAYOUT_UNDEFINED:                   return rhi::TextureLayout::Undefined;
+        case VK_IMAGE_LAYOUT_GENERAL:                     return rhi::TextureLayout::General;
+        case VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL:    return rhi::TextureLayout::ShaderReadOnly;
+        case VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL:    return rhi::TextureLayout::ColorAttachment;
+        case VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL:
+        case VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL: return rhi::TextureLayout::DepthAttachment;
+        case VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL:        return rhi::TextureLayout::TransferSrc;
+        case VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL:        return rhi::TextureLayout::TransferDst;
+        case VK_IMAGE_LAYOUT_PRESENT_SRC_KHR:             return rhi::TextureLayout::Present;
+        // Depth-stencil read-only — 保守映射为 ShaderReadOnly（可被采样读取）
+        case VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL:
+        case VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL:
+        case VK_IMAGE_LAYOUT_STENCIL_READ_ONLY_OPTIMAL:
+            return rhi::TextureLayout::ShaderReadOnly;
+        default: return rhi::TextureLayout::Undefined;
+    }
+}
+
+static rhi::PipelineStage toRhiStage(VkPipelineStageFlags2 s) {
+    if (s == VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT)
+        return rhi::PipelineStage::AllCommands;
+    if (s == VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT)
+        return rhi::PipelineStage::None;  // TOP_OF_PIPE → 无需等待任何阶段
+
+    uint32_t r = 0;
+    if (s & VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT)               r |= (uint32_t)rhi::PipelineStage::VertexShader;
+    if (s & VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT)             r |= (uint32_t)rhi::PipelineStage::FragmentShader;
+    if (s & VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT)              r |= (uint32_t)rhi::PipelineStage::ComputeShader;
+    if (s & VK_PIPELINE_STAGE_2_MESH_SHADER_BIT_EXT)             r |= (uint32_t)rhi::PipelineStage::MeshShader;
+    if (s & VK_PIPELINE_STAGE_2_TASK_SHADER_BIT_EXT)             r |= (uint32_t)rhi::PipelineStage::TaskShader;
+    if (s & VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR)      r |= (uint32_t)rhi::PipelineStage::RayTracingShader;
+    if (s & VK_PIPELINE_STAGE_2_COPY_BIT)                        r |= (uint32_t)rhi::PipelineStage::Transfer;
+    // Color attachment / depth tests → FragmentShader（最近似阶段）
+    if (s & VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT)     r |= (uint32_t)rhi::PipelineStage::FragmentShader;
+    if (s & (VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT |
+             VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT))      r |= (uint32_t)rhi::PipelineStage::FragmentShader;
+    if (s & VK_PIPELINE_STAGE_2_TRANSFER_BIT)                    r |= (uint32_t)rhi::PipelineStage::Transfer;
+    if (r == 0) r = (uint32_t)rhi::PipelineStage::AllCommands;
+    return (rhi::PipelineStage)r;
+}
+
+static rhi::BufferAccess toRhiBufferAccess(VkAccessFlags2 a) {
+    if (a == 0) return rhi::BufferAccess::None;
+
+    uint32_t r = 0;
+    if (a & VK_ACCESS_2_UNIFORM_READ_BIT)           r |= (uint32_t)rhi::BufferAccess::UniformRead;
+    if (a & VK_ACCESS_2_SHADER_STORAGE_READ_BIT)    r |= (uint32_t)rhi::BufferAccess::StorageRead;
+    if (a & VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT)   r |= (uint32_t)rhi::BufferAccess::StorageWrite;
+    if (a & VK_ACCESS_2_INDEX_READ_BIT)             r |= (uint32_t)rhi::BufferAccess::IndexRead;
+    if (a & VK_ACCESS_2_VERTEX_ATTRIBUTE_READ_BIT)  r |= (uint32_t)rhi::BufferAccess::VertexRead;
+    if (a & VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT)  r |= (uint32_t)rhi::BufferAccess::IndirectRead;
+    if (a & VK_ACCESS_2_TRANSFER_READ_BIT)          r |= (uint32_t)rhi::BufferAccess::TransferRead;
+    if (a & VK_ACCESS_2_TRANSFER_WRITE_BIT)         r |= (uint32_t)rhi::BufferAccess::TransferWrite;
+    // 图像专用 access 无 RHI BufferAccess 对等项 → 保守 fallback
+    if (r == 0) r = (uint32_t)rhi::BufferAccess::StorageRead | (uint32_t)rhi::BufferAccess::StorageWrite;
+    return (rhi::BufferAccess)r;
+}
+
+// ════════════════════════════════════════════════════════════════
+// Lifecycle
+// ════════════════════════════════════════════════════════════════
+
+FGExecutor::FGExecutor() = default;
+FGExecutor::~FGExecutor() = default;
 
 void FGExecutor::init(Device& device) {
     m_device = &device;
@@ -23,22 +98,21 @@ void FGExecutor::destroy() {
     m_texturePool.clear();
     m_bufferPool.clear();
     m_persistentState.clear();
-    if (m_timestampPool && m_device) {
-        vkDestroyQueryPool(m_device->device(), m_timestampPool, nullptr);
-        m_timestampPool = VK_NULL_HANDLE;
-    }
+    m_timestampPool.reset();  // unique_ptr 自动析构销毁 GPU 资源
 }
 
-void FGExecutor::initTimestamps(Device& d, uint32_t maxPasses) {
+void FGExecutor::initTimestamps(rhi::RHIDevice& d, uint32_t maxPasses) {
+    m_rhiDevice = &d;
     m_maxTsPasses = maxPasses;
     m_passGpuMs.resize(maxPasses, 0.0f);
-    VkQueryPoolCreateInfo ci{VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO};
-    ci.queryType = VK_QUERY_TYPE_TIMESTAMP;
-    ci.queryCount = maxPasses * 2;
-    VK_CHECK(vkCreateQueryPool(d.device(), &ci, nullptr, &m_timestampPool));
+    m_timestampPool = d.createQueryPool(maxPasses * 2);
 }
 
-void FGExecutor::execute(VkCommandBuffer cmd,
+// ════════════════════════════════════════════════════════════════
+// execute — RHI 主路径
+// ════════════════════════════════════════════════════════════════
+
+void FGExecutor::execute(rhi::RHICommandBuffer& cmd,
                           FGCompiler::CompiledGraph& compiled,
                           const FGResources& viewCache) {
     // 0. 恢复上帧持久化的 barrier 状态 + 读回上帧 GPU timestamp
@@ -47,7 +121,7 @@ void FGExecutor::execute(VkCommandBuffer cmd,
 
     // 0b. 重置本帧 timestamp 池
     if (m_timestampPool) {
-        vkCmdResetQueryPool(cmd, m_timestampPool, 0, m_maxTsPasses * 2);
+        cmd.resetQueryPool(*m_timestampPool, 0, m_maxTsPasses * 2);
     }
 
     // 1. 分配别名组
@@ -56,13 +130,15 @@ void FGExecutor::execute(VkCommandBuffer cmd,
     }
 
     // 2. 遍历执行 pass
+    //    提取原生 VkCommandBuffer 用于 pass 回调（尚未迁移到 RHI 的遗留 pass）
+    VkCommandBuffer vkCmd = (VkCommandBuffer)(uintptr_t)cmd.nativeHandle();
+
     uint32_t tsIdx = 0;
     for (auto* pass : compiled.passOrder) {
         if (!pass || pass->culled) continue;
 
         if (m_timestampPool && tsIdx < m_maxTsPasses) {
-            vkCmdWriteTimestamp2(cmd, VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT,
-                                 m_timestampPool, tsIdx * 2);
+            cmd.writeTimestamp(*m_timestampPool, tsIdx * 2);
         }
 
         // 2a. 插入 barrier：
@@ -70,14 +146,13 @@ void FGExecutor::execute(VkCommandBuffer cmd,
             emitBarriers(cmd, *pass, compiled.resources, viewCache);
         }
 
-        // 2b. 执行 pass
+        // 2b. 执行 pass（回退到 VkCommandBuffer 桥接）
         if (pass->execute) {
-            pass->execute(cmd, viewCache);
+            pass->execute(vkCmd, viewCache);
         }
 
         if (m_timestampPool && tsIdx < m_maxTsPasses) {
-            vkCmdWriteTimestamp2(cmd, VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT,
-                                 m_timestampPool, tsIdx * 2 + 1);
+            cmd.writeTimestamp(*m_timestampPool, tsIdx * 2 + 1);
             tsIdx++;
         }
 
@@ -133,17 +208,6 @@ void FGExecutor::execute(VkCommandBuffer cmd,
     recycleUnused(kRecycleFrames);
 
     ++m_currentFrame;
-}
-
-// ════════════════════════════════════════════════════════════════
-// RHI 执行路径（通过 nativeHandle() 桥接到现有 Vk 路径）
-// ════════════════════════════════════════════════════════════════
-void FGExecutor::executeRHI(rhi::RHICommandBuffer& rhiCmd,
-                            FGCompiler::CompiledGraph& compiled,
-                            const FGResources& viewCache) {
-    // 从 RHI 命令缓冲区提取原生 VkCommandBuffer，委托给现有 execute()
-    VkCommandBuffer vkCmd = (VkCommandBuffer)(uintptr_t)rhiCmd.nativeHandle();
-    execute(vkCmd, compiled, viewCache);
 }
 
 // ---- 别名组分配 ----
@@ -240,33 +304,95 @@ Buffer* FGExecutor::allocateBuffer(const FGResourceDesc& desc) {
     return &m_bufferPool.back().buffer;
 }
 
-// ---- Barrier 插入 ----
+// ════════════════════════════════════════════════════════════════
+// Barrier 插入（RHI 路径）
+// ════════════════════════════════════════════════════════════════
 
-void FGExecutor::emitBarriers(VkCommandBuffer cmd,
+void FGExecutor::emitBarriers(rhi::RHICommandBuffer& cmd,
                                const FGPassNode& pass,
                                std::vector<FGResourceNode*>& resources,
                                const FGResources& viewCache) {
     (void)resources;
     (void)viewCache;
 
-    std::vector<VkImageMemoryBarrier2> imgBarriers;
-    std::vector<VkBufferMemoryBarrier2> bufBarriers;
+    // 收集需要合并的 read+write 资源（同一 handle 同时出现在 reads 和 writes）
+    std::unordered_set<FGResourceNode*> merged;
+    for (auto& wref : pass.writes) {
+        if (!wref.resource) continue;
+        for (auto& rref : pass.reads) {
+            if (rref.resource == wref.resource) {
+                merged.insert(wref.resource);
 
-    auto addBarrier = [&](const FGPassNode::ResourceRef& ref) {
+                auto* res = wref.resource;
+                VkImageLayout currentLayout = res->state.layout;
+
+                // Read+write 合并：过渡到 GENERAL + 完整存储读写
+                rhi::TextureLayout targetLayout = rhi::TextureLayout::General;
+                bool prevManual = res->state.lastWriter && res->state.lastWriter->usesManualBarriers;
+                if (currentLayout != VK_IMAGE_LAYOUT_GENERAL || res->state.access !=
+                    (VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT) || prevManual) {
+
+                    // 为合并的 read+write 发射单个 barrier
+                    if (res->desc.type == FGResourceType::Texture) {
+                        // 获取屏障用的 VkImage
+                        VkImage img = res->physicalTexture
+                            ? res->physicalTexture->image()
+                            : res->importedImage;
+                        if (img && m_rhiDevice) {
+                            auto* vkDev = static_cast<rhi::VkRHIDevice*>(m_rhiDevice);
+                            auto tex = rhi::VkRHITexture::createNonOwning(
+                                *vkDev, img,
+                                rhi::toRhiFormat(res->desc.texture.format),
+                                res->desc.texture.extent.width,
+                                res->desc.texture.extent.height,
+                                res->desc.texture.mipLevels);
+                            // oldLayout 使用 UNDEFINED（与原有行为一致，不假设旧布局）
+                            cmd.textureBarrier(*tex,
+                                rhi::TextureLayout::Undefined, targetLayout);
+                        }
+                    } else if (res->desc.type == FGResourceType::Buffer && res->physicalBuffer) {
+                        VkBuffer buf = res->physicalBuffer->handle();
+                        if (buf && m_rhiDevice) {
+                            auto* vkDev = static_cast<rhi::VkRHIDevice*>(m_rhiDevice);
+                            auto rhiBuf = rhi::VkRHIBuffer::createNonOwning(
+                                *vkDev, buf,
+                                res->physicalBuffer->size());
+
+                            // manual→auto 交接安全回退
+                            uint32_t srcStageRaw = (uint32_t)rhi::PipelineStage::ComputeShader;
+                            uint32_t srcAccessRaw = 0;
+                            if (prevManual && res->state.stage == VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT) {
+                                srcStageRaw = (uint32_t)rhi::PipelineStage::AllCommands;
+                                srcAccessRaw = 0;
+                            } else {
+                                srcStageRaw = (uint32_t)toRhiStage(res->state.stage);
+                                srcAccessRaw = (uint32_t)toRhiBufferAccess(res->state.access);
+                            }
+
+                            cmd.bufferBarrier(*rhiBuf,
+                                (rhi::PipelineStage)srcStageRaw,
+                                rhi::PipelineStage::ComputeShader,  // readWrite → compute shader stage
+                                (rhi::BufferAccess)srcAccessRaw,
+                                (rhi::BufferAccess)((uint32_t)rhi::BufferAccess::StorageRead | (uint32_t)rhi::BufferAccess::StorageWrite));
+                        }
+                    }
+                }
+                break;
+            }
+        }
+    }
+
+    // 辅助 lambda：为单个 ResourceRef 发射 barrier
+    auto emitRefBarrier = [&](const FGPassNode::ResourceRef& ref) {
         auto* res = ref.resource;
         if (!res) return;
 
-        // 获取屏障用的 VkImage：托管资源用 physicalTexture，导入资源用 importedImage
-        VkImage barrierImage = VK_NULL_HANDLE;
         if (res->desc.type == FGResourceType::Texture) {
-            if (res->physicalTexture) {
-                barrierImage = res->physicalTexture->image();
-            } else if (res->importedImage) {
-                barrierImage = res->importedImage;
-            }
-        }
+            VkImage img = res->physicalTexture
+                ? res->physicalTexture->image()
+                : res->importedImage;
+            if (!img || !m_rhiDevice) return;
 
-        if (barrierImage) {
             VkImageLayout currentLayout = res->state.layout;
             VkImageLayout targetLayout = ref.requiredLayout;
 
@@ -283,103 +409,62 @@ void FGExecutor::emitBarriers(VkCommandBuffer cmd,
             // oldLayout 决策：
             // - 非 manual→auto：使用 tracked currentLayout（精确，数据保留）
             // - manual→auto + exitLayout 已知：使用 tracked layout（manual pass 声明了退出布局）
-            // - manual→auto + exitLayout 未知：回退 UNDEFINED（布局安全，但可能丢数据）
-            // 使用 UNDEFINED 确保与外部布局变更兼容（引导、手动 barrier 等）
-            VkImageLayout oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-            VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
-            b.srcStageMask  = res->state.stage;
-            b.srcAccessMask = res->state.access;
-            b.dstStageMask  = ref.stages;
-            b.dstAccessMask = ref.access;
-            b.oldLayout = oldLayout;
-            b.newLayout = targetLayout;
-            b.image = barrierImage;
-            b.subresourceRange = {
-                static_cast<VkImageAspectFlags>(
-                    (res->desc.texture.usage & VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT)
-                        ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_COLOR_BIT),
-                0, res->desc.texture.mipLevels, 0, res->desc.texture.arrayLayers
-            };
-            imgBarriers.push_back(b);
+            // - manual→auto + exitLayout 未知：回退 UNDEFINED（安全，但可能丢数据）
+            rhi::TextureLayout oldRhiLayout = rhi::TextureLayout::Undefined;
+
+            auto* vkDev = static_cast<rhi::VkRHIDevice*>(m_rhiDevice);
+            auto tex = rhi::VkRHITexture::createNonOwning(
+                *vkDev, img,
+                rhi::toRhiFormat(res->desc.texture.format),
+                res->desc.texture.extent.width,
+                res->desc.texture.extent.height,
+                res->desc.texture.mipLevels);
+
+            cmd.textureBarrier(*tex, oldRhiLayout, toRhiLayout(targetLayout));
         }
 
         if (res->desc.type == FGResourceType::Buffer && res->physicalBuffer) {
+            VkBuffer buf = res->physicalBuffer->handle();
+            if (!buf || !m_rhiDevice) return;
+
             bool prevManual = res->state.lastWriter &&
                               res->state.lastWriter->usesManualBarriers;
             if (res->state.access == ref.access && !prevManual) return;
 
-            VkBufferMemoryBarrier2 b{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2};
-            // manual→auto 交接：若手动 pass 未声明退出状态，回退到安全默认值
+            uint32_t srcStageRaw, srcAccessRaw;
             if (prevManual && res->state.stage == VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT) {
-                b.srcStageMask  = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
-                b.srcAccessMask = 0;
+                srcStageRaw  = (uint32_t)rhi::PipelineStage::AllCommands;
+                srcAccessRaw = 0;
             } else {
-                b.srcStageMask  = res->state.stage;
-                b.srcAccessMask = res->state.access;
+                srcStageRaw  = (uint32_t)toRhiStage(res->state.stage);
+                srcAccessRaw = (uint32_t)toRhiBufferAccess(res->state.access);
             }
-            b.dstStageMask  = ref.stages;
-            b.dstAccessMask = ref.access;
-            b.buffer = res->physicalBuffer->handle();
-            b.offset = 0;
-            b.size = VK_WHOLE_SIZE;
-            bufBarriers.push_back(b);
+
+            auto* vkDev = static_cast<rhi::VkRHIDevice*>(m_rhiDevice);
+            auto rhiBuf = rhi::VkRHIBuffer::createNonOwning(
+                *vkDev, buf,
+                res->physicalBuffer->size());
+
+            cmd.bufferBarrier(*rhiBuf,
+                (rhi::PipelineStage)srcStageRaw,
+                toRhiStage(ref.stages),
+                (rhi::BufferAccess)srcAccessRaw,
+                toRhiBufferAccess(ref.access));
         }
     };
 
-    // 收集同一资源同时出现在 reads 和 writes 中的情况（readWrite 模式），
-    // 合并为单个 barrier 避免重复
-    std::unordered_set<FGResourceNode*> merged;
-    for (auto& wref : pass.writes) {
-        if (!wref.resource) continue;
-        for (auto& rref : pass.reads) {
-            if (rref.resource == wref.resource) {
-                merged.insert(wref.resource);
-
-                // 为合并的 read+write 发射单个 barrier：GENERAL + R/W access
-                VkImageLayout targetLayout = VK_IMAGE_LAYOUT_GENERAL;
-                VkAccessFlags2 access = VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-                VkPipelineStageFlags2 stages = wref.stages;
-
-                auto* res = wref.resource;
-                VkImageLayout currentLayout = res->state.layout;
-                bool prevManual = res->state.lastWriter && res->state.lastWriter->usesManualBarriers;
-                if (currentLayout != targetLayout || res->state.access != access || prevManual) {
-                    // 使用 UNDEFINED 作为 oldLayout 以避免与实际布局不匹配
-                    // （FG 状态追踪可能与外部引导或手动 barrier 不同步）
-                    VkImageLayout oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-                    VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
-                    b.srcStageMask = res->state.stage; b.srcAccessMask = res->state.access;
-                    b.dstStageMask = stages; b.dstAccessMask = access;
-                    b.oldLayout = oldLayout; b.newLayout = targetLayout;
-                    b.image = res->physicalTexture ? res->physicalTexture->image() : res->importedImage;
-                    b.subresourceRange = {static_cast<VkImageAspectFlags>(
-                        (res->desc.texture.usage & VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT)
-                            ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_COLOR_BIT),
-                        0, res->desc.texture.mipLevels, 0, res->desc.texture.arrayLayers};
-                    imgBarriers.push_back(b);
-                }
-                break;
-            }
-        }
-    }
-
+    // 遍历 reads 和 writes，跳过已合并的
     for (auto& ref : pass.reads) {
         if (merged.count(ref.resource)) continue;
-        addBarrier(ref);
+        emitRefBarrier(ref);
     }
     for (auto& ref : pass.writes) {
         if (merged.count(ref.resource)) continue;
-        addBarrier(ref);
+        emitRefBarrier(ref);
     }
 
-    if (!imgBarriers.empty() || !bufBarriers.empty()) {
-        VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-        di.imageMemoryBarrierCount = (uint32_t)imgBarriers.size();
-        di.pImageMemoryBarriers = imgBarriers.data();
-        di.bufferMemoryBarrierCount = (uint32_t)bufBarriers.size();
-        di.pBufferMemoryBarriers = bufBarriers.data();
-        vkCmdPipelineBarrier2(cmd, &di);
-    }
+    // 注意：RHI textBarrier / bufferBarrier 各自在内部调用 vkCmdPipelineBarrier2，
+    // 不再是批量发射。若性能关键，可后续扩展 RHI 批量 barrier 接口。
 }
 
 // ---- 状态更新 ----
@@ -390,7 +475,6 @@ void FGExecutor::updateResourceStates(const FGPassNode& pass,
 
     for (auto& ref : pass.reads) {
         if (!ref.resource) continue;
-        // barrier 已将 layout 过渡到 target，必须跟踪
         ref.resource->state.layout = ref.requiredLayout;
         ref.resource->state.access = ref.access;
         ref.resource->state.stage = ref.stages;
@@ -409,16 +493,13 @@ void FGExecutor::updateResourceStates(const FGPassNode& pass,
 
 void FGExecutor::recycleUnused(uint64_t threshold) {
     // 回收长时间未用的纹理池资源
-    // 注意：PooledTexture/PooledBuffer 持有 Image/Buffer 值对象，
-    // erase 时自动调用析构函数销毁 GPU 资源
     m_texturePool.erase(
         std::remove_if(m_texturePool.begin(), m_texturePool.end(),
             [&](PooledTexture& pt) {
                 if (!pt.inUse && (m_currentFrame - pt.lastUsedFrame) > threshold) {
-                    // Image 析构函数随 PooledTexture 销毁自动释放 VkImage/VkImageView/VMA
                     return true;
                 }
-                pt.inUse = false;  // 本帧使用的标记复位，下帧复用
+                pt.inUse = false;
                 return false;
             }),
         m_texturePool.end());
@@ -428,7 +509,6 @@ void FGExecutor::recycleUnused(uint64_t threshold) {
         std::remove_if(m_bufferPool.begin(), m_bufferPool.end(),
             [&](PooledBuffer& pb) {
                 if (!pb.inUse && (m_currentFrame - pb.lastUsedFrame) > threshold) {
-                    // Buffer 析构函数随 PooledBuffer 销毁自动释放 VkBuffer/VMA
                     return true;
                 }
                 pb.inUse = false;
@@ -447,24 +527,25 @@ void FGExecutor::saveResourceStates(const std::vector<FGResourceNode*>& resource
     }
 }
 
+// ════════════════════════════════════════════════════════════════
+// Timestamp 读回（RHI 路径）
+// ════════════════════════════════════════════════════════════════
+
 void FGExecutor::readbackTimestamps() {
     if (!m_timestampPool || m_tsCount == 0) return;
 
     uint32_t count = m_tsCount * 2;
-    std::vector<uint64_t> buf(count * 2);  // value + availability pairs
-    VkResult r = vkGetQueryPoolResults(m_device->device(), m_timestampPool,
-        0, count, buf.size() * sizeof(uint64_t), buf.data(), 2 * sizeof(uint64_t),
-        VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WITH_AVAILABILITY_BIT);
+    // RHIQueryPool::getResults 使用 VK_QUERY_RESULT_WAIT_BIT，
+    // 数据布局为扁平 uint64_t 数组（每 query 一个值）
+    std::vector<uint64_t> buf(count);
+    m_timestampPool->getResults(0, count, buf.data());
 
-    if (r != VK_SUCCESS && r != VK_NOT_READY) return;
-
-    float period = m_device->timestampPeriod() * 1e-6f;  // ns → ms
+    // timestampPeriod 来自 RHI DeviceLimits（nanoseconds per tick）
+    float period = (m_rhiDevice ? m_rhiDevice->limits().timestampPeriod : 1.0f) * 1e-6f;
     for (uint32_t i = 0; i < m_tsCount; ++i) {
-        uint64_t startVal   = buf[i * 4];
-        uint64_t startAvail = buf[i * 4 + 1];
-        uint64_t endVal     = buf[i * 4 + 2];
-        uint64_t endAvail   = buf[i * 4 + 3];
-        if (startAvail && endAvail && endVal > startVal) {
+        uint64_t startVal = buf[i * 2];
+        uint64_t endVal   = buf[i * 2 + 1];
+        if (endVal > startVal) {
             m_passGpuMs[i] = float(endVal - startVal) * period;
         } else {
             m_passGpuMs[i] = 0.0f;  // 未就绪

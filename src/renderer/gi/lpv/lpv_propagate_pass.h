@@ -17,8 +17,6 @@ public:
     void bindResources(const LpvGrid& g0, const LpvGrid& g1, const Image& gv);
     void record(rhi::RHICommandBuffer& cmd, int srcIdx, uint32_t gridRes,
                 float occAmp, float gvOccStr);
-    void record(VkCommandBuffer cmd, int srcIdx, uint32_t gridRes,
-                float occAmp, float gvOccStr);
 
     int iterations = 8; float occlusionAmplifier = 1.0f; float gvOcclusionStrength = 1.0f;
 

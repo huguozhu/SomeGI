@@ -125,22 +125,13 @@ void FrameGraph::compile() {
 
 // ---- 执行 ----
 
-void FrameGraph::execute(VkCommandBuffer cmd) {
-    if (!m_compiledThisFrame) return;
-    populateViewCache();
-    m_executor.setDebug(&m_debug);
-    m_executor.execute(cmd, m_compiled, m_viewCache);
-    m_debug.finishTimeline((uint32_t)m_compiled.passOrder.size());
-    ++m_frameIndex;
-}
-
 void FrameGraph::executeRHI(rhi::RHICommandBuffer& cmd) {
     if (!m_compiledThisFrame) return;
     populateViewCache();
     // 传递 RHI 设备给资源视图（用于创建非拥有型 RHI 包装）
     m_viewCache.setRHIDevice(m_rhiDevice);
     m_executor.setDebug(&m_debug);
-    m_executor.executeRHI(cmd, m_compiled, m_viewCache);
+    m_executor.execute(cmd, m_compiled, m_viewCache);
     m_debug.finishTimeline((uint32_t)m_compiled.passOrder.size());
     ++m_frameIndex;
 }
@@ -148,6 +139,9 @@ void FrameGraph::executeRHI(rhi::RHICommandBuffer& cmd) {
 // RHI 设备设置
 void FrameGraph::setRHIDevice(rhi::RHIDevice* rhiDevice) {
     m_rhiDevice = rhiDevice;
+    if (rhiDevice) {
+        m_executor.setRHIDevice(*rhiDevice);
+    }
 }
 
 // ---- 查询 ----

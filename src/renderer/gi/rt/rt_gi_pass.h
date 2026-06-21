@@ -15,7 +15,6 @@ public:
     void destroy();
     void bindFrame(const RenderTargets& rt, VkBuffer frameUbo, const SceneRtAS& rtAS, const SceneGpu& sceneGpu);
     void record(rhi::RHICommandBuffer& cmd, const RenderTargets& rt);
-    void record(VkCommandBuffer cmd, const RenderTargets& rt);
 private:
     rhi::RHIDevice* m_rhiDevice = nullptr;
     std::unique_ptr<rhi::RHIDescriptorSetLayout> m_setLayout;

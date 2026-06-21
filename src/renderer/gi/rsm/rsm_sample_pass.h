@@ -17,7 +17,6 @@ public:
     void bindFrame(const RenderTargets& rt, VkBuffer frameUbo, VkBuffer rsmUbo,
                    VkImageView rsmPos, VkImageView rsmN, VkImageView rsmFlux);
     void record(rhi::RHICommandBuffer& cmd, const RenderTargets& rt);
-    void record(VkCommandBuffer cmd, const RenderTargets& rt);
 
     bool enabled=true; int sampleCount=32; float radius=0.05f, intensity=1.0f;
 

@@ -34,10 +34,6 @@ public:
                 const glm::mat4& proj, const glm::mat4& invProj,
                 const glm::mat4& view);
 
-    // 兼容 VkCommandBuffer 调用（迁移期间，内部包装为 VkRHICommandBuffer）
-    void record(VkCommandBuffer cmd, const RenderTargets& rt,
-                const glm::mat4& proj, const glm::mat4& invProj,
-                const glm::mat4& view);
 
     // ImGui 可调的运行时状态
     bool  enabled      = true;

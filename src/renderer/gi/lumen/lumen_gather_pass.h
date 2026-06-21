@@ -12,7 +12,6 @@ public:
     void destroy();
     void bindResources(const LumenResources& res, const RenderTargets& rt, VkBuffer frameUbo, bool useFiltered);
     void record(rhi::RHICommandBuffer& cmd, const LumenResources& res, const RenderTargets& rt, uint32_t debugMode=0);
-    void record(VkCommandBuffer cmd, const LumenResources& res, const RenderTargets& rt, uint32_t debugMode=0);
 private:
     rhi::RHIDevice* m_rhiDevice = nullptr;
     std::unique_ptr<rhi::RHIDescriptorSetLayout> m_setLayout;

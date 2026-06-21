@@ -386,17 +386,6 @@ void ShadowPass::record(rhi::RHICommandBuffer& cmd, const RenderTargets&,
     }
 }
 
-// Vk 兼容路径：委托到 RHI 记录
-void ShadowPass::record(VkCommandBuffer cmd, const RenderTargets& rt,
-                         VkBuffer frameUbo, const SceneGpu& sceneGpu,
-                         VkBuffer indirectBuf, uint32_t drawCount, uint32_t frameIndex) {
-    auto& vkDev = static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
-    rhi::VkRHICommandBuffer rhiCmd(vkDev, cmd);
-    auto rhiIb = rhi::VkRHIBuffer::createNonOwning(vkDev, indirectBuf, VK_WHOLE_SIZE);
-    // frameUbo 目前未被子方法实际使用，传入空包装占位
-    auto rhiDummy = rhi::VkRHIBuffer::createNonOwning(vkDev, frameUbo, VK_WHOLE_SIZE);
-    record(rhiCmd, rt, *rhiDummy, sceneGpu, *rhiIb, drawCount, frameIndex);
-}
 
 // RHI 路径：清除 shadowMask 为白色（1.0 = 无阴影）
 void ShadowPass::recordNone(rhi::RHICommandBuffer& cmd) {
@@ -413,12 +402,6 @@ void ShadowPass::recordNone(rhi::RHICommandBuffer& cmd) {
     cmd.textureBarrier(*rhiTex, rhi::TextureLayout::TransferDst, rhi::TextureLayout::ShaderReadOnly);
 }
 
-// Vk 兼容路径：委托到 RHI 版本
-void ShadowPass::recordNone(VkCommandBuffer cmd) {
-    auto& vkDev = static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
-    rhi::VkRHICommandBuffer rhiCmd(vkDev, cmd);
-    recordNone(rhiCmd);
-}
 
 // RHI 路径：渲染 shadow map 深度图
 void ShadowPass::renderShadowMap(rhi::RHICommandBuffer& cmd, const rhi::RHIBuffer& indirectBuf, uint32_t drawCount) {
@@ -459,13 +442,6 @@ void ShadowPass::renderShadowMap(rhi::RHICommandBuffer& cmd, const rhi::RHIBuffe
     cmd.textureBarrier(*depthTex, rhi::TextureLayout::DepthAttachment, rhi::TextureLayout::ShaderReadOnly);
 }
 
-// Vk 兼容路径：委托到 RHI 版本
-void ShadowPass::renderShadowMap(VkCommandBuffer cmd, VkBuffer, const SceneGpu&, VkBuffer indirectBuf, uint32_t drawCount) {
-    auto& vkDev = static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
-    rhi::VkRHICommandBuffer rhiCmd(vkDev, cmd);
-    auto rhiIb = rhi::VkRHIBuffer::createNonOwning(vkDev, indirectBuf, VK_WHOLE_SIZE);
-    renderShadowMap(rhiCmd, *rhiIb, drawCount);
-}
 
 // ── HardSM RHI 路径：渲染 shadow map + compute resolve ──
 void ShadowPass::recordHardSM(rhi::RHICommandBuffer& cmd, const rhi::RHIBuffer& indirectBuf, uint32_t drawCount) {
@@ -502,13 +478,7 @@ void ShadowPass::recordHardSM(rhi::RHICommandBuffer& cmd, const rhi::RHIBuffer& 
         cmd.textureBarrier(*maskTex, rhi::TextureLayout::General, rhi::TextureLayout::ShaderReadOnly);
     }
 }
-// Vk 兼容路径
-void ShadowPass::recordHardSM(VkCommandBuffer cmd, const RenderTargets&, VkBuffer, const SceneGpu&, VkBuffer indirectBuf, uint32_t drawCount) {
-    auto& vkDev = static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
-    rhi::VkRHICommandBuffer rhiCmd(vkDev, cmd);
-    auto rhiIb = rhi::VkRHIBuffer::createNonOwning(vkDev, indirectBuf, VK_WHOLE_SIZE);
-    recordHardSM(rhiCmd, *rhiIb, drawCount);
-}
+
 
 // ── PCF RHI 路径 ──
 void ShadowPass::recordPCF(rhi::RHICommandBuffer& cmd, const rhi::RHIBuffer& indirectBuf, uint32_t drawCount) {
@@ -544,12 +514,7 @@ void ShadowPass::recordPCF(rhi::RHICommandBuffer& cmd, const rhi::RHIBuffer& ind
         cmd.textureBarrier(*maskTex, rhi::TextureLayout::General, rhi::TextureLayout::ShaderReadOnly);
     }
 }
-void ShadowPass::recordPCF(VkCommandBuffer cmd, const RenderTargets&, VkBuffer, const SceneGpu&, VkBuffer indirectBuf, uint32_t drawCount) {
-    auto& vkDev = static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
-    rhi::VkRHICommandBuffer rhiCmd(vkDev, cmd);
-    auto rhiIb = rhi::VkRHIBuffer::createNonOwning(vkDev, indirectBuf, VK_WHOLE_SIZE);
-    recordPCF(rhiCmd, *rhiIb, drawCount);
-}
+
 
 // ── PCSS RHI 路径 ──
 void ShadowPass::recordPCSS(rhi::RHICommandBuffer& cmd, const rhi::RHIBuffer& indirectBuf, uint32_t drawCount) {
@@ -587,12 +552,7 @@ void ShadowPass::recordPCSS(rhi::RHICommandBuffer& cmd, const rhi::RHIBuffer& in
         cmd.textureBarrier(*maskTex, rhi::TextureLayout::General, rhi::TextureLayout::ShaderReadOnly);
     }
 }
-void ShadowPass::recordPCSS(VkCommandBuffer cmd, const RenderTargets&, VkBuffer, const SceneGpu&, VkBuffer indirectBuf, uint32_t drawCount) {
-    auto& vkDev = static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
-    rhi::VkRHICommandBuffer rhiCmd(vkDev, cmd);
-    auto rhiIb = rhi::VkRHIBuffer::createNonOwning(vkDev, indirectBuf, VK_WHOLE_SIZE);
-    recordPCSS(rhiCmd, *rhiIb, drawCount);
-}
+
 
 // ── VSM RHI 路径：VSM 生成 + 双向模糊 + resolve ──
 void ShadowPass::recordVSM(rhi::RHICommandBuffer& cmd, const rhi::RHIBuffer& indirectBuf, uint32_t drawCount) {
@@ -702,13 +662,7 @@ void ShadowPass::recordVSM(rhi::RHICommandBuffer& cmd, const rhi::RHIBuffer& ind
         cmd.textureBarrier(*maskTex, rhi::TextureLayout::General, rhi::TextureLayout::ShaderReadOnly);
     }
 }
-// Vk 兼容路径
-void ShadowPass::recordVSM(VkCommandBuffer cmd, const RenderTargets&, VkBuffer, const SceneGpu&, VkBuffer indirectBuf, uint32_t drawCount) {
-    auto& vkDev = static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
-    rhi::VkRHICommandBuffer rhiCmd(vkDev, cmd);
-    auto rhiIb = rhi::VkRHIBuffer::createNonOwning(vkDev, indirectBuf, VK_WHOLE_SIZE);
-    recordVSM(rhiCmd, *rhiIb, drawCount);
-}
+
 
 // ── RT Hard RHI 路径：硬件光追硬阴影 ──
 void ShadowPass::recordRTHard(rhi::RHICommandBuffer& cmd) {
@@ -731,12 +685,7 @@ void ShadowPass::recordRTHard(rhi::RHICommandBuffer& cmd) {
 
     cmd.textureBarrier(*maskTex, rhi::TextureLayout::General, rhi::TextureLayout::ShaderReadOnly);
 }
-// Vk 兼容路径
-void ShadowPass::recordRTHard(VkCommandBuffer cmd) {
-    auto& vkDev = static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
-    rhi::VkRHICommandBuffer rhiCmd(vkDev, cmd);
-    recordRTHard(rhiCmd);
-}
+
 
 // ── RT Soft RHI 路径：硬件光追软阴影（多采样） ──
 void ShadowPass::recordRTSoft(rhi::RHICommandBuffer& cmd) {
@@ -760,11 +709,7 @@ void ShadowPass::recordRTSoft(rhi::RHICommandBuffer& cmd) {
 
     cmd.textureBarrier(*maskTex, rhi::TextureLayout::General, rhi::TextureLayout::ShaderReadOnly);
 }
-void ShadowPass::recordRTSoft(VkCommandBuffer cmd) {
-    auto& vkDev = static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
-    rhi::VkRHICommandBuffer rhiCmd(vkDev, cmd);
-    recordRTSoft(rhiCmd);
-}
+
 
 // ════════════════════════════════════════════════════════════════
 // Destroy

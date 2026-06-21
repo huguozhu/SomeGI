@@ -12,7 +12,6 @@ public:
     void destroy();
     void bindResources(VkImageView rsmPosView, VkImageView rsmFluxView, const VxgiResources& vxgi);
     void record(rhi::RHICommandBuffer& cmd, uint32_t gridRes, const glm::vec3& gridMin, float cellSize);
-    void record(VkCommandBuffer cmd, uint32_t gridRes, const glm::vec3& gridMin, float cellSize);
 private:
     rhi::RHIDevice* m_rhiDevice = nullptr; uint32_t m_rsmSize=0;
     std::unique_ptr<rhi::RHIDescriptorSetLayout> m_setLayout;

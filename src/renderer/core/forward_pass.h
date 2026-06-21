@@ -27,8 +27,7 @@ public:
     void updateFrame(const FrameUBO& ubo);
     void record(rhi::RHICommandBuffer& cmd, const RenderTargets& rt,
                 const rhi::RHIBuffer& indirectBuf, uint32_t drawCount, const SceneGpu& gpu);
-    void record(VkCommandBuffer cmd, const RenderTargets& rt,
-                VkBuffer indirectBuf, uint32_t drawCount, const SceneGpu& gpu);
+
     void setNdgiWeights(Device& d,
         VkBuffer w1, VkBuffer b1, VkBuffer w2, VkBuffer b2,
         VkBuffer w3, VkBuffer b3);

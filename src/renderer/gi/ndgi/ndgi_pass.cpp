@@ -72,12 +72,7 @@ void NdgiPass::initWeights(rhi::RHICommandBuffer& cmd){ if(!m_rtSupported||!m_in
     cmd.pushConstants(rhi::ShaderStage::Compute, &pc, 16);
     cmd.dispatch(1, 1, 1);
 }
-// Vk 兼容路径
-void NdgiPass::initWeights(VkCommandBuffer vkCmd){
-    auto& vkDev = static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
-    rhi::VkRHICommandBuffer rhiCmd(vkDev, vkCmd);
-    initWeights(rhiCmd);
-}
+
 // RHI 路径：NDGI 光线追踪 probe
 void NdgiPass::record(rhi::RHICommandBuffer& cmd,NdgiResources& res,uint32_t fi,glm::vec3 o,glm::vec3 s){ if(!m_rtSupported||!m_tracePipeline)return;
     // 清零采样计数缓冲
@@ -93,12 +88,7 @@ void NdgiPass::record(rhi::RHICommandBuffer& cmd,NdgiResources& res,uint32_t fi,
     cmd.pushConstants(rhi::ShaderStage::Compute, &pc, sizeof(pc));
     cmd.dispatch((pc.px*pc.py*pc.pz*pc.rpp+63)/64, 1, 1);
 }
-// Vk 兼容路径
-void NdgiPass::record(VkCommandBuffer vkCmd,NdgiResources& res,uint32_t fi,glm::vec3 o,glm::vec3 s){
-    auto& vkDev = static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
-    rhi::VkRHICommandBuffer rhiCmd(vkDev, vkCmd);
-    record(rhiCmd, res, fi, o, s);
-}
+
 // RHI 路径：NDGI 神经网络训练
 void NdgiPass::recordTraining(rhi::RHICommandBuffer& cmd,NdgiResources& res,uint32_t){ if(!m_rtSupported||!m_trainPipeline||!m_initSet)return;
     auto* cnt=static_cast<uint32_t*>(res.sampleCount().mapped()); uint32_t total=cnt?*cnt:0; if(!total)return;
@@ -108,9 +98,5 @@ void NdgiPass::recordTraining(rhi::RHICommandBuffer& cmd,NdgiResources& res,uint
     cmd.pushConstants(rhi::ShaderStage::Compute, &pc, 32);
     cmd.dispatch(1, 1, 1);
 }
-void NdgiPass::recordTraining(VkCommandBuffer vkCmd,NdgiResources& res,uint32_t fi){
-    auto& vkDev = static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
-    rhi::VkRHICommandBuffer rhiCmd(vkDev, vkCmd);
-    recordTraining(rhiCmd, res, fi);
-}
+
 } // namespace somegi

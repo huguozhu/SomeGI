@@ -13,7 +13,6 @@ public:
     void destroy();
     void bindResources(const VxgiResources& vxgi, const PrtResources& prt);
     void record(rhi::RHICommandBuffer& cmd, const glm::vec3& prtGridMin, float prtCellSize, uint32_t prtRes, const glm::vec3& vxgiGridMin, float vxgiCellSize, uint32_t vxgiRes, uint32_t numSamples=64);
-    void record(VkCommandBuffer cmd, const glm::vec3& pgm, float pcs, uint32_t pr, const glm::vec3& vgm, float vcs, uint32_t vr, uint32_t ns=64);
 private:
     rhi::RHIDevice* m_rhiDevice = nullptr;
     std::unique_ptr<rhi::RHIDescriptorSetLayout> m_setLayout;

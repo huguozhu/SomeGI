@@ -126,10 +126,5 @@ void SsrPass::record(rhi::RHICommandBuffer& cmd, const RenderTargets& rt) {
     cmd.dispatch(gx, gy, 1);
 }
 
-void SsrPass::record(VkCommandBuffer vkCmd, const RenderTargets& rt) {
-    auto& vkDev = static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
-    rhi::VkRHICommandBuffer rhiCmd(vkDev, vkCmd);
-    record(rhiCmd, rt);
-}
 
 } // namespace somegi

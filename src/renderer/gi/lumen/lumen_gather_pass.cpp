@@ -38,5 +38,5 @@ void LumenGatherPass::record(rhi::RHICommandBuffer& cmd,const LumenResources& re
     GatherPC pc{1.f/rt.extent.width,1.f/rt.extent.height,(float)LumenResources::kProbeTileSize,res.probeGridW(),res.probeGridH(),dm};
     cmd.pushConstants(rhi::ShaderStage::Compute,&pc,sizeof(pc)); cmd.dispatch((rt.extent.width+7)/8,(rt.extent.height+7)/8,1);
 }
-void LumenGatherPass::record(VkCommandBuffer vkCmd,const LumenResources& res,const RenderTargets& rt,uint32_t dm){ rhi::VkRHICommandBuffer rhiCmd(static_cast<rhi::VkRHIDevice&>(*m_rhiDevice),vkCmd); record(rhiCmd,res,rt,dm); }
+
 } // namespace somegi
