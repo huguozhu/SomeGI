@@ -1,5 +1,9 @@
 #include "screenshot.h"
 #include "device.h"
+#include "rhi/vulkan/vk_device.h"
+#include "rhi/vulkan/vk_texture.h"
+#include "rhi/vulkan/vk_buffer.h"
+#include "rhi/vulkan/vk_command.h"
 
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include <stb/stb_image_write.h>
@@ -34,20 +38,18 @@ void ScreenshotCapture::destroy() {
     copied = false;
 }
 
-void ScreenshotCapture::recordCopy(VkCommandBuffer cmd, VkImage srcImage, VkExtent2D extent) {
-    // 过渡布局：先确保 srcImage 在 TRANSFER_SRC layout
-    // （调用方需在 cb 外先转好，或在本函数内转——这里要求调用方预先保证）
-    VkBufferImageCopy region{};
-    region.bufferOffset = 0;
-    region.bufferRowLength = 0;   // 0 = 紧密打包
-    region.bufferImageHeight = 0; // 0 = 紧密打包
-    region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-    region.imageOffset = {0, 0, 0};
-    region.imageExtent = {extent.width, extent.height, 1};
+void ScreenshotCapture::recordCopy(rhi::RHICommandBuffer& rhiCmd, VkImage srcImage, VkExtent2D extent) {
+    auto& vkCmd = static_cast<rhi::VkRHICommandBuffer&>(rhiCmd);
+    auto& vkDev = vkCmd.device();
 
-    vkCmdCopyImageToBuffer(cmd,
-        srcImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-        m_staging.handle(), 1, &region);
+    auto srcTex = rhi::VkRHITexture::createNonOwning(vkDev, srcImage,
+        rhi::Format::B8G8R8A8_UNORM, extent.width, extent.height, 1);
+    auto dstBuf = rhi::VkRHIBuffer::createNonOwning(vkDev, m_staging.handle(), m_staging.size());
+
+    rhi::BufferTextureCopyRegion r;
+    r.extentWidth = extent.width;
+    r.extentHeight = extent.height;
+    rhiCmd.copyTextureToBuffer(*srcTex, *dstBuf, r);
 
     copied = true;
 }

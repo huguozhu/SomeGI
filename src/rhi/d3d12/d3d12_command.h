@@ -87,6 +87,8 @@ public:
     // 复制（高级）
     void copyBufferToTexture(const RHIBuffer&, const RHITexture&,
                               const BufferTextureCopyRegion&) override;
+    void copyTextureToBuffer(const RHITexture&, const RHIBuffer&,
+                              const BufferTextureCopyRegion&) override;
     void blitTexture(const RHITexture&, const RHITexture&,
                       const TextureBlitRegion&) override;
 

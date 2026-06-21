@@ -8,6 +8,7 @@
 
 namespace somegi {
 class Device;
+namespace rhi { class RHICommandBuffer; }
 
 class DebugDump {
 public:
@@ -15,9 +16,9 @@ public:
     void init(Device& d, uint32_t maxWidth, uint32_t maxHeight);
     void destroy();
 
-    // 在 command buffer 中录制 vkCmdCopyImageToBuffer。
+    // 通过 RHI 录制 copyTextureToBuffer
     // 调用方需确保 srcImage 已在 VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL
-    void recordCopy(VkCommandBuffer cmd, VkImage srcImage, VkFormat format,
+    void recordCopy(rhi::RHICommandBuffer& rhiCmd, VkImage srcImage, VkFormat format,
                     uint32_t width, uint32_t height);
 
     // 保存最近一次复制的纹理为 PNG（调用前需确保 cmd 已执行完毕）

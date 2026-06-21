@@ -1474,8 +1474,8 @@ void App::run() {
 
             // ldrTonemap 在 SDR 路径末尾处于 VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL
             // 直接用 oneShotSubmit 拷到 staging buffer
-            oneShotSubmit(*m_renderer.rhiDevice(), [&](VkCommandBuffer scmd) {
-                m_screenshot.recordCopy(scmd, m_renderer.rt().ldrTonemap.image(),
+            oneShotSubmitRHI(*m_renderer.rhiDevice(), [&](rhi::RHICommandBuffer& rhiCmd) {
+                m_screenshot.recordCopy(rhiCmd, m_renderer.rt().ldrTonemap.image(),
                                         m_renderer.rt().extent);
             });
 

@@ -1,6 +1,10 @@
 // core/debug_dump.cpp
 #include "debug_dump.h"
 #include "device.h"
+#include "rhi/vulkan/vk_device.h"
+#include "rhi/vulkan/vk_texture.h"
+#include "rhi/vulkan/vk_buffer.h"
+#include "rhi/vulkan/vk_command.h"
 
 #include <stb/stb_image_write.h>
 
@@ -26,19 +30,19 @@ void DebugDump::destroy() {
     m_copied = false;
 }
 
-void DebugDump::recordCopy(VkCommandBuffer cmd, VkImage srcImage, VkFormat format,
+void DebugDump::recordCopy(rhi::RHICommandBuffer& rhiCmd, VkImage srcImage, VkFormat format,
                             uint32_t width, uint32_t height) {
-    VkImageAspectFlags aspect = VK_IMAGE_ASPECT_COLOR_BIT;
-    if (format == VK_FORMAT_D32_SFLOAT || format == VK_FORMAT_D32_SFLOAT_S8_UINT)
-        aspect = VK_IMAGE_ASPECT_DEPTH_BIT;
+    auto& vkCmd = static_cast<rhi::VkRHICommandBuffer&>(rhiCmd);
+    auto& vkDev = vkCmd.device();
 
-    VkBufferImageCopy region{};
-    region.bufferOffset = 0;
-    region.imageSubresource = {aspect, 0, 0, 1};
-    region.imageExtent = {width, height, 1};
+    auto srcTex = rhi::VkRHITexture::createNonOwning(vkDev, srcImage,
+        rhi::toRhiFormat(format), width, height, 1);
+    auto dstBuf = rhi::VkRHIBuffer::createNonOwning(vkDev, m_staging.handle(), m_staging.size());
 
-    vkCmdCopyImageToBuffer(cmd, srcImage, VK_IMAGE_LAYOUT_GENERAL,
-                           m_staging.handle(), 1, &region);
+    rhi::BufferTextureCopyRegion r;
+    r.extentWidth = width;
+    r.extentHeight = height;
+    rhiCmd.copyTextureToBuffer(*srcTex, *dstBuf, r);
 
     m_imgExtent = {width, height};
     m_imgFormat = format;

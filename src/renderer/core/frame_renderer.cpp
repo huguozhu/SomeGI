@@ -1401,7 +1401,7 @@ void FrameRenderer::debugDumpGBuffer(Device& d, VkCommandPool pool) {
                 img, rhi::toRhiFormat(fmt), w, h);
             rhiCmd.textureBarrier(*tex, rhi::TextureLayout::ShaderReadOnly, rhi::TextureLayout::General);
 
-            dump.recordCopy(cmd, img, fmt, w, h);
+            dump.recordCopy(rhiCmd, img, fmt, w, h);
 
             // Transition back
             rhiCmd.textureBarrier(*tex, rhi::TextureLayout::General, rhi::TextureLayout::ShaderReadOnly);

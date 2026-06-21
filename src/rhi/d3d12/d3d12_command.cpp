@@ -322,6 +322,11 @@ void D3D12RHICommandBuffer::copyBufferToTexture(const RHIBuffer& src, const RHIT
                                    &srcLoc, nullptr);
 }
 
+void D3D12RHICommandBuffer::copyTextureToBuffer(const RHITexture&, const RHIBuffer&,
+                                                  const BufferTextureCopyRegion&) {
+    throw std::runtime_error("D3D12: copyTextureToBuffer not implemented");
+}
+
 void D3D12RHICommandBuffer::blitTexture(const RHITexture& src, const RHITexture& dst,
                                           const TextureBlitRegion& region) {
     // D3D12 没有直接的 blit API。使用 CopyTextureRegion 进行整个子资源的复制。

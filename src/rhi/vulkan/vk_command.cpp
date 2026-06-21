@@ -207,6 +207,32 @@ void VkRHICommandBuffer::copyBufferToTexture(const RHIBuffer& src, const RHIText
     vkCmdCopyBufferToImage2(m_cmd, &info);
 }
 
+void VkRHICommandBuffer::copyTextureToBuffer(const RHITexture& src, const RHIBuffer& dst,
+                                               const BufferTextureCopyRegion& region) {
+    auto& vkSrc = static_cast<const VkRHITexture&>(src);
+    auto& vkDst = static_cast<const VkRHIBuffer&>(dst);
+
+    VkBufferImageCopy2 copy{VK_STRUCTURE_TYPE_BUFFER_IMAGE_COPY_2};
+    copy.bufferOffset = region.bufferOffset;
+    copy.bufferRowLength = region.bufferRowLength;
+    copy.bufferImageHeight = region.bufferImageHeight;
+    copy.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    copy.imageSubresource.mipLevel = region.texMipLevel;
+    copy.imageSubresource.baseArrayLayer = region.texArrayLayer;
+    copy.imageSubresource.layerCount = 1;
+    copy.imageOffset = {region.texOffsetX, region.texOffsetY, region.texOffsetZ};
+    copy.imageExtent = {region.extentWidth, region.extentHeight, region.extentDepth};
+
+    VkCopyImageToBufferInfo2 info{VK_STRUCTURE_TYPE_COPY_IMAGE_TO_BUFFER_INFO_2};
+    info.srcImage = (VkImage)(uintptr_t)vkSrc.nativeHandle();
+    info.srcImageLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    info.dstBuffer = (VkBuffer)(uintptr_t)vkDst.nativeHandle();
+    info.regionCount = 1;
+    info.pRegions = &copy;
+
+    vkCmdCopyImageToBuffer2(m_cmd, &info);
+}
+
 void VkRHICommandBuffer::blitTexture(const RHITexture& src, const RHITexture& dst,
                                        const TextureBlitRegion& region) {
     auto& vkSrc = static_cast<const VkRHITexture&>(src);

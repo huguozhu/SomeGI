@@ -102,6 +102,9 @@ public:
     // Buffer → Texture 复制（上传纹理数据）
     virtual void copyBufferToTexture(const RHIBuffer& src, const RHITexture& dst,
                                       const BufferTextureCopyRegion& region) = 0;
+    // Texture → Buffer 复制（读回纹理数据，如截图）
+    virtual void copyTextureToBuffer(const RHITexture& src, const RHIBuffer& dst,
+                                      const BufferTextureCopyRegion& region) = 0;
     // Texture → Texture Blit（mip 生成 / 缩放 / 格式转换）
     virtual void blitTexture(const RHITexture& src, const RHITexture& dst,
                               const TextureBlitRegion& region) = 0;

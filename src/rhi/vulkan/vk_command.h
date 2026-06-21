@@ -74,6 +74,8 @@ public:
     // 复制（高级）
     void copyBufferToTexture(const RHIBuffer& src, const RHITexture& dst,
                               const BufferTextureCopyRegion& region) override;
+    void copyTextureToBuffer(const RHITexture& src, const RHIBuffer& dst,
+                              const BufferTextureCopyRegion& region) override;
     void blitTexture(const RHITexture& src, const RHITexture& dst,
                       const TextureBlitRegion& region) override;
 
@@ -97,6 +99,7 @@ public:
 
     void* nativeHandle() const override { return (void*)m_cmd; }
     VkCommandBuffer vkCmd() const { return m_cmd; }
+    VkRHIDevice& device() const { return m_device; }
 
 private:
     VkRHIDevice& m_device;
