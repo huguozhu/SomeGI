@@ -98,17 +98,13 @@ int main() {
             *static_cast<VkFence*>(frame.inFlightFence));
         rhi::SubmitDesc sd;
         sd.commandBuffer = &cmd;
-        sd.waitSemaphore = static_cast<rhi::RHISemaphore*>(frame.imageAvailable);
-        sd.signalSemaphore = static_cast<rhi::RHISemaphore*>(frame.renderFinished);
+        sd.waitSemaphore = frame.imageAvailable.get();
+        sd.signalSemaphore = frame.renderFinished.get();
         sd.signalFence = sigFence.get();
         rhiDevice.submit(sd);
         pSwapchain->present(frame);
 
         sigFence->wait();
-
-        delete static_cast<rhi::RHISemaphore*>(frame.imageAvailable);
-        delete static_cast<rhi::RHISemaphore*>(frame.renderFinished);
-
         ++frameIdx;
     }
 

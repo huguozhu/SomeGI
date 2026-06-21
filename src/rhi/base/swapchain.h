@@ -1,6 +1,7 @@
 // rhi/swapchain.h
 #pragma once
 #include "common.h"
+#include "fence.h"   // RHISemaphore (needed for unique_ptr destructor)
 #include <memory>
 
 namespace somegi {
@@ -15,8 +16,8 @@ struct SwapchainFrame {
     uint32_t imageIndex = 0;  // swapchain image index
     std::unique_ptr<RHITexture> texture;
     std::unique_ptr<RHITextureView> view;
-    void* imageAvailable = nullptr;   // VkSemaphore：submit 时 wait
-    void* renderFinished = nullptr;   // VkSemaphore：submit 时 signal
+    std::unique_ptr<RHISemaphore> imageAvailable;   // submit 时 wait（non-owning）
+    std::unique_ptr<RHISemaphore> renderFinished;   // submit 时 signal（non-owning）
     void* inFlightFence = nullptr;    // VkFence：GPU 完成后 CPU 同步
     bool needsResize = false;
     uint32_t width = 0, height = 0;
