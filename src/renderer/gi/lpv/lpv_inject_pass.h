@@ -19,6 +19,7 @@ public:
                        const LpvGrid& grid, const Image& gv);
     void record(rhi::RHICommandBuffer& cmd, uint32_t gridRes,
                 const glm::vec3& gridMin, float cellSize);
+    // 兼容旧调用方（app_fg / frame_renderer），桥接到 RHI 路径
     void record(VkCommandBuffer cmd, uint32_t gridRes,
                 const glm::vec3& gridMin, float cellSize);
     uint32_t rsmSize() const { return m_rsmSize; }

@@ -1,5 +1,5 @@
 // LpvInjectPass RHI — 7 bindings: 3 RSM + 3 LPV + GV storage。
-// barrier/clear 通过 nativeHandle 桥接（操作 VkImage，非 RHI 管理）。
+// barrier/clear 已迁移到 RHI textureBarrier + clearColor；VkCommandBuffer 重载仅作桥接。
 
 #include "renderer/gi/lpv/lpv_inject_pass.h"
 #include "core/device.h"
@@ -8,9 +8,9 @@
 #include "rhi/base/pipeline_state.h"
 #include "rhi/base/command_buffer.h"
 #include "rhi/vulkan/vk_device.h"
+#include "rhi/vulkan/vk_command.h"
 #include "rhi/vulkan/vk_shader.h"
 #include "rhi/vulkan/vk_texture.h"
-#include "rhi/vulkan/vk_command.h"
 #include "core/shader.h"
 #include <array>
 
@@ -50,25 +50,27 @@ void LpvInjectPass::bindResources(VkImageView rsmPosView, VkImageView rsmNView, 
 
 void LpvInjectPass::record(rhi::RHICommandBuffer& cmd, uint32_t gr, const glm::vec3& gMin, float cs) {
     if(!m_pipeline||!m_set)return;
-    VkCommandBuffer vkCmd=(VkCommandBuffer)(uintptr_t)cmd.nativeHandle();
-    auto barr=[&](VkImage img,VkImageLayout oldL,VkImageLayout newL,VkPipelineStageFlags2 ss,VkAccessFlags2 sa,VkPipelineStageFlags2 ds,VkAccessFlags2 da){
-        VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2}; b.srcStageMask=ss; b.srcAccessMask=sa; b.dstStageMask=ds; b.dstAccessMask=da; b.oldLayout=oldL; b.newLayout=newL; b.image=img; b.subresourceRange={VK_IMAGE_ASPECT_COLOR_BIT,0,1,0,1};
-        VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO}; di.imageMemoryBarrierCount=1; di.pImageMemoryBarriers=&b; vkCmdPipelineBarrier2(vkCmd,&di);
-    };
-    VkImage imgs[4]={m_lpvR->image(),m_lpvG->image(),m_lpvB->image(),m_gv->image()};
-    for(auto img:imgs){
-        barr(img,VK_IMAGE_LAYOUT_UNDEFINED,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT,0,VK_PIPELINE_STAGE_2_CLEAR_BIT,VK_ACCESS_2_TRANSFER_WRITE_BIT);
-        VkClearColorValue zero{}; VkImageSubresourceRange r{VK_IMAGE_ASPECT_COLOR_BIT,0,1,0,1};
-        vkCmdClearColorImage(vkCmd,img,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,&zero,1,&r);
-        barr(img,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,VK_IMAGE_LAYOUT_GENERAL,VK_PIPELINE_STAGE_2_CLEAR_BIT,VK_ACCESS_2_TRANSFER_WRITE_BIT,VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
+    auto& vkD = static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
+    rhi::Format fmt = rhi::toRhiFormat(m_lpvR->format());
+    uint32_t res = m_lpvR->extent().width;
+
+    const Image* imgs[4] = {m_lpvR, m_lpvG, m_lpvB, m_gv};
+    for(auto img : imgs) {
+        auto tex = rhi::VkRHITexture::createNonOwning(vkD, img->image(), fmt, res, res, 1);
+        cmd.textureBarrier(*tex, rhi::TextureLayout::Undefined, rhi::TextureLayout::TransferDst);
+        cmd.clearColor(*tex, 0.0f, 0.0f, 0.0f, 0.0f);
+        cmd.textureBarrier(*tex, rhi::TextureLayout::TransferDst, rhi::TextureLayout::General);
     }
+
     cmd.bindPipelineState(*m_pipeline); cmd.bindDescriptorSet(0,*m_set);
     InjectPC pc{(uint32_t)m_rsmSize,(uint32_t)m_rsmSize,gr,0,gMin.x,gMin.y,gMin.z,cs};
     cmd.pushConstants(rhi::ShaderStage::Compute,&pc,sizeof(pc));
     cmd.dispatch((m_rsmSize+7)/8,(m_rsmSize+7)/8,1);
 }
-
+// 兼容旧调用方桥接
 void LpvInjectPass::record(VkCommandBuffer vkCmd, uint32_t gr, const glm::vec3& gMin, float cs) {
-    rhi::VkRHICommandBuffer rhiCmd(static_cast<rhi::VkRHIDevice&>(*m_rhiDevice),vkCmd); record(rhiCmd,gr,gMin,cs);
+    auto& vkD = static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
+    rhi::VkRHICommandBuffer rhiCmd(vkD, vkCmd);
+    record(rhiCmd, gr, gMin, cs);
 }
 } // namespace somegi
