@@ -1466,13 +1466,8 @@ void App::run() {
         // ---- Finalize + submit main window (via RHI context) ----
         m_renderer.timestampValid(m_frameCtx.frameInFlight) = true;
         rhiCtx.endFrame(frame.frameInFlight,
-            frame.sync->imageAvailable, frame.renderFinished);
-        // 将 swapchain fence 与 context 内部 fence 同步：
-        // acquireNextFrame 依赖此 fence 确保上一帧 GPU 工作完成
-        {
-            VkSubmitInfo2 si{VK_STRUCTURE_TYPE_SUBMIT_INFO_2};
-            VK_CHECK(vkQueueSubmit2(m_device->graphicsQueue(), 1, &si, frame.sync->inFlight));
-        }
+            frame.sync->imageAvailable, frame.renderFinished,
+            frame.sync->inFlight);  // externalFence: 同步 swapchain acquireNextFrame
 
         // ---- Screenshot capture (post-submit, pre-present) ----
         if (m_screenshot.shouldCapture() && !m_swap->hdrEnabled()) {

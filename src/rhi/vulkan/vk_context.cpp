@@ -132,7 +132,8 @@ VkCommandBuffer VkContext::vkCommandBuffer(uint32_t frameIndex) const {
     return m_frames[frameIndex % m_framesInFlight].cmd;
 }
 
-void VkContext::endFrame(uint32_t frameIndex, VkSemaphore waitSem, VkSemaphore signalSem) {
+void VkContext::endFrame(uint32_t frameIndex, VkSemaphore waitSem, VkSemaphore signalSem,
+                          VkFence externalFence) {
     auto& fr = m_frames[frameIndex % m_framesInFlight];
 
     vkEndCommandBuffer(fr.cmd);
@@ -169,6 +170,13 @@ void VkContext::endFrame(uint32_t frameIndex, VkSemaphore waitSem, VkSemaphore s
     si.pSignalSemaphoreInfos = pSignal;
 
     VK_CHECK(vkQueueSubmit2(m_device.vkQueue(), 1, &si, fr.fence));
+
+    // 额外信号外部 fence（通常为 swapchain inFlight）
+    // 空 submit 确保在内部 cmd buffer 完成后才 signal
+    if (externalFence != VK_NULL_HANDLE) {
+        VkSubmitInfo2 extSi{VK_STRUCTURE_TYPE_SUBMIT_INFO_2};
+        VK_CHECK(vkQueueSubmit2(m_device.vkQueue(), 1, &extSi, externalFence));
+    }
 }
 
 } // namespace rhi

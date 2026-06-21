@@ -59,7 +59,10 @@ public:
     VkCommandPool vkCommandPool() const { return m_pool; }
     VkRHIDevice& vkDevice() { return m_device; }
     // 直接使用 VkSemaphore 的 endFrame 重载（swapchain 尚未迁移到 RHI）
-    void endFrame(uint32_t frameIndex, VkSemaphore waitSem, VkSemaphore signalSem);
+    // externalFence: 额外信号此 fence（通常为 swapchain inFlight），
+    // 在内部 fence 之后通过空 submit 发出，保证 acquireNextFrame 同步
+    void endFrame(uint32_t frameIndex, VkSemaphore waitSem, VkSemaphore signalSem,
+                  VkFence externalFence = VK_NULL_HANDLE);
 
 private:
     VkRHIDevice& m_device;
