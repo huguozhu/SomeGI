@@ -271,32 +271,28 @@ void IblBaker::bake(Device& d, VkCommandPool pool, const EnvCpu& env, IblResourc
 
         int32_t s = (int32_t)kEnvCubeSize;
         for (uint32_t lvl = 1; lvl < kEnvCubeMips; ++lvl) {
-            // src mip lvl-1：第一次循环时来自 compute 写出（GENERAL），后续
-            // 循环来自上一轮 blit 的 dst（TRANSFER_DST_OPTIMAL）。所以 src
-            // 旧 layout / stage / access 要按 lvl 分支选。
-            VkImageLayout srcOldLayout = (lvl == 1)
-                ? VK_IMAGE_LAYOUT_GENERAL
-                : VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-            VkPipelineStageFlags2 srcOldStage = (lvl == 1)
-                ? VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT
-                : VK_PIPELINE_STAGE_2_BLIT_BIT;
-            VkAccessFlags2 srcOldAccess = (lvl == 1)
-                ? VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT
-                : VK_ACCESS_2_TRANSFER_WRITE_BIT;
+            // src mip lvl-1 旧 layout 按 lvl 分支：mip 0 来自 compute（GENERAL），
+            // 后续 mip 来自上一轮 blit dst（TRANSFER_DST）。
+            rhi::TextureLayout srcOldLayout = (lvl == 1)
+                ? rhi::TextureLayout::General
+                : rhi::TextureLayout::TransferDst;
 
-            std::vector<VkImageMemoryBarrier2> bs;
-            bs.push_back(imgBarrier(out.envCube.image(),
-                srcOldLayout, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                srcOldStage, srcOldAccess,
-                VK_PIPELINE_STAGE_2_BLIT_BIT, VK_ACCESS_2_TRANSFER_READ_BIT,
-                lvl - 1, 1, 0, 6));
-            // dst mip lvl: GENERAL → TRANSFER_DST
-            bs.push_back(imgBarrier(out.envCube.image(),
-                VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
-                VK_PIPELINE_STAGE_2_BLIT_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
-                lvl, 1, 0, 6));
-            pipelineBarrier(cmd, bs);
+            // src mip lvl-1: oldLayout -> TransferSrc
+            {
+                rhi::RHICommandBuffer::TextureBarrierRange br;
+                br.baseMip = lvl - 1;
+                br.mipCount = 1;
+                br.layerCount = 6;
+                rhiCmd.textureBarrier(*envCubeTex, srcOldLayout, rhi::TextureLayout::TransferSrc, br);
+            }
+            // dst mip lvl: General -> TransferDst
+            {
+                rhi::RHICommandBuffer::TextureBarrierRange br;
+                br.baseMip = lvl;
+                br.mipCount = 1;
+                br.layerCount = 6;
+                rhiCmd.textureBarrier(*envCubeTex, rhi::TextureLayout::General, rhi::TextureLayout::TransferDst, br);
+            }
 
             uint32_t dstSide = std::max(s / 2, 1);
             {
@@ -319,18 +315,22 @@ void IblBaker::bake(Device& d, VkCommandPool pool, const EnvCpu& env, IblResourc
         //   - mip 0..N-2：之前是 TRANSFER_SRC（被前一轮当 src 用过）
         //   - mip N-1   ：之前是 TRANSFER_DST（最后一轮的 dst）
         // 后续 prefilter 阶段把 envCube 整体当 SampledCube 取样。
-        std::vector<VkImageMemoryBarrier2> bs;
-        bs.push_back(imgBarrier(out.envCube.image(),
-            VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-            VK_PIPELINE_STAGE_2_BLIT_BIT, VK_ACCESS_2_TRANSFER_READ_BIT,
-            VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
-            0, kEnvCubeMips - 1, 0, 6));
-        bs.push_back(imgBarrier(out.envCube.image(),
-            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-            VK_PIPELINE_STAGE_2_BLIT_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
-            VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
-            kEnvCubeMips - 1, 1, 0, 6));
-        pipelineBarrier(cmd, bs);
+        // mip 0..N-2: TransferSrc -> ShaderReadOnly
+        {
+            rhi::RHICommandBuffer::TextureBarrierRange br;
+            br.baseMip = 0;
+            br.mipCount = kEnvCubeMips - 1;
+            br.layerCount = 6;
+            rhiCmd.textureBarrier(*envCubeTex, rhi::TextureLayout::TransferSrc, rhi::TextureLayout::ShaderReadOnly, br);
+        }
+        // mip N-1: TransferDst -> ShaderReadOnly
+        {
+            rhi::RHICommandBuffer::TextureBarrierRange br;
+            br.baseMip = kEnvCubeMips - 1;
+            br.mipCount = 1;
+            br.layerCount = 6;
+            rhiCmd.textureBarrier(*envCubeTex, rhi::TextureLayout::TransferDst, rhi::TextureLayout::ShaderReadOnly, br);
+        }
     });
 
     // ===== 阶段 3：diffuse 辐照度卷积 =====

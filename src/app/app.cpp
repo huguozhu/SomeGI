@@ -735,22 +735,12 @@ void App::bakePrt() {
 
         // 4. mipmap 结束后状态：mip 0..mipLevels-2 已是 SHADER_READ_ONLY
         //    （mipmap 内部 barrier 转过），mip mipLevels-1 还在 GENERAL。
-        //    只把最后一级转过去即可。注：RHI textureBarrier 不支持指定 mip 范围，
-        //    保留原生 vkCmdPipelineBarrier2 以精确定位末级 mip。
+        //    只把最后一级转过去即可。
         {
-            VkImageMemoryBarrier2 mb{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
-            mb.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-            mb.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-            mb.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-            mb.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
-            mb.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
-            mb.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-            mb.image = vxgiImg.image();
-            mb.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT,
-                                   m_renderer.vxgi().mipLevels() - 1, 1, 0, 1};
-            VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-            di.imageMemoryBarrierCount = 1; di.pImageMemoryBarriers = &mb;
-            vkCmdPipelineBarrier2(cmd, &di);
+            rhi::RHICommandBuffer::TextureBarrierRange br;
+            br.baseMip = m_renderer.vxgi().mipLevels() - 1;
+            br.mipCount = 1;
+            rhiCmd.textureBarrier(*vxgiTex, rhi::TextureLayout::General, rhi::TextureLayout::ShaderReadOnly, br);
         }
 
         // 5. prtTransfer A/B/C/D/E: UNDEFINED → GENERAL（bake 写 SH16 五张 atlas）

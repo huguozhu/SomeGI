@@ -78,6 +78,7 @@ public:
                       const TextureBlitRegion& region) override;
 
     // Barrier
+    using RHICommandBuffer::textureBarrier;  // 暴露 3 参数版本
     void textureBarrier(const RHITexture& tex, TextureLayout oldLayout, TextureLayout newLayout,
                          const TextureBarrierRange& range) override;
     void bufferBarrier(const RHIBuffer& buf,
