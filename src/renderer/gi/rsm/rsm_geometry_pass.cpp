@@ -1,8 +1,7 @@
 // RsmGeometryPass RHI — Graphics MRT (3 color + depth) with vertex input.
-// barrier/transition 通过 nativeHandle 桥接。
+// barrier 通过 cmd.textureBarrier() 替代原生 vkCmdPipelineBarrier2。
 
 #include "renderer/gi/rsm/rsm_geometry_pass.h"
-#include "core/device.h"
 #include "rhi/base/device.h"
 #include "rhi/base/descriptor.h"
 #include "rhi/base/pipeline_state.h"
@@ -27,42 +26,48 @@ struct PC { glm::mat4 model; int materialIndex; int p0,p1,p2; };
 static_assert(sizeof(PC)==80);
 }
 
-// 过渡函数（仍用原生 Vk —— RHI 不管理子资源 barrier）
-static void transition(VkCommandBuffer cmd, VkImage img, VkImageAspectFlags aspect,
-                       VkImageLayout oldL, VkImageLayout newL,
-                       VkPipelineStageFlags2 ss, VkAccessFlags2 sa,
-                       VkPipelineStageFlags2 ds, VkAccessFlags2 da) {
-    VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
-    b.srcStageMask=ss; b.srcAccessMask=sa; b.dstStageMask=ds; b.dstAccessMask=da;
-    b.oldLayout=oldL; b.newLayout=newL; b.image=img;
-    b.subresourceRange={aspect,0,1,0,1};
-    VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-    di.imageMemoryBarrierCount=1; di.pImageMemoryBarriers=&b;
-    vkCmdPipelineBarrier2(cmd,&di);
-}
+void RsmGeometryPass::init(rhi::RHIDevice& d, uint32_t maxTextures) {
+    m_rhiDevice=&d; m_maxTextures=maxTextures;
 
-void RsmGeometryPass::init(Device& d, rhi::RHIDevice& rhiDevice, uint32_t maxTextures) {
-    m_device=&d; m_rhiDevice=&rhiDevice; m_maxTextures=maxTextures;
-    auto mkImg=[&](VkFormat fmt, Image& img, VkImageUsageFlags usage, VkImageAspectFlags aspect=0){
-        ImageDesc id; id.format=fmt; id.extent={kRsmSize,kRsmSize,1}; id.usage=usage;
-        if(aspect)id.aspect=aspect; img=Image(d,id);
+    // ── 创建渲染目标纹理（通过 RHI） ──
+    auto mkImg=[&](rhi::Format fmt,
+                    std::unique_ptr<rhi::RHITexture>& tex,
+                    std::unique_ptr<rhi::RHITextureView>& view,
+                    rhi::TextureUsage usage){
+        rhi::TextureDesc td{};
+        td.format=fmt; td.width=kRsmSize; td.height=kRsmSize; td.depth=1;
+        td.usage=usage;
+        tex=d.createTexture(td);
+        view=d.createTextureView(*tex, {});
     };
-    mkImg(VK_FORMAT_R16G16B16A16_SFLOAT,m_position,VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT|VK_IMAGE_USAGE_SAMPLED_BIT);
-    mkImg(VK_FORMAT_R16G16B16A16_SFLOAT,m_normal,VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT|VK_IMAGE_USAGE_SAMPLED_BIT);
-    mkImg(VK_FORMAT_R16G16B16A16_SFLOAT,m_flux,VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT|VK_IMAGE_USAGE_SAMPLED_BIT);
-    mkImg(VK_FORMAT_D32_SFLOAT,m_depth,VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT|VK_IMAGE_USAGE_SAMPLED_BIT,VK_IMAGE_ASPECT_DEPTH_BIT);
-    m_rsmFrameUbo=Buffer(d,sizeof(RsmFrameUbo),VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT|VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    auto colorUsage=static_cast<rhi::TextureUsage>(
+        static_cast<uint32_t>(rhi::TextureUsage::ColorAttachment) |
+        static_cast<uint32_t>(rhi::TextureUsage::Sampled));
+    auto depthUsage=static_cast<rhi::TextureUsage>(
+        static_cast<uint32_t>(rhi::TextureUsage::DepthStencil) |
+        static_cast<uint32_t>(rhi::TextureUsage::Sampled));
+    mkImg(rhi::Format::R16G16B16A16_SFLOAT, m_positionTex, m_positionView, colorUsage);
+    mkImg(rhi::Format::R16G16B16A16_SFLOAT, m_normalTex,   m_normalView,   colorUsage);
+    mkImg(rhi::Format::R16G16B16A16_SFLOAT, m_fluxTex,     m_fluxView,     colorUsage);
+    mkImg(rhi::Format::D32_SFLOAT,           m_depthTex,    m_depthView,    depthUsage);
 
+    // ── 帧 UBO（RHI buffer） ──
+    rhi::BufferDesc ubd{};
+    ubd.size=sizeof(RsmFrameUbo);
+    ubd.usage=rhi::BufferUsage::Uniform;
+    ubd.memory=rhi::MemoryType::HostVisible;
+    m_rsmFrameUbo=d.createBuffer(ubd);
+
+    // ── Descriptor Set Layout ──
     rhi::DescSetLayoutDesc ld; ld.debugName="RsmGeom";
     ld.bindings={{0,rhi::DescriptorType::UniformBuffer,1,rhi::ShaderStage::Vertex|rhi::ShaderStage::Fragment},{1,rhi::DescriptorType::StorageBuffer,1,rhi::ShaderStage::Fragment},{2,rhi::DescriptorType::Sampler,1,rhi::ShaderStage::Fragment},{3,rhi::DescriptorType::SampledImage,maxTextures,rhi::ShaderStage::Fragment,true},{10,rhi::DescriptorType::StorageBuffer,1,rhi::ShaderStage::Vertex}};
-    m_setLayout=rhiDevice.createDescriptorSetLayout(ld); m_set=rhiDevice.createDescriptorSet(*m_setLayout);
+    m_setLayout=d.createDescriptorSetLayout(ld); m_set=d.createDescriptorSet(*m_setLayout);
 
-    // 初始 UBO 绑定(binding 0)
-    auto ubo=rhi::VkRHIBuffer::createNonOwning(static_cast<rhi::VkRHIDevice&>(rhiDevice),m_rsmFrameUbo.handle(),sizeof(RsmFrameUbo));
-    m_set->write({{0,rhi::DescriptorType::UniformBuffer,nullptr,ubo.get()}});
+    // 初始 UBO 绑定（binding 0）
+    m_set->write({{0, rhi::DescriptorType::UniformBuffer, nullptr, m_rsmFrameUbo.get()}});
 
-    // Graphics PSO
-    auto& vkD=static_cast<rhi::VkRHIDevice&>(rhiDevice);
+    // ── Graphics PSO ──
+    auto& vkD=static_cast<rhi::VkRHIDevice&>(d);
     auto spv=shaderDir()/"gi"/"rsm"/"rsm_geometry.spv";
     rhi::ShaderDesc vsd,fsd; vsd.stage=rhi::ShaderStage::Vertex; vsd.entryPoint="vs_main"; fsd.stage=rhi::ShaderStage::Fragment; fsd.entryPoint="ps_main";
     auto vs=rhi::VkRHIShader::createFromFile(vkD,vsd,spv); auto fs=rhi::VkRHIShader::createFromFile(vkD,fsd,spv);
@@ -77,13 +82,15 @@ void RsmGeometryPass::init(Device& d, rhi::RHIDevice& rhiDevice, uint32_t maxTex
     pd.renderTargets.colorFormats={rhi::Format::R16G16B16A16_SFLOAT,rhi::Format::R16G16B16A16_SFLOAT,rhi::Format::R16G16B16A16_SFLOAT};
     pd.renderTargets.depthFormat=rhi::Format::D32_SFLOAT; pd.renderTargets.sampleCount=1;
     pd.descriptorSetLayouts={m_setLayout.get()};
-    m_pipeline=rhiDevice.createGraphicsPSO(pd);
+    m_pipeline=d.createGraphicsPSO(pd);
 }
 
 void RsmGeometryPass::destroy() {
     m_set.reset(); m_pipeline.reset(); m_setLayout.reset();
-    m_rsmFrameUbo.reset(); m_position.reset(); m_normal.reset(); m_flux.reset(); m_depth.reset();
-    m_device=nullptr; m_rhiDevice=nullptr;
+    m_rsmFrameUbo.reset();
+    m_positionView.reset(); m_normalView.reset(); m_fluxView.reset(); m_depthView.reset();
+    m_positionTex.reset(); m_normalTex.reset(); m_fluxTex.reset(); m_depthTex.reset();
+    m_rhiDevice=nullptr;
 }
 
 void RsmGeometryPass::bindScene(const SceneGpu& gpu, uint32_t tc) {
@@ -117,26 +124,28 @@ void RsmGeometryPass::updateLight(const glm::vec3& aabbMin, const glm::vec3& aab
     float pad=diag*0.05f; mn-=glm::vec3(pad); mx+=glm::vec3(pad);
     glm::mat4 proj=glm::ortho(mn.x,mx.x,mn.y,mx.y,-mx.z,-mn.z); proj[1][1]*=-1.f;
     RsmFrameUbo u{proj*view,view,glm::vec4(ld,0),glm::vec4(sunColor,sunIntensity)};
-    std::memcpy(m_rsmFrameUbo.mapped(),&u,sizeof(u));
+    void* ptr = m_rsmFrameUbo->map();
+    std::memcpy(ptr, &u, sizeof(u));
+    m_rsmFrameUbo->unmap();
 }
 
 void RsmGeometryPass::record(rhi::RHICommandBuffer& cmd, const rhi::RHIBuffer& indirectBuf, uint32_t drawCount, const SceneGpu& gpu) {
     if(!drawCount||!m_pipeline)return;
-    VkCommandBuffer vkCmd=(VkCommandBuffer)(uintptr_t)cmd.nativeHandle();
-    auto t=[&](VkImage img,VkImageAspectFlags a,VkImageLayout ol,VkImageLayout nl,VkPipelineStageFlags2 ss,VkAccessFlags2 sa,VkPipelineStageFlags2 ds,VkAccessFlags2 da){ transition(vkCmd,img,a,ol,nl,ss,sa,ds,da); };
-    t(m_position.image(),VK_IMAGE_ASPECT_COLOR_BIT,VK_IMAGE_LAYOUT_UNDEFINED,VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT,0,VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
-    t(m_normal.image(),VK_IMAGE_ASPECT_COLOR_BIT,VK_IMAGE_LAYOUT_UNDEFINED,VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT,0,VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
-    t(m_flux.image(),VK_IMAGE_ASPECT_COLOR_BIT,VK_IMAGE_LAYOUT_UNDEFINED,VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT,0,VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
-    t(m_depth.image(),VK_IMAGE_ASPECT_DEPTH_BIT,VK_IMAGE_LAYOUT_UNDEFINED,VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT,0,VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT,VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT);
-
     auto& vkD=static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
-    auto cv0=rhi::VkRHITextureView::createNonOwning(vkD,m_position.view());
-    auto cv1=rhi::VkRHITextureView::createNonOwning(vkD,m_normal.view());
-    auto cv2=rhi::VkRHITextureView::createNonOwning(vkD,m_flux.view());
-    auto dv=rhi::VkRHITextureView::createNonOwning(vkD,m_depth.view());
+
+    // Pre-render barriers: Undefined → Color/Depth attachment
+    cmd.textureBarrier(*m_positionTex, rhi::TextureLayout::Undefined, rhi::TextureLayout::ColorAttachment);
+    cmd.textureBarrier(*m_normalTex,   rhi::TextureLayout::Undefined, rhi::TextureLayout::ColorAttachment);
+    cmd.textureBarrier(*m_fluxTex,     rhi::TextureLayout::Undefined, rhi::TextureLayout::ColorAttachment);
+    cmd.textureBarrier(*m_depthTex,    rhi::TextureLayout::Undefined, rhi::TextureLayout::DepthAttachment);
+
+    // ── Begin rendering（用成员 RHI view） ──
     rhi::RenderingAttachmentInfo cAttach[3]{};
-    for(int i=0;i<3;++i){cAttach[i].view=(i==0?cv0:i==1?cv1:cv2).get();cAttach[i].loadOp=rhi::AttachmentLoadOp::Clear;}
-    rhi::RenderingAttachmentInfo dAttach{}; dAttach.view=dv.get(); dAttach.loadOp=rhi::AttachmentLoadOp::Clear; dAttach.clearDepth=1.f;
+    cAttach[0].view=m_positionView.get(); cAttach[0].loadOp=rhi::AttachmentLoadOp::Clear;
+    cAttach[1].view=m_normalView.get();   cAttach[1].loadOp=rhi::AttachmentLoadOp::Clear;
+    cAttach[2].view=m_fluxView.get();     cAttach[2].loadOp=rhi::AttachmentLoadOp::Clear;
+    rhi::RenderingAttachmentInfo dAttach{};
+    dAttach.view=m_depthView.get(); dAttach.loadOp=rhi::AttachmentLoadOp::Clear; dAttach.clearDepth=1.f;
     cmd.beginRendering(cAttach,3,&dAttach,kRsmSize,kRsmSize);
     cmd.setViewport(0,0,(float)kRsmSize,(float)kRsmSize);
     cmd.setScissor(0,0,kRsmSize,kRsmSize);
@@ -147,10 +156,11 @@ void RsmGeometryPass::record(rhi::RHICommandBuffer& cmd, const rhi::RHIBuffer& i
     cmd.drawIndexedIndirectCount(indirectBuf,0,indirectBuf,0,drawCount,sizeof(VkDrawIndexedIndirectCommand));
     cmd.endRendering();
 
-    t(m_position.image(),VK_IMAGE_ASPECT_COLOR_BIT,VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
-    t(m_normal.image(),VK_IMAGE_ASPECT_COLOR_BIT,VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
-    t(m_flux.image(),VK_IMAGE_ASPECT_COLOR_BIT,VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
-    t(m_depth.image(),VK_IMAGE_ASPECT_DEPTH_BIT,VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+    // Post-render barriers: Color/Depth attachment → ShaderReadOnly
+    cmd.textureBarrier(*m_positionTex, rhi::TextureLayout::ColorAttachment, rhi::TextureLayout::ShaderReadOnly);
+    cmd.textureBarrier(*m_normalTex,   rhi::TextureLayout::ColorAttachment, rhi::TextureLayout::ShaderReadOnly);
+    cmd.textureBarrier(*m_fluxTex,     rhi::TextureLayout::ColorAttachment, rhi::TextureLayout::ShaderReadOnly);
+    cmd.textureBarrier(*m_depthTex,    rhi::TextureLayout::DepthAttachment, rhi::TextureLayout::ShaderReadOnly);
 }
 
 } // namespace somegi
