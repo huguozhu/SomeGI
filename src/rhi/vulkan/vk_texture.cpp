@@ -32,6 +32,7 @@ Format toRhiFormat(VkFormat vkFmt) {
         case VK_FORMAT_R32G32_SFLOAT:       return Format::R32G32_SFLOAT;
         case VK_FORMAT_D32_SFLOAT:          return Format::D32_SFLOAT;
         case VK_FORMAT_B8G8R8A8_UNORM:      return Format::B8G8R8A8_UNORM;
+        case VK_FORMAT_B8G8R8A8_SRGB:       return Format::B8G8R8A8_SRGB;
         default: return Format::R8G8B8A8_UNORM;
     }
 }

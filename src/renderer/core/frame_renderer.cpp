@@ -1387,29 +1387,16 @@ void FrameRenderer::debugDumpGBuffer(Device& d, VkCommandPool pool) {
     // 注：使用 GENERAL layout 避免要求 TRANSFER_SRC usage
     auto capture = [&](VkImage img, VkFormat fmt, VkImageAspectFlags aspect, const char* name) {
         oneShotSubmit(*m_rhiDevice, [&](VkCommandBuffer cmd) {
-            VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
-            b.srcStageMask  = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
-            b.srcAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT;
-            b.dstStageMask  = VK_PIPELINE_STAGE_2_COPY_BIT;
-            b.dstAccessMask = VK_ACCESS_2_TRANSFER_READ_BIT;
-            b.oldLayout     = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-            b.newLayout     = VK_IMAGE_LAYOUT_GENERAL;
-            b.image         = img;
-            b.subresourceRange = {aspect, 0, 1, 0, 1};
-            VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-            di.imageMemoryBarrierCount = 1; di.pImageMemoryBarriers = &b;
-            vkCmdPipelineBarrier2(cmd, &di);
+            auto& vkDev = static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
+            rhi::VkRHICommandBuffer rhiCmd(vkDev, cmd);
+            auto tex = rhi::VkRHITexture::createNonOwning(vkDev,
+                img, rhi::toRhiFormat(fmt), w, h);
+            rhiCmd.textureBarrier(*tex, rhi::TextureLayout::ShaderReadOnly, rhi::TextureLayout::General);
 
             dump.recordCopy(cmd, img, fmt, w, h);
 
             // Transition back
-            b.srcStageMask  = VK_PIPELINE_STAGE_2_COPY_BIT;
-            b.srcAccessMask = VK_ACCESS_2_TRANSFER_READ_BIT;
-            b.dstStageMask  = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
-            b.dstAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT;
-            b.oldLayout     = VK_IMAGE_LAYOUT_GENERAL;
-            b.newLayout     = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-            vkCmdPipelineBarrier2(cmd, &di);
+            rhiCmd.textureBarrier(*tex, rhi::TextureLayout::General, rhi::TextureLayout::ShaderReadOnly);
         });
         dump.savePng(std::string("debug_dump/") + name, fmt, w, h);
     };

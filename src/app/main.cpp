@@ -21,7 +21,7 @@ struct CliConfig {
     bool captureCompare = false;      // --capture-compare：截帧对比
     double refThreshold = 40.0;       // --ref-threshold N
     // 后端选择
-    const char* backend = "d3d12";   // --backend vulkan|d3d12
+    const char* backend = "vulkan";   // --backend vulkan|d3d12
 };
 
 CliConfig parseCli(int argc, char** argv) {

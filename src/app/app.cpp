@@ -712,36 +712,19 @@ void App::bakePrt() {
     // prtTransfer 转 SHADER_READ_ONLY 给 lighting 用。
     // voxel grid 的 layout 不保证留给 main loop 复用 —— main loop 自己
     // 每帧 reset（VXGI on 时 voxelize 重做；off 时 UNDEFINED→SHADER_READ_ONLY）。
-    auto barrierAllVxgiMips = [&](VkCommandBuffer cmd, VkImageLayout oldL, VkImageLayout newL,
-                                   VkPipelineStageFlags2 srcStg, VkAccessFlags2 srcAcc,
-                                   VkPipelineStageFlags2 dstStg, VkAccessFlags2 dstAcc) {
-        VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
-        b.srcStageMask = srcStg; b.srcAccessMask = srcAcc;
-        b.dstStageMask = dstStg; b.dstAccessMask = dstAcc;
-        b.oldLayout = oldL; b.newLayout = newL;
-        b.image = m_renderer.vxgi().image().image();
-        b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, m_renderer.vxgi().mipLevels(), 0, 1};
-        VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-        di.imageMemoryBarrierCount = 1; di.pImageMemoryBarriers = &b;
-        vkCmdPipelineBarrier2(cmd, &di);
-    };
-
     oneShotSubmit(*m_renderer.rhiDevice(), [&](VkCommandBuffer cmd) {
+        auto& vkDev = static_cast<rhi::VkRHIDevice&>(*m_renderer.rhiDevice());
+        rhi::VkRHICommandBuffer rhiCmd(vkDev, cmd);
+        auto& vxgiImg = m_renderer.vxgi().image();
+        auto vxgiTex = rhi::VkRHITexture::createNonOwning(vkDev,
+            vxgiImg.image(), rhi::toRhiFormat(vxgiImg.format()),
+            m_renderer.kVxgiResolution, m_renderer.kVxgiResolution,
+            m_renderer.vxgi().mipLevels());
+
         // 1. voxel grid all mips: UNDEFINED → TRANSFER_DST → clear → GENERAL
-        barrierAllVxgiMips(cmd,
-            VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-            VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
-            VK_PIPELINE_STAGE_2_CLEAR_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
-        VkClearColorValue zero{};
-        rhi::VkRHICommandBuffer rhiCmd(static_cast<rhi::VkRHIDevice&>(*m_renderer.rhiDevice()), cmd);
-        VkImageSubresourceRange rg{VK_IMAGE_ASPECT_COLOR_BIT, 0, m_renderer.vxgi().mipLevels(), 0, 1};
-        vkCmdClearColorImage(cmd, m_renderer.vxgi().image().image(),
-            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &zero, 1, &rg);
-        barrierAllVxgiMips(cmd,
-            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL,
-            VK_PIPELINE_STAGE_2_CLEAR_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
-            VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-            VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
+        rhiCmd.textureBarrier(*vxgiTex, rhi::TextureLayout::Undefined, rhi::TextureLayout::TransferDst);
+        rhiCmd.clearColor(*vxgiTex, 0.0f, 0.0f, 0.0f, 0.0f);
+        rhiCmd.textureBarrier(*vxgiTex, rhi::TextureLayout::TransferDst, rhi::TextureLayout::General);
 
         // 2. voxelize：写 mip 0
         m_renderer.vxgiVoxelize().record(rhiCmd, m_scene, m_sceneGpu,
@@ -752,7 +735,8 @@ void App::bakePrt() {
 
         // 4. mipmap 结束后状态：mip 0..mipLevels-2 已是 SHADER_READ_ONLY
         //    （mipmap 内部 barrier 转过），mip mipLevels-1 还在 GENERAL。
-        //    只把最后一级转过去即可。
+        //    只把最后一级转过去即可。注：RHI textureBarrier 不支持指定 mip 范围，
+        //    保留原生 vkCmdPipelineBarrier2 以精确定位末级 mip。
         {
             VkImageMemoryBarrier2 mb{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
             mb.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
@@ -761,7 +745,7 @@ void App::bakePrt() {
             mb.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
             mb.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
             mb.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-            mb.image = m_renderer.vxgi().image().image();
+            mb.image = vxgiImg.image();
             mb.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT,
                                    m_renderer.vxgi().mipLevels() - 1, 1, 0, 1};
             VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
@@ -770,24 +754,16 @@ void App::bakePrt() {
         }
 
         // 5. prtTransfer A/B/C/D/E: UNDEFINED → GENERAL（bake 写 SH16 五张 atlas）
-        VkImage prtImgs[5] = {m_renderer.prt().image().image(),
-                              m_renderer.prt().imageB().image(),
-                              m_renderer.prt().imageC().image(),
-                              m_renderer.prt().imageD().image(),
-                              m_renderer.prt().imageE().image()};
-        VkImageMemoryBarrier2 pb{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
-        pb.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-        VkDependencyInfo pdi{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-        pdi.imageMemoryBarrierCount = 1; pdi.pImageMemoryBarriers = &pb;
-        for (auto img : prtImgs) {
-            pb.srcStageMask = VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
-            pb.srcAccessMask = 0;
-            pb.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-            pb.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-            pb.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-            pb.newLayout = VK_IMAGE_LAYOUT_GENERAL;
-            pb.image = img;
-            vkCmdPipelineBarrier2(cmd, &pdi);
+        auto prtTex = [&](const Image& img) {
+            return rhi::VkRHITexture::createNonOwning(vkDev,
+                img.image(), rhi::toRhiFormat(img.format()),
+                img.extent().width, img.extent().height);
+        };
+        for (auto* img : {&m_renderer.prt().image(), &m_renderer.prt().imageB(),
+                          &m_renderer.prt().imageC(), &m_renderer.prt().imageD(),
+                          &m_renderer.prt().imageE()}) {
+            auto tex = prtTex(*img);
+            rhiCmd.textureBarrier(*tex, rhi::TextureLayout::Undefined, rhi::TextureLayout::General);
         }
 
         // 6. prt_bake compute（写 SH16 16 系数 → 5 atlas）
@@ -797,15 +773,11 @@ void App::bakePrt() {
             64);
 
         // 7. prtTransfer A/B/C/D/E: GENERAL → SHADER_READ_ONLY（lighting 读）
-        for (auto img : prtImgs) {
-            pb.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-            pb.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-            pb.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-            pb.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
-            pb.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
-            pb.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-            pb.image = img;
-            vkCmdPipelineBarrier2(cmd, &pdi);
+        for (auto* img : {&m_renderer.prt().image(), &m_renderer.prt().imageB(),
+                          &m_renderer.prt().imageC(), &m_renderer.prt().imageD(),
+                          &m_renderer.prt().imageE()}) {
+            auto tex = prtTex(*img);
+            rhiCmd.textureBarrier(*tex, rhi::TextureLayout::General, rhi::TextureLayout::ShaderReadOnly);
         }
     });
     std::printf("[PRT] bake complete (%u^3 cells, 64 rays/cell)\n", m_renderer.kPrtResolution);
@@ -815,42 +787,31 @@ void App::bootstrapSsgiTemporal() {
     // 把 ssgi 与 ssgiPrev 都清成 0 + 转 SHADER_READ_ONLY，让第一帧 SSGI on
     // 时 copy / sample 都有合法 layout。两张 image 同形 + 同初始内容。
     oneShotSubmit(*m_renderer.rhiDevice(), [&](VkCommandBuffer cmd) {
-        VkImage imgs[2] = {m_renderer.rt().ssgi.image(), m_renderer.rt().ssgiPrev.image()};
-        for (auto img : imgs) {
-            transitionImage(cmd, img, VK_IMAGE_ASPECT_COLOR_BIT,
-                VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
-                VK_PIPELINE_STAGE_2_CLEAR_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
-            VkClearColorValue zero{};
-            VkImageSubresourceRange r{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-            vkCmdClearColorImage(cmd, img,
-                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &zero, 1, &r);
-            transitionImage(cmd, img, VK_IMAGE_ASPECT_COLOR_BIT,
-                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                VK_PIPELINE_STAGE_2_CLEAR_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
-                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+        auto& vkDev = static_cast<rhi::VkRHIDevice&>(*m_renderer.rhiDevice());
+        rhi::VkRHICommandBuffer rhiCmd(vkDev, cmd);
+        const Image* imgs[2] = {&m_renderer.rt().ssgi, &m_renderer.rt().ssgiPrev};
+        for (auto* img : imgs) {
+            auto tex = rhi::VkRHITexture::createNonOwning(vkDev,
+                img->image(), rhi::toRhiFormat(img->format()),
+                img->extent().width, img->extent().height);
+            rhiCmd.textureBarrier(*tex, rhi::TextureLayout::Undefined, rhi::TextureLayout::TransferDst);
+            rhiCmd.clearColor(*tex, 0.0f, 0.0f, 0.0f, 0.0f);
+            rhiCmd.textureBarrier(*tex, rhi::TextureLayout::TransferDst, rhi::TextureLayout::ShaderReadOnly);
         }
     });
 }
 
 void App::bootstrapHdrPrev() {
     oneShotSubmit(*m_renderer.rhiDevice(), [&](VkCommandBuffer cmd) {
-        transitionImage(cmd, m_renderer.rt().hdrPrev.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-            VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-            VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
-            VK_PIPELINE_STAGE_2_CLEAR_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
-        VkClearColorValue zero{};
-        VkImageSubresourceRange r{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-        vkCmdClearColorImage(cmd, m_renderer.rt().hdrPrev.image(),
-            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &zero, 1, &r);
-        transitionImage(cmd, m_renderer.rt().hdrPrev.image(), VK_IMAGE_ASPECT_COLOR_BIT,
-            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-            VK_PIPELINE_STAGE_2_CLEAR_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
-            VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-            VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+        auto& vkDev = static_cast<rhi::VkRHIDevice&>(*m_renderer.rhiDevice());
+        rhi::VkRHICommandBuffer rhiCmd(vkDev, cmd);
+        auto& hdrPrev = m_renderer.rt().hdrPrev;
+        auto tex = rhi::VkRHITexture::createNonOwning(vkDev,
+            hdrPrev.image(), rhi::toRhiFormat(hdrPrev.format()),
+            hdrPrev.extent().width, hdrPrev.extent().height);
+        rhiCmd.textureBarrier(*tex, rhi::TextureLayout::Undefined, rhi::TextureLayout::TransferDst);
+        rhiCmd.clearColor(*tex, 0.0f, 0.0f, 0.0f, 0.0f);
+        rhiCmd.textureBarrier(*tex, rhi::TextureLayout::TransferDst, rhi::TextureLayout::ShaderReadOnly);
     });
 }
 
@@ -1026,16 +987,8 @@ void App::recordIndirectDraws(VkCommandBuffer cmd, uint32_t frameInFlight, const
         }
         m_culledDrawCount = m_drawCount;  // conservative; GPU cull reduces this
 
-        // Barrier: compute write → indirect draw
-        VkBufferMemoryBarrier2 b{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2};
-        b.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-        b.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-        b.dstStageMask = VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT;
-        b.dstAccessMask = VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT;
-        b.buffer = m_indirectBuf.handle(); b.size = VK_WHOLE_SIZE;
-        VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-        di.bufferMemoryBarrierCount = 1; di.pBufferMemoryBarriers = &b;
-        vkCmdPipelineBarrier2(cmd, &di);
+        // Barrier: compute write → indirect draw（RHI 无 DrawIndirect 管线阶段，用 globalBarrier）
+        rhiCmd.globalBarrier();
 
         // Sun-view uses full unfiltered list
         auto* sunCmds = (VkDrawIndexedIndirectCommand*)m_indirectBufSun.mapped();
@@ -1112,12 +1065,13 @@ void App::recordPostProcessing(VkCommandBuffer cmd) {
                         VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                         VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
                         VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
-                    VkImageCopy histCopy{};
-                    histCopy.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-                    histCopy.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-                    histCopy.extent = {m_renderer.rt().extent.width, m_renderer.rt().extent.height, 1};
-                    vkCmdCopyImage(cmd, m_renderer.rt().aaHdr.image(), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                                   m_renderer.rt().aaHistory.image(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &histCopy);
+                    auto aaHdrTex = rhi::VkRHITexture::createNonOwning(vkDev,
+                        m_renderer.rt().aaHdr.image(), rhi::toRhiFormat(m_renderer.rt().aaHdr.format()),
+                        m_renderer.rt().extent.width, m_renderer.rt().extent.height);
+                    auto aaHistTex = rhi::VkRHITexture::createNonOwning(vkDev,
+                        m_renderer.rt().aaHistory.image(), rhi::toRhiFormat(m_renderer.rt().aaHistory.format()),
+                        m_renderer.rt().extent.width, m_renderer.rt().extent.height);
+                    rhiCmd.copyTexture(*aaHdrTex, *aaHistTex);
                     transitionImage(cmd, m_renderer.rt().aaHdr.image(), VK_IMAGE_ASPECT_COLOR_BIT,
                         VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                         VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_READ_BIT,
@@ -1203,14 +1157,13 @@ void App::recordPostProcessing(VkCommandBuffer cmd) {
                     VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                     VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
                     VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
-                VkImageCopy histCopy{};
-                histCopy.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-                histCopy.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-                histCopy.extent = {m_renderer.rt().extent.width, m_renderer.rt().extent.height, 1};
-                vkCmdCopyImage(cmd,
-                    m_renderer.rt().aaHdr.image(), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                    m_renderer.rt().aaHistory.image(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                    1, &histCopy);
+                auto aaHdrTex = rhi::VkRHITexture::createNonOwning(vkDev,
+                    m_renderer.rt().aaHdr.image(), rhi::toRhiFormat(m_renderer.rt().aaHdr.format()),
+                    m_renderer.rt().extent.width, m_renderer.rt().extent.height);
+                auto aaHistTex = rhi::VkRHITexture::createNonOwning(vkDev,
+                    m_renderer.rt().aaHistory.image(), rhi::toRhiFormat(m_renderer.rt().aaHistory.format()),
+                    m_renderer.rt().extent.width, m_renderer.rt().extent.height);
+                rhiCmd.copyTexture(*aaHdrTex, *aaHistTex);
                 transitionImage(cmd, m_renderer.rt().aaHdr.image(), VK_IMAGE_ASPECT_COLOR_BIT,
                     VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                     VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_READ_BIT,
@@ -1250,10 +1203,10 @@ void App::recordPostProcessing(VkCommandBuffer cmd) {
         }
 
         // SDR blit: ldrTonemap → swapchain
-        transitionImage(cmd, m_frameCtx.swapImage, VK_IMAGE_ASPECT_COLOR_BIT,
-            VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-            VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
-            VK_PIPELINE_STAGE_2_BLIT_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
+        auto swapTex = rhi::VkRHITexture::createNonOwning(vkDev,
+            m_frameCtx.swapImage, rhi::toRhiFormat(m_swap->format()),
+            m_frameCtx.swapExtent.width, m_frameCtx.swapExtent.height);
+        rhiCmd.textureBarrier(*swapTex, rhi::TextureLayout::Undefined, rhi::TextureLayout::TransferDst);
 
         VkImageBlit blit{};
         blit.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
@@ -1266,10 +1219,7 @@ void App::recordPostProcessing(VkCommandBuffer cmd) {
             1, &blit, VK_FILTER_LINEAR);
 
         // SDR: transition swapchain to COLOR_ATTACHMENT for ImGui
-        transitionImage(cmd, m_frameCtx.swapImage, VK_IMAGE_ASPECT_COLOR_BIT,
-            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-            VK_PIPELINE_STAGE_2_BLIT_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
-            VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
+        rhiCmd.textureBarrier(*swapTex, rhi::TextureLayout::TransferDst, rhi::TextureLayout::ColorAttachment);
     }
 
     // 恢复 hdrColor 到 TRANSFER_SRC，匹配 Copy-hdrPrev 的 descriptor layout
