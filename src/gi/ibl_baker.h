@@ -3,6 +3,7 @@
 #include "core/buffer.h"
 #include "scene/env_loader.h"
 #include <vector>
+#include <memory>
 
 // IBL（Image-Based Lighting）烘焙器。
 //
@@ -36,6 +37,11 @@ namespace somegi {
 
 class Device;
 
+namespace rhi {
+class RHIDevice;
+class RHISampler;
+}
+
 // IBL 烘焙的 GPU 资源集合。归调用方所有，IBLTechnique 借用而不拥有。
 struct IblResources {
     Image envCube;        // 512² × 6 面, 6 mip, R16G16B16A16_SFLOAT —— 给 prefilter 阶段当源采样
@@ -43,9 +49,11 @@ struct IblResources {
     Image specularCube;   // 256² × 6 面, 6 mip, R16G16B16A16_SFLOAT —— 镜面 prefilter（mip = roughness）
     Image brdfLut;        // 256² × 1, 1 mip, R16G16_SFLOAT —— split-sum 第二项的二维表
     VkSampler linear = VK_NULL_HANDLE;   // 共享的 LINEAR + CLAMP_TO_EDGE sampler
+    std::unique_ptr<rhi::RHISampler> rhiLinear;  // RHI sampler 包装
     uint32_t specularMipCount = 6;       // 与 specularCube.mipLevels() 一致；shader 端按 roughness 选 mip 用
 
     void destroy(Device& d);
+    rhi::RHISampler* rhiLinearSampler() const { return rhiLinear.get(); }
 };
 
 class IblBaker {
@@ -53,7 +61,9 @@ public:
     // 输入：env（CPU 端的 HDR equirect 像素 + 尺寸）；
     // 输出：out 填好 4 张 image + sampler，layout 全部已转到 SHADER_READ_ONLY。
     // 失败抛 std::runtime_error。
-    void bake(Device& d, VkCommandPool pool, const EnvCpu& env, IblResources& out);
+    // rhiDevice 可选：传入时同时创建 RHI sampler 包装。
+    void bake(Device& d, VkCommandPool pool, const EnvCpu& env, IblResources& out,
+              rhi::RHIDevice* rhiDevice = nullptr);
 };
 
 }

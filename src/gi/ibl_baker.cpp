@@ -11,6 +11,8 @@
 #include "core/buffer.h"
 #include "core/shader.h"
 #include "scene/upload.h"
+#include "rhi/vulkan/vk_device.h"
+#include "rhi/vulkan/vk_sampler.h"
 #include <array>
 #include <cstring>
 #include <stdexcept>
@@ -231,6 +233,7 @@ VkDescriptorSet allocDescSet(Device& d, VkDescriptorPool pool, VkDescriptorSetLa
 void IblResources::destroy(Device& d) {
     if (linear) vkDestroySampler(d.device(), linear, nullptr);
     linear = VK_NULL_HANDLE;
+    rhiLinear.reset();
     envCube.reset();
     diffuseCube.reset();
     specularCube.reset();
@@ -250,7 +253,8 @@ void IblResources::destroy(Device& d) {
 //
 // 阶段间的 layout 转换 + 内存屏障在每段代码末尾就近处理。oneShotSubmit
 // 会做 vkQueueWaitIdle，所以阶段间天然有 GPU sync。
-void IblBaker::bake(Device& d, VkCommandPool pool, const EnvCpu& env, IblResources& out) {
+void IblBaker::bake(Device& d, VkCommandPool pool, const EnvCpu& env, IblResources& out,
+                    rhi::RHIDevice* rhiDevice) {
     out.specularMipCount = kSpecularMips;
 
     // 1. 把 HDR equirect 上传 GPU（layout 已 → SHADER_READ_ONLY）。
@@ -258,6 +262,11 @@ void IblBaker::bake(Device& d, VkCommandPool pool, const EnvCpu& env, IblResourc
     // 2. 共享线性 sampler；maxLod = envCubeMips（specular prefilter 阶段
     //    要按算出来的 LOD 在 envCube 上 SampleLevel）。
     out.linear = makeLinearSampler(d, /*clamp*/true, /*maxLod*/(float)kEnvCubeMips);
+    // 同时创建 RHI sampler 包装（若提供了 RHI 设备）
+    if (rhiDevice) {
+        out.rhiLinear = rhi::VkRHISampler::createNonOwning(
+            static_cast<rhi::VkRHIDevice&>(*rhiDevice), out.linear);
+    }
 
     // 3. 分配三个 cubemap + 一个 BRDF LUT。
     allocCube(d, kEnvCubeSize,  kEnvCubeMips,  VK_FORMAT_R16G16B16A16_SFLOAT, 0, out.envCube);
