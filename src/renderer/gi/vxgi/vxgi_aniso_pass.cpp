@@ -1,7 +1,6 @@
 // VxgiAnisoPass RHI — 3 bindings: voxelGrid(src)+aniso(prev)+aniso(dst).
 
 #include "renderer/gi/vxgi/vxgi_aniso_pass.h"
-#include "core/device.h"
 #include "rhi/base/device.h"
 #include "rhi/base/descriptor.h"
 #include "rhi/base/pipeline_state.h"

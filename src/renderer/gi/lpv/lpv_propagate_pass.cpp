@@ -1,7 +1,6 @@
 // LpvPropagatePass RHI — 7 bindings: 3 src + 3 dst + GV, 2 ping-pong sets.
 
 #include "renderer/gi/lpv/lpv_propagate_pass.h"
-#include "core/device.h"
 #include "rhi/base/device.h"
 #include "rhi/base/descriptor.h"
 #include "rhi/base/pipeline_state.h"

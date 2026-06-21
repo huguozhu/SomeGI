@@ -1,7 +1,6 @@
 // VxgiMipmapPass RHI — 2 bindings: sampled src + storage dst, 可变组数。
 
 #include "renderer/gi/vxgi/vxgi_mipmap_pass.h"
-#include "core/device.h"
 #include "core/image.h"
 #include "rhi/base/device.h"
 #include "rhi/base/descriptor.h"

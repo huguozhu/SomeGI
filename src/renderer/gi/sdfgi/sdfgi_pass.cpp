@@ -12,7 +12,6 @@
 #include "rhi/vulkan/vk_texture.h"
 #include "rhi/vulkan/vk_buffer.h"
 #include "rhi/vulkan/vk_pso.h"
-#include "core/device.h"
 #include "core/shader.h"
 #include <array>
 namespace somegi {

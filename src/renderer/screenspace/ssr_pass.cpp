@@ -18,7 +18,6 @@
 #include "rhi/vulkan/vk_buffer.h"
 #include "rhi/vulkan/vk_command.h"
 #include "rhi/base/sampler.h"
-#include "core/device.h"
 #include "core/shader.h"
 #include <array>
 #include <cstring>

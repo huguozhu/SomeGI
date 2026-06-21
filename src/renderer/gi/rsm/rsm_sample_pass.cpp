@@ -1,7 +1,6 @@
 // RsmSamplePass RHI — 9 bindings: 2 UBO + 5 sampled + 1 sampler + 1 storage.
 
 #include "renderer/gi/rsm/rsm_sample_pass.h"
-#include "core/device.h"
 #include "rhi/base/device.h"
 #include "rhi/base/descriptor.h"
 #include "rhi/base/pipeline_state.h"

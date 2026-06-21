@@ -1,7 +1,6 @@
 // NdgiPass — RHI 管理 layouts/sets/pipelines，record 保留 VkCompat。
 #include "renderer/gi/ndgi/ndgi_pass.h"
 #include "renderer/gi/ndgi/ndgi_resources.h"
-#include "core/device.h"
 #include "renderer/gi/rt/scene_rt_as.h"
 #include "renderer/core/render_targets.h"
 #include "scene/scene.h"

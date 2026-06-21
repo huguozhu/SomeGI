@@ -2,7 +2,6 @@
 // barrier/clear 已迁移到 RHI textureBarrier + clearColor；VkCommandBuffer 重载仅作桥接。
 
 #include "renderer/gi/lpv/lpv_inject_pass.h"
-#include "core/device.h"
 #include "rhi/base/device.h"
 #include "rhi/base/descriptor.h"
 #include "rhi/base/pipeline_state.h"

@@ -1,7 +1,6 @@
 // VxgiVoxelizePass RHI — 6 bindings: 3 SSBO + sampler + texture[] + voxel storage.
 
 #include "renderer/gi/vxgi/vxgi_voxelize_pass.h"
-#include "core/device.h"
 #include "rhi/base/device.h"
 #include "rhi/base/descriptor.h"
 #include "rhi/base/pipeline_state.h"
