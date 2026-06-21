@@ -209,7 +209,7 @@ bool App::loadAndUploadScene(const std::filesystem::path& gltfPath, std::string&
         m_scene.aabbMax.x, m_scene.aabbMax.y, m_scene.aabbMax.z);
 
     std::printf("[scene] uploading to GPU...\n");
-    uploadScene(*m_device, m_pool, m_scene, m_sceneGpu, m_useMipmaps);
+    uploadScene(*m_device, m_pool, m_scene, m_sceneGpu, m_useMipmaps, m_renderer.rhiDevice());
     std::printf("[scene] GPU upload done.\n");
     return true;
 }
@@ -341,7 +341,7 @@ void App::applySceneSelection() {
     m_renderer.shadow().bindScene(*m_device, m_sceneGpu);
     m_renderer.shadow().setSceneAabb(m_scene.aabbMin, m_scene.aabbMax);
     m_renderer.shadow().setSunDir(m_sunDir);
-    m_renderer.lighting().bindShadowMask(m_renderer.shadow().shadowMask().view());
+    m_renderer.lighting().bindShadowMask(*m_renderer.shadow().rhiShadowMaskView());
 
     if (m_sceneIndexApplied >= 0) {
         // Tonemap pass cached the old sampler; old one was destroyed above.

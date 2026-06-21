@@ -129,7 +129,7 @@ void LightingPass::bindIblResources(const IblResources& ibl) {
     auto diffV = rhi::VkRHITextureView::createNonOwning(vkD, ibl.diffuseCube.view());
     auto specV = rhi::VkRHITextureView::createNonOwning(vkD, ibl.specularCube.view());
     auto lutV  = rhi::VkRHITextureView::createNonOwning(vkD, ibl.brdfLut.view());
-    auto uboB  = rhi::VkRHIBuffer::createNonOwning(vkD, (VkBuffer)(uintptr_t)m_iblParamsUbo->nativeHandle(), sizeof(IblParams));
+    auto uboB  = m_iblParamsUbo.get();
     auto ibs   = rhi::VkRHISampler::createNonOwning(vkD, ibl.linear);
 
     m_iblSet->write({
@@ -137,7 +137,7 @@ void LightingPass::bindIblResources(const IblResources& ibl) {
         {1, rhi::DescriptorType::SampledImage, specV.get()},
         {2, rhi::DescriptorType::SampledImage, lutV.get()},
         {3, rhi::DescriptorType::Sampler, nullptr, nullptr, 0, 0, ibs.get()},
-        {4, rhi::DescriptorType::UniformBuffer, nullptr, uboB.get()},
+        {4, rhi::DescriptorType::UniformBuffer, nullptr, uboB},
     });
 
     IblParams params{};
@@ -189,10 +189,10 @@ void LightingPass::bindFrame(const RenderTargets& rt, VkBuffer frameUbo,
     auto prE   = prt.rhiViewE();
     auto rsV   = rt.rhiRestirView();
     auto rtV   = rt.rhiRtGIView();
-    auto lpS   = rhi::VkRHISampler::createNonOwning(vkD, (VkSampler)(uintptr_t)m_lpvSampler->nativeHandle());
+    auto lpS   = m_lpvSampler.get();
 
     // NDGI 权重（6 SSBO），b27-32 初始占位
-    auto dumB  = rhi::VkRHIBuffer::createNonOwning(vkD, (VkBuffer)(uintptr_t)m_dummyBuf->nativeHandle(), 4);
+    auto dumB  = m_dummyBuf.get();
     m_set->write({
         {0, rhi::DescriptorType::UniformBuffer, nullptr, uboF.get()},
         {1, rhi::DescriptorType::SampledImage, abV},
@@ -207,7 +207,7 @@ void LightingPass::bindFrame(const RenderTargets& rt, VkBuffer frameUbo,
         {10, rhi::DescriptorType::SampledImage, lpvRV},
         {11, rhi::DescriptorType::SampledImage, lpvGV},
         {12, rhi::DescriptorType::SampledImage, lpvBV},
-        {13, rhi::DescriptorType::Sampler, nullptr, nullptr, 0, 0, lpS.get()},
+        {13, rhi::DescriptorType::Sampler, nullptr, nullptr, 0, 0, lpS},
         {14, rhi::DescriptorType::SampledImage, vxV},
         {15, rhi::DescriptorType::SampledImage, prtV},
         {16, rhi::DescriptorType::SampledImage, ddIrV},
@@ -221,24 +221,21 @@ void LightingPass::bindFrame(const RenderTargets& rt, VkBuffer frameUbo,
         {24, rhi::DescriptorType::SampledImage, rsV},
         {25, rhi::DescriptorType::SampledImage, rtV},
         {26, rhi::DescriptorType::SampledImage, nrV}, // duplicate: shader unused
-        {27, rhi::DescriptorType::StorageBuffer, nullptr, dumB.get()},
-        {28, rhi::DescriptorType::StorageBuffer, nullptr, dumB.get()},
-        {29, rhi::DescriptorType::StorageBuffer, nullptr, dumB.get()},
-        {30, rhi::DescriptorType::StorageBuffer, nullptr, dumB.get()},
-        {31, rhi::DescriptorType::StorageBuffer, nullptr, dumB.get()},
-        {32, rhi::DescriptorType::StorageBuffer, nullptr, dumB.get()},
+        {27, rhi::DescriptorType::StorageBuffer, nullptr, dumB},
+        {28, rhi::DescriptorType::StorageBuffer, nullptr, dumB},
+        {29, rhi::DescriptorType::StorageBuffer, nullptr, dumB},
+        {30, rhi::DescriptorType::StorageBuffer, nullptr, dumB},
+        {31, rhi::DescriptorType::StorageBuffer, nullptr, dumB},
+        {32, rhi::DescriptorType::StorageBuffer, nullptr, dumB},
     });
 }
 
 // ════════════════════════════════════════════════════════════════
 // bindShadowMask (set=0, binding 33)
 // ════════════════════════════════════════════════════════════════
-void LightingPass::bindShadowMask(VkImageView v) {
+void LightingPass::bindShadowMask(const rhi::RHITextureView& sv) {
     if (!m_set) return;
-    m_shadowMaskView = v;
-    auto& vkD = static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
-    auto sv = rhi::VkRHITextureView::createNonOwning(vkD, v);
-    m_set->write({{33, rhi::DescriptorType::SampledImage, sv.get()}});
+    m_set->write({{33, rhi::DescriptorType::SampledImage, &sv}});
 }
 
 // ════════════════════════════════════════════════════════════════

@@ -4,6 +4,7 @@
 #include "rhi/base/descriptor.h"
 #include "rhi/base/pipeline_state.h"
 #include "rhi/base/sampler.h"
+#include "rhi/base/texture.h"
 #include "core/image.h"
 #include "core/buffer.h"
 #include <glm/glm.hpp>
@@ -67,6 +68,7 @@ public:
     void bindTLAS(const rhi::RHIAccelerationStructure& tlas);
 
     const Image& shadowMask() const { return m_shadowMask; }
+    const rhi::RHITextureView* rhiShadowMaskView() const { return m_rhiShadowMaskView.get(); }
     VkSampler shadowSampler() const { return (VkSampler)(uintptr_t)m_shadowSampler->nativeHandle(); }
 
     void setFgAutoBarrier(bool v) { m_fgAutoBarrier = v; }
@@ -101,6 +103,8 @@ private:
     Image m_shadowMap;
     VkExtent2D m_shadowMapSize{2048, 2048};
     Image m_shadowMask;
+    std::unique_ptr<rhi::RHITexture>     m_rhiShadowMaskTex;   // 非拥有型 RHI 包装
+    std::unique_ptr<rhi::RHITextureView> m_rhiShadowMaskView;  // 非拥有型 RHI 包装
     VkExtent2D m_outputSize{};
     Image m_vsmMap;
     Image m_vsmBlur;

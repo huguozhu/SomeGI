@@ -96,6 +96,8 @@ void ShadowPass::init(Device& d, rhi::RHIDevice& rhiDevice, VkExtent2D shadowMap
     { ImageDesc desc{}; desc.format = VK_FORMAT_R32G32_SFLOAT; desc.extent = {shadowMapSize.width, shadowMapSize.height, 1}; desc.aspect = VK_IMAGE_ASPECT_COLOR_BIT; desc.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT; m_vsmMap = Image(d, desc); }
     { ImageDesc desc{}; desc.format = VK_FORMAT_R32G32_SFLOAT; desc.extent = {shadowMapSize.width, shadowMapSize.height, 1}; desc.aspect = VK_IMAGE_ASPECT_COLOR_BIT; desc.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT; m_vsmBlur = Image(d, desc); }
     { ImageDesc desc{}; desc.format = VK_FORMAT_R8_UNORM; desc.extent = {outputSize.width, outputSize.height, 1}; desc.aspect = VK_IMAGE_ASPECT_COLOR_BIT; desc.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT; m_shadowMask = Image(d, desc); }
+    m_rhiShadowMaskTex  = rhi::VkRHITexture::createNonOwning(vkD, m_shadowMask.image(), rhi::Format::R8_UNORM, outputSize.width, outputSize.height);
+    m_rhiShadowMaskView = rhi::VkRHITextureView::createNonOwning(vkD, m_shadowMask.view());
     std::printf("[shadow] shadowMask view=%p\n", (void*)m_shadowMask.view());
 
     // ── 2. Samplers (RHI) ──
@@ -721,6 +723,7 @@ void ShadowPass::destroy() {
     m_frameSetLayout.reset(); m_frameSet.reset();
     m_vsmBlurSetLayout.reset(); m_vsmBlurSet.reset();
     m_rtSetLayout.reset(); m_rtSet.reset();
+    m_rhiShadowMaskView.reset(); m_rhiShadowMaskTex.reset();
     m_shadowMap.reset(); m_vsmMap.reset(); m_shadowMask.reset(); m_vsmBlur.reset();
     m_shadowUbo.reset();
     m_device = nullptr;

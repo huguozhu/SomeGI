@@ -66,6 +66,9 @@ private:
     Buffer m_frameUbo;
     Buffer m_iblParamsUbo;  // IBL intensity UBO (set=1 binding 4)
     Buffer m_dummySBuf;     // 占位 STORAGE buffer（NDGI weights 初始值）
+    std::unique_ptr<rhi::RHIBuffer> m_rhiFrameUbo;       // 非拥有型 RHI 包装
+    std::unique_ptr<rhi::RHIBuffer> m_rhiIblParamsUbo;   // 非拥有型 RHI 包装
+    std::unique_ptr<rhi::RHIBuffer> m_rhiDummySBuf;      // 非拥有型 RHI 包装
     uint32_t m_maxTextures = 0;
     std::vector<std::unique_ptr<rhi::RHITextureView>> m_texViews;
     std::vector<const rhi::RHITextureView*> m_texViewPtrs;

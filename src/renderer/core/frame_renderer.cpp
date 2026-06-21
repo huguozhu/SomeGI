@@ -97,7 +97,7 @@ void FrameRenderer::init(Device& d, VkCommandPool pool, VkExtent2D extent,
 
     std::printf("[init] lighting pass...\n");
     m_lighting.init(*m_rhiDevice);
-    m_lighting.bindShadowMask(m_shadow.shadowMask().view());
+    m_lighting.bindShadowMask(*m_shadow.rhiShadowMaskView());
     m_lighting.bindFrame(m_rt, m_gbuffer.frameUboHandle(),
                          m_lpv.current(), m_vxgi, m_prt, m_ddgi,
                          m_ddgi.probeStates().handle());
@@ -474,7 +474,7 @@ void FrameRenderer::applyShadowSelection(int idx) {
     m_shadow.setMethod((ShadowMethod)idx);
     // 更新 lighting 端的 shadow mask image view（shader 同一张 Image）
     if (m_rhiDevice) {
-        m_lighting.bindShadowMask(m_shadow.shadowMask().view());
+        m_lighting.bindShadowMask(*m_shadow.rhiShadowMaskView());
     }
 }
 

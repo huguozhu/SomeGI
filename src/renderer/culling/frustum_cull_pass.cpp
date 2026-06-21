@@ -95,20 +95,14 @@ void FrustumCullPass::destroy() {
 // ── 内部：写描述符集 ──
 static void writeFrustumDescriptors(rhi::VkRHIDevice& vkDevice,
                                      rhi::RHIDescriptorSet& set,
-                                     VkBuffer drawBuf, VkBuffer uboBuf,
-                                     VkBuffer indOut, VkBuffer cntOut,
+                                     const rhi::RHIBuffer* drawBuf, const rhi::RHIBuffer* uboBuf,
+                                     const rhi::RHIBuffer* indOut, const rhi::RHIBuffer* cntOut,
                                      VkImageView hiz[4]) {
-    // 非拥有型 RHI 包装
-    auto drawRHI  = rhi::VkRHIBuffer::createNonOwning(vkDevice, drawBuf, VK_WHOLE_SIZE);
-    auto uboRHI   = rhi::VkRHIBuffer::createNonOwning(vkDevice, uboBuf, sizeof(CullUbo));
-    auto indRHI   = rhi::VkRHIBuffer::createNonOwning(vkDevice, indOut, VK_WHOLE_SIZE);
-    auto cntRHI   = rhi::VkRHIBuffer::createNonOwning(vkDevice, cntOut, sizeof(uint32_t));
-
     std::vector<rhi::DescriptorWrite> writes = {
-        {0, rhi::DescriptorType::StorageBuffer, nullptr, drawRHI.get()},
-        {1, rhi::DescriptorType::UniformBuffer, nullptr, uboRHI.get()},
-        {2, rhi::DescriptorType::StorageBuffer, nullptr, indRHI.get()},
-        {3, rhi::DescriptorType::StorageBuffer, nullptr, cntRHI.get()},
+        {0, rhi::DescriptorType::StorageBuffer, nullptr, drawBuf},
+        {1, rhi::DescriptorType::UniformBuffer, nullptr, uboBuf},
+        {2, rhi::DescriptorType::StorageBuffer, nullptr, indOut},
+        {3, rhi::DescriptorType::StorageBuffer, nullptr, cntOut},
     };
 
     // Hi-Z mips (可选)
@@ -141,10 +135,6 @@ void FrustumCullPass::record(rhi::RHICommandBuffer& cmd,
     if (drawCount == 0 || !m_pipeline) return;
 
     auto& vkDevice = static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
-    // 从 RHI 抽象提取 Vulkan 原生句柄（仅用于描述符写入）
-    auto vkCountOut = static_cast<VkBuffer>(countOut.nativeHandle());
-    auto vkDrawBuf = static_cast<VkBuffer>(drawBuf.nativeHandle());
-    auto vkIndirectOut = static_cast<VkBuffer>(indirectOut.nativeHandle());
 
     // ── 清零 count buffer（纯 RHI fillBuffer + barrier） ──
     cmd.fillBuffer(countOut, 0, sizeof(uint32_t), 0);
@@ -168,7 +158,7 @@ void FrustumCullPass::record(rhi::RHICommandBuffer& cmd,
     // ── 写描述符集 ──
     VkImageView hiz[4] = {hizMip1, hizMip2, hizMip3, hizMip4};
     writeFrustumDescriptors(vkDevice, *m_sets[fi % 2],
-                            vkDrawBuf, static_cast<VkBuffer>(m_ubo->nativeHandle()), vkIndirectOut, vkCountOut, hiz);
+                            &drawBuf, m_ubo.get(), &indirectOut, &countOut, hiz);
 
     // ── Dispatch ──
     cmd.bindPipelineState(*m_pipeline);

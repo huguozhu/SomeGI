@@ -26,7 +26,7 @@ public:
                    const LpvGrid& lpvGrid0, const VxgiResources& vxgi,
                    const PrtResources& prt, const DdgiResources& ddgi,
                    VkBuffer ddgiProbeStatesBuf);
-    void bindShadowMask(VkImageView shadowMaskView);
+    void bindShadowMask(const rhi::RHITextureView& shadowMaskView);
     void setNdgiWeights(
         VkBuffer w1, VkBuffer b1, VkBuffer w2, VkBuffer b2,
         VkBuffer w3, VkBuffer b3);
@@ -41,7 +41,6 @@ private:
     std::unique_ptr<rhi::RHIDescriptorSetLayout> m_setLayout;
     std::unique_ptr<rhi::RHIDescriptorSet> m_set;
     std::unique_ptr<rhi::RHISampler> m_lpvSampler;
-    VkImageView m_shadowMaskView = VK_NULL_HANDLE;
     std::unique_ptr<rhi::RHIBuffer> m_dummyBuf;
 
     // Pipeline (RHI)

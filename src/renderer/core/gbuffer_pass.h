@@ -3,6 +3,7 @@
 #pragma once
 #include "rhi/base/descriptor.h"
 #include "rhi/base/pipeline_state.h"
+#include "rhi/base/buffer.h"
 #include "rhi/base/device.h"
 #include "core/buffer.h"
 #include "scene/scene.h"
@@ -76,6 +77,7 @@ private:
     uint32_t m_meshGroupCount = 0;
 
     Buffer m_frameUbo;
+    std::unique_ptr<rhi::RHIBuffer> m_rhiFrameUbo;  // 非拥有型 RHI 包装，init() 中创建
     uint32_t m_maxTextures = 0;
 };
 

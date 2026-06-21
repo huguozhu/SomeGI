@@ -58,6 +58,8 @@ void GBufferPass::init(Device& d, rhi::RHIDevice& rhiDevice,
     m_frameUbo = Buffer(d, sizeof(FrameUBO),
                         VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
                         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    m_rhiFrameUbo = rhi::VkRHIBuffer::createNonOwning(
+        static_cast<rhi::VkRHIDevice&>(rhiDevice), m_frameUbo.handle(), sizeof(FrameUBO));
 
     buildPipeline();
 
@@ -272,6 +274,7 @@ void GBufferPass::destroy() {
     if (m_meshPool)      vkDestroyDescriptorPool(dev, m_meshPool, nullptr);
     if (m_meshSetLayout) vkDestroyDescriptorSetLayout(dev, m_meshSetLayout, nullptr);
     m_meshPool = VK_NULL_HANDLE; m_meshSetLayout = VK_NULL_HANDLE;
+    m_rhiFrameUbo.reset();
     m_frameUbo.reset();
     m_cullUbo.reset();
     m_device = nullptr;
@@ -283,7 +286,7 @@ void GBufferPass::destroy() {
 void GBufferPass::bindScene(Device& d, const SceneGpu& gpu, uint32_t textureCount) {
     auto& vkD = static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
 
-    auto uboRHI   = rhi::VkRHIBuffer::createNonOwning(vkD, m_frameUbo.handle(), VK_WHOLE_SIZE);
+    auto uboRHI   = m_rhiFrameUbo.get();
     auto matRHI   = gpu.rhiMaterialBuffer();
     auto sampRHI  = rhi::VkRHISampler::createNonOwning(vkD, gpu.linearSampler);
 
@@ -299,7 +302,7 @@ void GBufferPass::bindScene(Device& d, const SceneGpu& gpu, uint32_t textureCoun
     }
 
     m_set->write({
-        {0,  rhi::DescriptorType::UniformBuffer, nullptr, uboRHI.get()},
+        {0,  rhi::DescriptorType::UniformBuffer, nullptr, uboRHI},
         {1,  rhi::DescriptorType::StorageBuffer, nullptr, matRHI},
         {2,  rhi::DescriptorType::Sampler,       nullptr, nullptr, 0, 0, sampRHI.get()},
         {3,  rhi::DescriptorType::SampledImage,  nullptr, nullptr, 0, 0, nullptr, nullptr, m_maxTextures, texViewPtrs.data()},
