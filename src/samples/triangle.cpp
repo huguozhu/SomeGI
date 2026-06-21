@@ -110,6 +110,9 @@ int main() {
         rhiDevice.submit(sd);
         pSwapchain->present(frame);
 
+        // CPU 等待 GPU 完成，确保下帧 reset cmd buffer 时 GPU 已空闲
+        sigFence->wait();
+
         // Free non-owning semaphore wrappers
         delete static_cast<rhi::RHISemaphore*>(frame.imageAvailable);
         delete static_cast<rhi::RHISemaphore*>(frame.renderFinished);
