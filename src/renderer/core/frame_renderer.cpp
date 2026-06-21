@@ -64,7 +64,7 @@ void FrameRenderer::init(Device& d, VkCommandPool pool, VkExtent2D extent,
     std::printf("[init] forward pass...\n");
     m_forward.init(d, *m_rhiDevice, VK_FORMAT_R16G16B16A16_SFLOAT, VK_FORMAT_D32_SFLOAT, 128);
     std::printf("[init] rsm geometry pass...\n");
-    m_rsmGeom.init(d, *m_rhiDevice, 128);
+    m_rsmGeom.init(*m_rhiDevice, 128);
     std::printf("[init] rsm sample pass...\n");
     m_rsmSample.init(*m_rhiDevice);
 
@@ -92,12 +92,12 @@ void FrameRenderer::init(Device& d, VkCommandPool pool, VkExtent2D extent,
     m_shadow.init(d, *m_rhiDevice, {2048, 2048}, extent);
 
     std::printf("[init] lighting pass...\n");
-    m_lighting.init(d, *m_rhiDevice);
-    m_lighting.bindShadowMask(d, m_shadow.shadowMask().view());
-    m_lighting.bindFrame(d, m_rt, m_gbuffer.frameUboHandle(),
+    m_lighting.init(*m_rhiDevice);
+    m_lighting.bindShadowMask(m_shadow.shadowMask().view());
+    m_lighting.bindFrame(m_rt, m_gbuffer.frameUboHandle(),
                          m_lpv.current(), m_vxgi, m_prt, m_ddgi,
                          m_ddgi.probeStates().handle());
-    m_lighting.setNdgiWeights(d,
+    m_lighting.setNdgiWeights(
         m_ndgi.weights1().handle(), m_ndgi.bias1().handle(),
         m_ndgi.weights2().handle(), m_ndgi.bias2().handle(),
         m_ndgi.weights3().handle(), m_ndgi.bias3().handle());
@@ -180,17 +180,17 @@ void FrameRenderer::init(Device& d, VkCommandPool pool, VkExtent2D extent,
     bootstrapAllTargets();
 
     std::printf("[init] skybox pass...\n");
-    m_skybox.init(d, *m_rhiDevice, VK_FORMAT_R16G16B16A16_SFLOAT, VK_FORMAT_D32_SFLOAT);
+    m_skybox.init(*m_rhiDevice, rhi::Format::R16G16B16A16_SFLOAT, rhi::Format::D32_SFLOAT);
 
     std::printf("[init] tonemap pass...\n");
     // linearSampler comes from SceneGpu — caller sets after scene load
     std::printf("[init] aa passes...\n");
     m_taa.init(*m_rhiDevice);
-    m_smaa.init(d, *m_rhiDevice, extent);
+    m_smaa.init(*m_rhiDevice, extent);
     std::printf("[init] imgui pass...\n");
 
     m_cullPass.init(*m_rhiDevice, 4096);
-    m_hizPass.init(d, *m_rhiDevice, extent);
+    m_hizPass.init(*m_rhiDevice, extent);
     registerPipelineSteps();
 
     // Mesh Shader：支持时默认启用
@@ -268,7 +268,7 @@ void FrameRenderer::onResize(Device& d, VkExtent2D newExtent,
                               VkFormat /*swapchainFmt*/, GLFWwindow* /*window*/) {
     m_rt.destroy();
     m_rt.create(d, newExtent, msaaSamples);
-    m_lighting.bindFrame(d, m_rt, m_gbuffer.frameUboHandle(),
+    m_lighting.bindFrame(m_rt, m_gbuffer.frameUboHandle(),
                          m_lpv.current(), m_vxgi, m_prt, m_ddgi,
                          m_ddgi.probeStates().handle());
     m_ssao.bindFrame(m_rt);
@@ -491,8 +491,8 @@ void FrameRenderer::applyShadowSelection(int idx) {
     if (idx < 0 || idx >= kShadowCount) idx = 1;
     m_shadow.setMethod((ShadowMethod)idx);
     // 更新 lighting 端的 shadow mask image view（shader 同一张 Image）
-    if (m_device) {
-        m_lighting.bindShadowMask(*m_device, m_shadow.shadowMask().view());
+    if (m_rhiDevice) {
+        m_lighting.bindShadowMask(m_shadow.shadowMask().view());
     }
 }
 
@@ -1385,9 +1385,12 @@ void FrameRenderer::registerPipelineSteps() {
                 VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
 
             float jitterRot = float((frameIndex() % 360) * 0.0174532925);
-            ddgiPass().record(cmd, ddgi(), ddgiOrigin(), ddgiSpacing(),
-                vxgiGridMin(), vxgiCellSize(), kVxgiResolution,
-                jitterRot, frameIndex());
+            {
+                rhi::VkRHICommandBuffer rhiCmd(static_cast<rhi::VkRHIDevice&>(*rhiDevice()), cmd);
+                ddgiPass().record(rhiCmd, ddgi(), ddgiOrigin(), ddgiSpacing(),
+                    vxgiGridMin(), vxgiCellSize(), kVxgiResolution,
+                    jitterRot, frameIndex());
+            }
 
             barrierAtlas(ddgi().irradiance().image(),
                 VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
@@ -1513,9 +1516,12 @@ void FrameRenderer::registerPipelineSteps() {
                 transToGeneral(lumen().filteredAtlas().image());
                 lumenAtlasInited() = true;
             }
-            lumenProbe().record(cmd, lumen(), frameIndex(),
+            {
+                rhi::VkRHICommandBuffer rhiCmd(static_cast<rhi::VkRHIDevice&>(*rhiDevice()), cmd);
+                lumenProbe().record(rhiCmd, lumen(), frameIndex(),
                                      lumenDebugMode() >= 3 ? (uint32_t)lumenDebugMode() - 1u
                                                            : (vxgiSixAxisInited() ? 1u : 0u));
+            }
 
             // ProbeAtlas GENERAL → SR_O for filter
             {
@@ -1853,7 +1859,10 @@ void FrameRenderer::registerPipelineSteps() {
                 VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
                 VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                 VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
-            lighting().record(cmd, rt());
+            {
+                rhi::VkRHICommandBuffer rhiCmd(static_cast<rhi::VkRHIDevice&>(*rhiDevice()), cmd);
+                lighting().record(rhiCmd, rt());
+            }
             writeTimestamp(cmd, kTsLighting);
         }
     });
@@ -1879,7 +1888,10 @@ void FrameRenderer::registerPipelineSteps() {
                 VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
                 VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT,
                 VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT);
-            skybox().record(cmd, rt());
+            {
+                rhi::VkRHICommandBuffer rhiCmd(static_cast<rhi::VkRHIDevice&>(*rhiDevice()), cmd);
+                skybox().record(rhiCmd, rt());
+            }
         }
     });
 

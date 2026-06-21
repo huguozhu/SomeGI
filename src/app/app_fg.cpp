@@ -1056,7 +1056,8 @@ void App::setupFrameGraph() {
             b.read(m_fgh.lumenGI);
             b.write(m_fgh.hdrColor);
             b.setExecute([this](VkCommandBuffer cmd, const FGResources&) {
-                m_renderer.lighting().record(cmd, m_renderer.rt());
+                rhi::VkRHICommandBuffer rhiCmd(static_cast<rhi::VkRHIDevice&>(*m_renderer.rhiDevice()), cmd);
+                m_renderer.lighting().record(rhiCmd, m_renderer.rt());
             });
         });
     }
@@ -1092,7 +1093,10 @@ void App::setupFrameGraph() {
                     VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
                     VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT |
                         VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT);
-                m_renderer.skybox().record(cmd, m_renderer.rt());
+                {
+                    rhi::VkRHICommandBuffer rhiCmd(static_cast<rhi::VkRHIDevice&>(*m_renderer.rhiDevice()), cmd);
+                    m_renderer.skybox().record(rhiCmd, m_renderer.rt());
+                }
                 transitionImage(cmd, m_renderer.rt().depth.image(), VK_IMAGE_ASPECT_DEPTH_BIT,
                     VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
                     VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,

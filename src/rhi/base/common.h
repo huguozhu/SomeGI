@@ -69,6 +69,9 @@ enum class TextureUsage : uint32_t {
     TransferSrc     = 1 << 4,
     TransferDst     = 1 << 5,
 };
+inline constexpr TextureUsage operator|(TextureUsage a, TextureUsage b) {
+    return static_cast<TextureUsage>(static_cast<uint32_t>(a) | static_cast<uint32_t>(b));
+}
 
 struct TextureDesc {
     Format format = Format::R8G8B8A8_UNORM;

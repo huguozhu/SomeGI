@@ -26,6 +26,9 @@ public:
     const rhi::RHITexture& normalTex()   const { return *m_normalTex; }
     const rhi::RHITexture& fluxTex()     const { return *m_fluxTex; }
     const rhi::RHITexture& depthTex()    const { return *m_depthTex; }
+    VkImageView position() const { return (VkImageView)(uintptr_t)m_positionView->nativeHandle(); }
+    VkImageView normal()   const { return (VkImageView)(uintptr_t)m_normalView->nativeHandle(); }
+    VkImageView flux()     const { return (VkImageView)(uintptr_t)m_fluxView->nativeHandle(); }
     VkBuffer frameUboHandle() const { return (VkBuffer)(uintptr_t)m_rsmFrameUbo->nativeHandle(); }
     static constexpr uint32_t kRsmSize = 512;
 

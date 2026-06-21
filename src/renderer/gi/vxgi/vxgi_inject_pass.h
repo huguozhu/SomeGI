@@ -3,14 +3,14 @@
 #include <glm/glm.hpp>
 #include <memory>
 #include <vulkan/vulkan.h>
-namespace somegi { class Image; class VxgiResources;
+namespace somegi { class VxgiResources;
 namespace rhi { class RHIDevice; class RHIDescriptorSetLayout; class RHIPipelineState; class RHIDescriptorSet; class RHICommandBuffer; }
 class VxgiInjectPass {
 public:
     ~VxgiInjectPass();
     void init(rhi::RHIDevice& d, uint32_t rsmSize);
     void destroy();
-    void bindResources(const Image& rsmPos, const Image& rsmFlux, const VxgiResources& vxgi);
+    void bindResources(VkImageView rsmPosView, VkImageView rsmFluxView, const VxgiResources& vxgi);
     void record(rhi::RHICommandBuffer& cmd, uint32_t gridRes, const glm::vec3& gridMin, float cellSize);
     void record(VkCommandBuffer cmd, uint32_t gridRes, const glm::vec3& gridMin, float cellSize);
 private:

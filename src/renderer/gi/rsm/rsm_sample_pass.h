@@ -15,7 +15,7 @@ public:
     void init(rhi::RHIDevice& d);
     void destroy();
     void bindFrame(const RenderTargets& rt, VkBuffer frameUbo, VkBuffer rsmUbo,
-                   const Image& rsmPos, const Image& rsmN, const Image& rsmFlux);
+                   VkImageView rsmPos, VkImageView rsmN, VkImageView rsmFlux);
     void record(rhi::RHICommandBuffer& cmd, const RenderTargets& rt);
     void record(VkCommandBuffer cmd, const RenderTargets& rt);
 

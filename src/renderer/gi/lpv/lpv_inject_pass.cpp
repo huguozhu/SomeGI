@@ -34,12 +34,12 @@ void LpvInjectPass::init(rhi::RHIDevice& d, uint32_t rsmSize) {
 
 void LpvInjectPass::destroy() { m_set.reset(); m_pipeline.reset(); m_setLayout.reset(); m_rhiDevice=nullptr; }
 
-void LpvInjectPass::bindResources(const Image& rsmPos, const Image& rsmN, const Image& rsmFlux, const LpvGrid& grid, const Image& gv) {
+void LpvInjectPass::bindResources(VkImageView rsmPosView, VkImageView rsmNView, VkImageView rsmFluxView, const LpvGrid& grid, const Image& gv) {
     if(!m_set)return; auto& vkD=static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
     m_set->write({
-        {0,rhi::DescriptorType::SampledImage,rhi::VkRHITextureView::createNonOwning(vkD,rsmPos.view()).get()},
-        {1,rhi::DescriptorType::SampledImage,rhi::VkRHITextureView::createNonOwning(vkD,rsmN.view()).get()},
-        {2,rhi::DescriptorType::SampledImage,rhi::VkRHITextureView::createNonOwning(vkD,rsmFlux.view()).get()},
+        {0,rhi::DescriptorType::SampledImage,rhi::VkRHITextureView::createNonOwning(vkD,rsmPosView).get()},
+        {1,rhi::DescriptorType::SampledImage,rhi::VkRHITextureView::createNonOwning(vkD,rsmNView).get()},
+        {2,rhi::DescriptorType::SampledImage,rhi::VkRHITextureView::createNonOwning(vkD,rsmFluxView).get()},
         {3,rhi::DescriptorType::StorageImage,rhi::VkRHITextureView::createNonOwning(vkD,grid.lpvR.view()).get()},
         {4,rhi::DescriptorType::StorageImage,rhi::VkRHITextureView::createNonOwning(vkD,grid.lpvG.view()).get()},
         {5,rhi::DescriptorType::StorageImage,rhi::VkRHITextureView::createNonOwning(vkD,grid.lpvB.view()).get()},

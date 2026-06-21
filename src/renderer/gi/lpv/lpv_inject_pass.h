@@ -15,7 +15,7 @@ public:
     ~LpvInjectPass();
     void init(rhi::RHIDevice& d, uint32_t rsmSize);
     void destroy();
-    void bindResources(const Image& rsmPos, const Image& rsmN, const Image& rsmFlux,
+    void bindResources(VkImageView rsmPos, VkImageView rsmN, VkImageView rsmFlux,
                        const LpvGrid& grid, const Image& gv);
     void record(rhi::RHICommandBuffer& cmd, uint32_t gridRes,
                 const glm::vec3& gridMin, float cellSize);

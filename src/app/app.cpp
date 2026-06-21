@@ -158,7 +158,7 @@ App::App() {
     std::printf("[init] env bake done.\n");
     m_renderer.skybox().bindEnv(m_renderer.envIbl().envCube.view(),
                                 m_renderer.envIbl().linear);
-    m_renderer.lighting().bindIblResources(*m_device, m_renderer.envIbl());
+    m_renderer.lighting().bindIblResources(m_renderer.envIbl());
     m_renderer.forward().bindIblResources(*m_device, m_renderer.envIbl());
     if (m_renderer.useMeshShader())
         m_renderer.forward().setMeshShaderEnabled(true);
@@ -336,7 +336,7 @@ void App::applySceneSelection() {
     m_renderer.shadow().bindScene(*m_device, m_sceneGpu);
     m_renderer.shadow().setSceneAabb(m_scene.aabbMin, m_scene.aabbMax);
     m_renderer.shadow().setSunDir(m_sunDir);
-    m_renderer.lighting().bindShadowMask(*m_device, m_renderer.shadow().shadowMask().view());
+    m_renderer.lighting().bindShadowMask(m_renderer.shadow().shadowMask().view());
 
     if (m_sceneIndexApplied >= 0) {
         // Tonemap pass cached the old sampler; old one was destroyed above.
@@ -598,7 +598,7 @@ void App::onSwapchainResized() {
 
     m_renderer.rt().destroy();
     m_renderer.rt().create(*m_device, m_swap->extent(), m_msaaSamples);
-    m_renderer.lighting().bindFrame(*m_device, m_renderer.rt(), m_renderer.gbuffer().frameUboHandle(),
+    m_renderer.lighting().bindFrame(m_renderer.rt(), m_renderer.gbuffer().frameUboHandle(),
                          m_renderer.lpv().current(), m_renderer.vxgi(), m_renderer.prt(), m_renderer.ddgi(),
                          m_renderer.ddgi().probeStates().handle());
     m_renderer.ssao().bindFrame(m_renderer.rt());
@@ -650,7 +650,7 @@ void App::onSwapchainResized() {
         m_renderer.rt().ensureAaResources(*m_device);
         m_renderer.taa().bindResources(m_renderer.rt(), 0);
         m_renderer.smaa().destroy();
-        m_renderer.smaa().init(*m_device, *m_renderer.rhiDevice(), m_swap->extent());
+        m_renderer.smaa().init(*m_renderer.rhiDevice(), m_swap->extent());
         m_renderer.smaa().bindResources(m_renderer.rt());
     }
     m_renderer.bootstrapHdrPrev();   // fresh hdrPrev image — clear it before SSR can read
