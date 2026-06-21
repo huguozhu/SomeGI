@@ -26,6 +26,7 @@
 #include "renderer/gi/ndgi/ndgi_pass.h"
 #include "renderer/core/lighting_pass.h"
 #include "rhi/base/device.h"
+#include "rhi/base/command_buffer.h"
 #include "renderer/ao/ssao_pass.h"
 #include "renderer/ao/gtao_pass.h"
 #include "renderer/screenspace/ssr_pass.h"
@@ -227,9 +228,9 @@ public:
     const char* const* passNames() const { return m_passNames; }
 
     // GPU timestamp
-    VkQueryPool timestampPool() const { return m_timestampPool; }
+    rhi::RHIQueryPool* timestampPool() const { return m_timestampPool.get(); }
     bool& timestampValid(uint32_t i)  { return m_timestampValid[i]; }
-    void writeTimestamp(VkCommandBuffer cmd, uint32_t slot);
+    void writeTimestamp(rhi::RHICommandBuffer& cmd, uint32_t slot);
 
     // Frame state
     uint32_t& frameIndex() { return m_frameIndex; }
@@ -283,6 +284,10 @@ public:
     void registerPipelineSteps();
     void buildPipelineTable(const PipelineConfig& cfg);
     void rebuildDemoLights(const SceneCpu& cpu);
+
+    // RHI 迁移辅助：将原生 VkImage 包装为临时非拥有型 RHITexture
+    // 用于 barrier/clear/copy 等 RHI 调用
+    std::unique_ptr<rhi::RHITexture> wrapImage(VkImage img, VkFormat fmt, uint32_t w, uint32_t h, uint32_t mips = 1) const;
 
 private:
     Device* m_device = nullptr;
@@ -397,7 +402,7 @@ private:
     bool m_benchCollecting = false;
 
     // GPU timestamp
-    VkQueryPool m_timestampPool = VK_NULL_HANDLE;
+    std::unique_ptr<rhi::RHIQueryPool> m_timestampPool;
     bool m_timestampValid[kFramesInFlight]{};
     float m_gpuMs = 0.0f;
     float m_passMs[kFramesInFlight][kTimestampSlots]{};

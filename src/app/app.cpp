@@ -133,7 +133,8 @@ App::App() {
 
     // 初始化 FrameGraph（实验性）
     m_fg.init(*m_device);
-    m_fg.initTimestamps(*m_device, 32);  // GPU timestamp profiling: 最多 32 个 active pass
+    m_fg.setRHIDevice(m_renderer.rhiDevice());
+    m_fg.initTimestamps(*m_renderer.rhiDevice(), 32);  // GPU timestamp profiling: 最多 32 个 active pass
 
     // Init ImGui on the separate debug window
     m_renderer.imgui().init(*m_device, *m_renderer.rhiDevice(), m_imguiWin->handle(), m_imguiSwap->format(), kFramesInFlight);
@@ -1057,6 +1058,8 @@ void App::recordIndirectDraws(VkCommandBuffer cmd, uint32_t frameInFlight, const
 }
 
 void App::recordPostProcessing(VkCommandBuffer cmd) {
+    auto& vkDev = static_cast<rhi::VkRHIDevice&>(*m_renderer.rhiDevice());
+    rhi::VkRHICommandBuffer rhiCmd(vkDev, cmd);
     bool hdrActive = m_swap->hdrEnabled();
     bool aaActive = (m_aaMethod == AAMethod::TAA || m_aaMethod == AAMethod::SMAA);
     // FrameGraph 路径：HDR+AA 时 FG 统一处理 Tonemap + TAA/SMAA + Copy-aaHistory
@@ -1084,7 +1087,7 @@ void App::recordPostProcessing(VkCommandBuffer cmd) {
                     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
                 m_renderer.tonemap().bindOutput(m_renderer.rt().aaHdr.view(), m_frameCtx.frameInFlight);
                 m_renderer.tonemap().record(cmd, m_renderer.rt(), m_frameCtx.frameInFlight, true, 1.0f);
-                m_renderer.writeTimestamp(cmd, m_renderer.kTsTonemap);
+                m_renderer.writeTimestamp(rhiCmd, m_renderer.kTsTonemap);
 
                 // aaHdr: Tonemap 写入后布局为 GENERAL → SR_O 供 TAA/SMAA 读取
                 transitionImage(cmd, m_renderer.rt().aaHdr.image(), VK_IMAGE_ASPECT_COLOR_BIT,
@@ -1131,7 +1134,7 @@ void App::recordPostProcessing(VkCommandBuffer cmd) {
                     m_renderer.smaa().bindOutput(m_frameCtx.swapView);
                     m_renderer.smaa().record(rhiCmd, m_renderer.rt());
                 }
-                m_renderer.writeTimestamp(cmd, m_renderer.kTsAA);
+                m_renderer.writeTimestamp(rhiCmd, m_renderer.kTsAA);
             }
         } else {
             // No AA: tonemap writes directly to swapchain
@@ -1141,8 +1144,8 @@ void App::recordPostProcessing(VkCommandBuffer cmd) {
                 VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
             m_renderer.tonemap().bindOutput(m_frameCtx.swapView, m_frameCtx.frameInFlight);
             m_renderer.tonemap().record(cmd, m_renderer.rt(), m_frameCtx.frameInFlight, true, 1.0f);
-            m_renderer.writeTimestamp(cmd, m_renderer.kTsTonemap);
-            m_renderer.writeTimestamp(cmd, m_renderer.kTsAA);
+            m_renderer.writeTimestamp(rhiCmd, m_renderer.kTsTonemap);
+            m_renderer.writeTimestamp(rhiCmd, m_renderer.kTsAA);
         }
 
         // Transition swapchain to COLOR_ATTACHMENT for ImGui
@@ -1162,7 +1165,7 @@ void App::recordPostProcessing(VkCommandBuffer cmd) {
                 VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
             m_renderer.tonemap().bindOutput(m_renderer.rt().aaHdr.view(), m_frameCtx.frameInFlight);
             m_renderer.tonemap().record(cmd, m_renderer.rt(), m_frameCtx.frameInFlight);
-            m_renderer.writeTimestamp(cmd, m_renderer.kTsTonemap);
+            m_renderer.writeTimestamp(rhiCmd, m_renderer.kTsTonemap);
 
             transitionImage(cmd, m_renderer.rt().aaHdr.image(), VK_IMAGE_ASPECT_COLOR_BIT,
                 VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
@@ -1223,7 +1226,7 @@ void App::recordPostProcessing(VkCommandBuffer cmd) {
                 m_renderer.smaa().bindResources(m_renderer.rt());
                 m_renderer.smaa().record(rhiCmd, m_renderer.rt());
             }
-            m_renderer.writeTimestamp(cmd, m_renderer.kTsAA);
+            m_renderer.writeTimestamp(rhiCmd, m_renderer.kTsAA);
 
             // Barrier: ldrTonemap GENERAL → TRANSFER_SRC for blit
             transitionImage(cmd, m_renderer.rt().ldrTonemap.image(), VK_IMAGE_ASPECT_COLOR_BIT,
@@ -1238,8 +1241,8 @@ void App::recordPostProcessing(VkCommandBuffer cmd) {
                 VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
             m_renderer.tonemap().bindOutput(m_renderer.rt().ldrTonemap.view(), m_frameCtx.frameInFlight);
             m_renderer.tonemap().record(cmd, m_renderer.rt(), m_frameCtx.frameInFlight);
-            m_renderer.writeTimestamp(cmd, m_renderer.kTsTonemap);
-            m_renderer.writeTimestamp(cmd, m_renderer.kTsAA);
+            m_renderer.writeTimestamp(rhiCmd, m_renderer.kTsTonemap);
+            m_renderer.writeTimestamp(rhiCmd, m_renderer.kTsAA);
 
             // Barrier: ldrTonemap GENERAL → TRANSFER_SRC for blit
             transitionImage(cmd, m_renderer.rt().ldrTonemap.image(), VK_IMAGE_ASPECT_COLOR_BIT,
@@ -1278,7 +1281,7 @@ void App::recordPostProcessing(VkCommandBuffer cmd) {
         VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT, 0);
 
     // Final timestamp + transition to present
-    m_renderer.writeTimestamp(cmd, m_renderer.kTsEnd);
+    m_renderer.writeTimestamp(rhiCmd, m_renderer.kTsEnd);
     transitionImage(cmd, m_frameCtx.swapImage, VK_IMAGE_ASPECT_COLOR_BIT,
         VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
         VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
@@ -1431,31 +1434,24 @@ void App::run() {
         rhi::VkRHICommandBuffer rhiCmd(vkDev, cmd);
 
         // ---- Timestamp readback from previous frame ----
-        // 使用 WITH_AVAILABILITY 而非 WAIT：FrameGraph 路径不会写入旧管线的
-        // AO/VoxelGI/Skybox 等 slot，WAIT 会导致在这些未写入 slot 上永久阻塞。
+        // 使用 RHI getResults（内部 WAIT_BIT）：保证所有写入 slot 的结果可用。
+        // FrameGraph 路径不会写入旧管线的 AO/VoxelGI/Skybox 等 slot 的问题，
+        // 通过只在 frame #1 之后读取来规避（timestampValid 检查）。
         uint32_t qBase = frame.frameInFlight * m_renderer.kTimestampSlots;
         if (m_renderer.timestampValid(frame.frameInFlight)) {
-            uint64_t tsArr[m_renderer.kTimestampSlots * 2] = {};
-            VkResult r = vkGetQueryPoolResults(m_device->device(), m_renderer.timestampPool(),
-                qBase, m_renderer.kTimestampSlots, sizeof(tsArr), tsArr, 2 * sizeof(uint64_t),
-                VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WITH_AVAILABILITY_BIT);
-            if (r == VK_SUCCESS || r == VK_NOT_READY) {
-                float period = m_device->timestampPeriod() * 1e-6f;
-                float total = 0;
-                float* dst = m_renderer.passTimes(frame.frameInFlight);
-                for (uint32_t i = 1; i < m_renderer.kTimestampSlots; ++i) {
-                    uint64_t curVal   = tsArr[i * 2];
-                    uint64_t curAvail = tsArr[i * 2 + 1];
-                    uint64_t prevVal   = tsArr[(i - 1) * 2];
-                    uint64_t prevAvail = tsArr[(i - 1) * 2 + 1];
-                    if (curAvail && prevAvail && curVal > prevVal) {
-                        float ms = float(curVal - prevVal) * period;
-                        dst[i] = dst[i] * 0.9f + ms * 0.1f;
-                        total += ms;
-                    }
+            uint64_t tsArr[m_renderer.kTimestampSlots] = {};
+            m_renderer.timestampPool()->getResults(qBase, m_renderer.kTimestampSlots, tsArr);
+            float period = m_device->timestampPeriod() * 1e-6f;
+            float total = 0;
+            float* dst = m_renderer.passTimes(frame.frameInFlight);
+            for (uint32_t i = 1; i < m_renderer.kTimestampSlots; ++i) {
+                if (tsArr[i] > tsArr[i - 1]) {
+                    float ms = float(tsArr[i] - tsArr[i - 1]) * period;
+                    dst[i] = dst[i] * 0.9f + ms * 0.1f;
+                    total += ms;
                 }
-                if (total > 0) m_renderer.gpuMs() = m_renderer.gpuMs() * 0.9f + total * 0.1f;
             }
+            if (total > 0) m_renderer.gpuMs() = m_renderer.gpuMs() * 0.9f + total * 0.1f;
         }
         if (m_useGpuCulling && m_countBuf.handle() != VK_NULL_HANDLE && m_drawCount > 0) {
             uint32_t culled = *(uint32_t*)m_countBuf.mapped();
@@ -1475,9 +1471,12 @@ void App::run() {
         });
 
         // ---- Reset timestamp pool + write start ----
-        vkCmdResetQueryPool(cmd, m_renderer.timestampPool(), qBase, m_renderer.kTimestampSlots);
-        vkCmdWriteTimestamp2(cmd, VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT,
-                             m_renderer.timestampPool(), qBase + m_renderer.kTsStart);
+        {
+            auto& vkDev = static_cast<rhi::VkRHIDevice&>(*m_renderer.rhiDevice());
+            rhi::VkRHICommandBuffer rhiCmd(vkDev, cmd);
+            rhiCmd.resetQueryPool(*m_renderer.timestampPool(), qBase, m_renderer.kTimestampSlots);
+            rhiCmd.writeTimestamp(*m_renderer.timestampPool(), qBase + m_renderer.kTsStart);
+        }
 
         // ---- GPU-driven indirect draws ----
         recordIndirectDraws(cmd, frame.frameInFlight, ubo.viewProj);
