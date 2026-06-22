@@ -33,8 +33,8 @@ void RenderPipeline::executeRHI(rhi::RHICommandBuffer& cmd) {
             // 优先 RHI 路径
             step->recordRHI(cmd);
         } else if (step->record) {
-            // 未迁移的步骤：通过 VkRHICommandBuffer 桥接
-            auto vkCmd = static_cast<rhi::VkRHICommandBuffer&>(cmd).vkCmd();
+            // 未迁移的步骤：通过 nativeHandle 桥接
+            auto vkCmd = (VkCommandBuffer)(uintptr_t)cmd.nativeHandle();
             step->record(vkCmd);
         }
     }

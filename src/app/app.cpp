@@ -963,11 +963,10 @@ void App::buildFrameUBO(FrameUBO& ubo) {
                           m_sunIntensity);
 }
 
-void App::recordIndirectDraws(VkCommandBuffer cmd, uint32_t frameInFlight, const glm::mat4& viewProj) {
+void App::recordIndirectDraws(rhi::RHICommandBuffer& rhiCmd, uint32_t frameInFlight, const glm::mat4& viewProj) {
     if (m_drawCount == 0) return;
 
     if (m_useGpuCulling) {
-        rhi::VkRHICommandBuffer rhiCmd(static_cast<rhi::VkRHIDevice&>(*m_renderer.rhiDevice()), cmd);
         // Build Hi-Z from previous frame's depth (only if occlusion enabled)
         if (m_useHiZOcclusion) m_renderer.hizPass().record(rhiCmd, m_renderer.rt());
 
@@ -1009,9 +1008,8 @@ void App::recordIndirectDraws(VkCommandBuffer cmd, uint32_t frameInFlight, const
     }
 }
 
-void App::recordPostProcessing(VkCommandBuffer cmd) {
+void App::recordPostProcessing(rhi::RHICommandBuffer& rhiCmd) {
     auto& vkDev = static_cast<rhi::VkRHIDevice&>(*m_renderer.rhiDevice());
-    rhi::VkRHICommandBuffer rhiCmd(vkDev, cmd);
     bool hdrActive = m_swap->hdrEnabled();
     bool aaActive = (m_aaMethod == AAMethod::TAA || m_aaMethod == AAMethod::SMAA);
     // FrameGraph 路径：HDR+AA 时 FG 统一处理 Tonemap + TAA/SMAA + Copy-aaHistory
@@ -1082,10 +1080,10 @@ void App::recordPostProcessing(VkCommandBuffer cmd) {
                         VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
                         VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
                 } else {
-                    rhi::VkRHICommandBuffer rhiCmd(static_cast<rhi::VkRHIDevice&>(*m_renderer.rhiDevice()), cmd);
+                    rhi::VkRHICommandBuffer rhiCmdSMAA(static_cast<rhi::VkRHIDevice&>(*m_renderer.rhiDevice()), (VkCommandBuffer)(uintptr_t)rhiCmd.nativeHandle());
                     m_renderer.smaa().bindResources(m_renderer.rt());
                     m_renderer.smaa().bindOutput(m_frameCtx.swapView);
-                    m_renderer.smaa().record(rhiCmd, m_renderer.rt());
+                    m_renderer.smaa().record(rhiCmdSMAA, m_renderer.rt());
                 }
                 m_renderer.writeTimestamp(rhiCmd, m_renderer.kTsAA);
             }
@@ -1174,9 +1172,9 @@ void App::recordPostProcessing(VkCommandBuffer cmd) {
                     VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
                     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
             } else {
-                rhi::VkRHICommandBuffer rhiCmd(static_cast<rhi::VkRHIDevice&>(*m_renderer.rhiDevice()), cmd);
+                rhi::VkRHICommandBuffer rhiCmdImgui(static_cast<rhi::VkRHIDevice&>(*m_renderer.rhiDevice()), (VkCommandBuffer)(uintptr_t)rhiCmd.nativeHandle());
                 m_renderer.smaa().bindResources(m_renderer.rt());
-                m_renderer.smaa().record(rhiCmd, m_renderer.rt());
+                m_renderer.smaa().record(rhiCmdImgui, m_renderer.rt());
             }
             m_renderer.writeTimestamp(rhiCmd, m_renderer.kTsAA);
 
@@ -1387,7 +1385,6 @@ void App::run() {
         // ---- Begin frame (context 内自动 reset+begin cmd buffer) ----
         auto& rhiCtx = static_cast<rhi::VkContext&>(*m_context);
         auto& rhiCmd = rhiCtx.beginFrame(frame.frameInFlight);
-        VkCommandBuffer cmd = rhiCtx.vkCommandBuffer(frame.frameInFlight);
 
         // ---- Timestamp readback from previous frame ----
         // 使用 RHI getResults（内部 WAIT_BIT）：保证所有写入 slot 的结果可用。
@@ -1433,7 +1430,7 @@ void App::run() {
         }
 
         // ---- GPU-driven indirect draws ----
-        recordIndirectDraws(cmd, frame.frameInFlight, ubo.viewProj);
+        recordIndirectDraws(rhiCmd, frame.frameInFlight, ubo.viewProj);
 
         // ---- Shadow: 更新 sun 方向 + 绑定每帧资源 ----
         m_renderer.shadow().setSunDir(m_sunDir);
@@ -1479,7 +1476,7 @@ void App::run() {
         ++m_renderer.frameIndex();
 
         // ---- Post-processing (tonemap + AA + blit) ----
-        recordPostProcessing(cmd);
+        recordPostProcessing(rhiCmd);
 
         // ---- Finalize + submit main window (via RHI context) ----
         m_renderer.timestampValid(m_frameCtx.frameInFlight) = true;

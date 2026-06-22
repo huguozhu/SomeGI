@@ -244,8 +244,8 @@ private:
     void setupFgImports(VkExtent3D ext, bool aaEnabled);
     // Frame loop helpers (extracted from run())
     void buildFrameUBO(FrameUBO& ubo);
-    void recordIndirectDraws(VkCommandBuffer cmd, uint32_t frameInFlight, const glm::mat4& viewProj);
-    void recordPostProcessing(VkCommandBuffer cmd);
+    void recordIndirectDraws(rhi::RHICommandBuffer& cmd, uint32_t frameInFlight, const glm::mat4& viewProj);
+    void recordPostProcessing(rhi::RHICommandBuffer& cmd);
     void renderDebugWindow();
 
     void startBenchmark();
