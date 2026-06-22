@@ -32,9 +32,12 @@ struct AcquiredFrame {
     VkExtent2D nativeExtent() const       { return extent; }
 };
 
+namespace rhi { class VkRHIDevice; }
+
 class Swapchain {
 public:
     Swapchain(Device& device, Window& window);
+    Swapchain(rhi::VkRHIDevice& vkDev, Window& window);
     ~Swapchain();
 
     AcquiredFrame acquireNextFrame();
@@ -48,11 +51,15 @@ public:
     void setHdrEnabled(bool on);
 
 private:
+    void init(VkDevice device, VkPhysicalDevice physDev, VkInstance instance, VkQueue gq);
     void create();
     void destroy();
 
-    Device& m_device;
     Window& m_window;
+    VkDevice m_vkDevice = VK_NULL_HANDLE;
+    VkPhysicalDevice m_physDevice = VK_NULL_HANDLE;
+    VkInstance m_vkInstance = VK_NULL_HANDLE;
+    VkQueue m_graphicsQueue = VK_NULL_HANDLE;
     VkSurfaceKHR m_surface = VK_NULL_HANDLE;
     VkSwapchainKHR m_swapchain = VK_NULL_HANDLE;
     VkFormat m_format = VK_FORMAT_UNDEFINED;
@@ -62,7 +69,7 @@ private:
     VkExtent2D m_extent{};
     std::vector<VkImage> m_images;
     std::vector<VkImageView> m_views;
-    std::vector<VkSemaphore> m_renderFinished;  // per swapchain image
+    std::vector<VkSemaphore> m_renderFinished;
     std::vector<FrameSync> m_frameSync;
     uint32_t m_currentFrame = 0;
 };

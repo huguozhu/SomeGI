@@ -1,26 +1,40 @@
 #include "swapchain.h"
 #include "device.h"
 #include "window.h"
+#include "rhi/vulkan/vk_device.h"
 #include <VkBootstrap.h>
 
 namespace somegi {
 
-Swapchain::Swapchain(Device& device, Window& window) : m_device(device), m_window(window) {
-    m_surface = m_window.createSurface(m_device.instance());
+Swapchain::Swapchain(rhi::VkRHIDevice& vkDev, Window& window) : m_window(window) {
+    init(vkDev.vkDevice(), vkDev.vkPhysicalDevice(), vkDev.vkInstance(), vkDev.vkQueue());
+}
+
+Swapchain::Swapchain(Device& device, Window& window) : m_window(window) {
+    init(device.device(), device.physicalDevice(), device.instance(), device.graphicsQueue());
+}
+
+void Swapchain::init(VkDevice device, VkPhysicalDevice physDev, VkInstance instance, VkQueue gq) {
+    m_vkDevice = device;
+    m_physDevice = physDev;
+    m_vkInstance = instance;
+    m_graphicsQueue = gq;
+
+    m_surface = m_window.createSurface(m_vkInstance);
     m_frameSync.resize(kFramesInFlight);
     VkSemaphoreCreateInfo sci{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
     VkFenceCreateInfo fci{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO, nullptr, VK_FENCE_CREATE_SIGNALED_BIT};
     for (auto& s : m_frameSync) {
-        VK_CHECK(vkCreateSemaphore(m_device.device(), &sci, nullptr, &s.imageAvailable));
-        VK_CHECK(vkCreateFence(m_device.device(), &fci, nullptr, &s.inFlight));
+        VK_CHECK(vkCreateSemaphore(m_vkDevice, &sci, nullptr, &s.imageAvailable));
+        VK_CHECK(vkCreateFence(m_vkDevice, &fci, nullptr, &s.inFlight));
     }
 
     // Query HDR support via surface formats
     {
         uint32_t count = 0;
-        vkGetPhysicalDeviceSurfaceFormatsKHR(m_device.physicalDevice(), m_surface, &count, nullptr);
+        vkGetPhysicalDeviceSurfaceFormatsKHR(m_physDevice, m_surface, &count, nullptr);
         std::vector<VkSurfaceFormatKHR> formats(count);
-        vkGetPhysicalDeviceSurfaceFormatsKHR(m_device.physicalDevice(), m_surface, &count, formats.data());
+        vkGetPhysicalDeviceSurfaceFormatsKHR(m_physDevice, m_surface, &count, formats.data());
         for (auto& fmt : formats) {
             if (fmt.format == VK_FORMAT_R16G16B16A16_SFLOAT &&
                 fmt.colorSpace == VK_COLOR_SPACE_EXTENDED_SRGB_LINEAR_EXT) {
@@ -37,15 +51,15 @@ Swapchain::Swapchain(Device& device, Window& window) : m_device(device), m_windo
 
 Swapchain::~Swapchain() {
     destroy();
-    if (m_surface) { vkDestroySurfaceKHR(m_device.instance(), m_surface, nullptr); }
+    if (m_surface) { vkDestroySurfaceKHR(m_vkInstance, m_surface, nullptr); }
     for (auto& s : m_frameSync) {
-        vkDestroySemaphore(m_device.device(), s.imageAvailable, nullptr);
-        vkDestroyFence(m_device.device(), s.inFlight, nullptr);
+        vkDestroySemaphore(m_vkDevice, s.imageAvailable, nullptr);
+        vkDestroyFence(m_vkDevice, s.inFlight, nullptr);
     }
 }
 
 void Swapchain::create() {
-    vkb::SwapchainBuilder sb{m_device.physicalDevice(), m_device.device(), m_surface};
+    vkb::SwapchainBuilder sb{m_physDevice, m_vkDevice, m_surface};
 
     VkSurfaceFormatKHR desired{};
     if (m_hdrEnabled && m_hdrAvailable) {
@@ -56,7 +70,7 @@ void Swapchain::create() {
 
     VkImageUsageFlags usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
     if (m_hdrEnabled && m_hdrAvailable) {
-        usage |= VK_IMAGE_USAGE_STORAGE_BIT; // scRGB output directly
+        usage |= VK_IMAGE_USAGE_STORAGE_BIT;
     }
 
     auto ret = sb.set_desired_format(desired)
@@ -76,30 +90,30 @@ void Swapchain::create() {
     m_renderFinished.resize(m_images.size());
     VkSemaphoreCreateInfo sci{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
     for (auto& s : m_renderFinished) {
-        VK_CHECK(vkCreateSemaphore(m_device.device(), &sci, nullptr, &s));
+        VK_CHECK(vkCreateSemaphore(m_vkDevice, &sci, nullptr, &s));
     }
 }
 
 void Swapchain::destroy() {
-    for (auto s : m_renderFinished) vkDestroySemaphore(m_device.device(), s, nullptr);
+    for (auto s : m_renderFinished) vkDestroySemaphore(m_vkDevice, s, nullptr);
     m_renderFinished.clear();
-    for (auto v : m_views) vkDestroyImageView(m_device.device(), v, nullptr);
+    for (auto v : m_views) vkDestroyImageView(m_vkDevice, v, nullptr);
     m_views.clear();
     if (m_swapchain) {
-        vkDestroySwapchainKHR(m_device.device(), m_swapchain, nullptr);
+        vkDestroySwapchainKHR(m_vkDevice, m_swapchain, nullptr);
         m_swapchain = VK_NULL_HANDLE;
     }
 }
 
 void Swapchain::recreate() {
-    m_device.waitIdle();
+    vkDeviceWaitIdle(m_vkDevice);
     destroy();
     create();
 }
 
 AcquiredFrame Swapchain::acquireNextFrame() {
     auto& s = m_frameSync[m_currentFrame];
-    vkWaitForFences(m_device.device(), 1, &s.inFlight, VK_TRUE, UINT64_MAX);
+    vkWaitForFences(m_vkDevice, 1, &s.inFlight, VK_TRUE, UINT64_MAX);
 
     AcquiredFrame f{};
     f.frameInFlight = m_currentFrame;
@@ -107,7 +121,7 @@ AcquiredFrame Swapchain::acquireNextFrame() {
     f.format = m_format;
     f.extent = m_extent;
 
-    VkResult r = vkAcquireNextImageKHR(m_device.device(), m_swapchain, UINT64_MAX,
+    VkResult r = vkAcquireNextImageKHR(m_vkDevice, m_swapchain, UINT64_MAX,
                                         s.imageAvailable, VK_NULL_HANDLE, &f.imageIndex);
     if (r == VK_ERROR_OUT_OF_DATE_KHR) {
         f.needsResize = true;
@@ -116,7 +130,7 @@ AcquiredFrame Swapchain::acquireNextFrame() {
     if (r != VK_SUCCESS && r != VK_SUBOPTIMAL_KHR) {
         throw std::runtime_error("vkAcquireNextImageKHR failed");
     }
-    vkResetFences(m_device.device(), 1, &s.inFlight);
+    vkResetFences(m_vkDevice, 1, &s.inFlight);
     f.image = m_images[f.imageIndex];
     f.view  = m_views[f.imageIndex];
     f.renderFinished = m_renderFinished[f.imageIndex];
@@ -130,7 +144,7 @@ void Swapchain::present(const AcquiredFrame& frame) {
     pi.swapchainCount = 1;
     pi.pSwapchains = &m_swapchain;
     pi.pImageIndices = &frame.imageIndex;
-    VkResult r = vkQueuePresentKHR(m_device.graphicsQueue(), &pi);
+    VkResult r = vkQueuePresentKHR(m_graphicsQueue, &pi);
     if (r == VK_ERROR_OUT_OF_DATE_KHR || r == VK_SUBOPTIMAL_KHR || m_window.resized()) {
         recreate();
     } else if (r != VK_SUCCESS) {
