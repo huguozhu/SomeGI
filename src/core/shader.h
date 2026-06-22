@@ -1,14 +1,13 @@
 #pragma once
 #include "vk_common.h"
-#include "rhi/base/shader.h"
 #include "path_util.h"
 #include <filesystem>
-#include <memory>
 
 namespace somegi {
 
-namespace rhi { class VkRHIDevice; }
 class Device;
+
+namespace rhi { class VkRHIDevice; }
 
 class ShaderModule {
 public:
@@ -25,8 +24,8 @@ public:
     VkShaderModule handle() const { return m_module; }
 
 private:
-    VkShaderModule m_module = VK_NULL_HANDLE;  // 缓存原生句柄（兼容旧调用方）
-    std::unique_ptr<rhi::RHIShader> m_rhiShader;  // RHI 拥有实际资源
+    rhi::VkRHIDevice* m_rhiDev = nullptr;  // RHI 设备指针（不拥有）
+    VkShaderModule m_module = VK_NULL_HANDLE;
 };
 
 std::filesystem::path shaderDir();

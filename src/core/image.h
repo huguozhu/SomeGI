@@ -1,8 +1,8 @@
 #pragma once
 #include "vk_common.h"
-#include "rhi/base/device.h"
-#include "rhi/base/texture.h"
-#include <memory>
+
+struct VmaAllocation_T;
+typedef VmaAllocation_T* VmaAllocation;
 
 namespace somegi {
 namespace rhi { class VkRHIDevice; }
@@ -35,8 +35,8 @@ public:
     void swap(Image& o) noexcept;
     void reset();
 
-    VkImage image() const;
-    VkImageView view() const;
+    VkImage image() const { return m_image; }
+    VkImageView view() const { return m_view; }
     VkFormat format() const { return m_desc.format; }
     VkExtent3D extent() const { return m_desc.extent; }
     const ImageDesc& desc() const { return m_desc; }
@@ -44,10 +44,10 @@ public:
     uint32_t arrayLayers() const { return m_desc.arrayLayers; }
 
 private:
-    void init(rhi::RHIDevice& device, const ImageDesc& desc);
-
-    std::unique_ptr<rhi::RHITexture> m_rhiTexture;     // RHI 拥有实际 VkImage
-    std::unique_ptr<rhi::RHITextureView> m_rhiView;     // RHI 拥有实际 VkImageView
+    rhi::VkRHIDevice* m_rhiDev = nullptr;  // RHI 设备指针（不拥有），所有 Vulkan 调用委托给它
+    VkImage m_image = VK_NULL_HANDLE;
+    VkImageView m_view = VK_NULL_HANDLE;
+    VmaAllocation m_allocation = VK_NULL_HANDLE;
     ImageDesc m_desc{};
 };
 
