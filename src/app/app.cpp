@@ -42,6 +42,22 @@
 
 namespace somegi {
 
+// ── transitionImage 的 RHI 替代版 ──
+// 用法：将 transitionImage(cmd, image, aspect, oldLayout, newLayout, src, sa, dst, da)
+//      替换为 rhiTransitionImage(rhiCmd, vkDev, image, vkFmt, w, h,
+//                                oldLayout, newLayout, src, sa, dst, da)
+static void rhiTransitionImage(rhi::RHICommandBuffer& rhiCmd, rhi::VkRHIDevice& vkDev,
+                                VkImage image, VkFormat vkFormat, uint32_t width, uint32_t height,
+                                VkImageLayout oldLayout, VkImageLayout newLayout,
+                                VkPipelineStageFlags2 srcStage, VkAccessFlags2 srcAccess,
+                                VkPipelineStageFlags2 dstStage, VkAccessFlags2 dstAccess) {
+    auto tex = rhi::VkRHITexture::createNonOwning(vkDev, image,
+        rhi::toRhiFormat(vkFormat), width, height);
+    rhiCmd.textureBarrier(*tex,
+        fromVkLayout(oldLayout), fromVkLayout(newLayout),
+        fromVkStage(srcStage), fromVkAccess(srcAccess),
+        fromVkStage(dstStage), fromVkAccess(dstAccess));
+}
 
 App::App() {
     WindowDesc wd; wd.title = "SomeGI"; wd.width = 800; wd.height = 450;
@@ -1011,7 +1027,7 @@ void App::recordPostProcessing(VkCommandBuffer cmd) {
 
     // hdrColor → SHADER_READ_ONLY：FrameGraph AA 模式下由 Tonemap pass auto-barrier 处理
     if (!fgHandlesPostAA) {
-        transitionImage(cmd, m_renderer.rt().hdrColor.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+        rhiTransitionImage(rhiCmd, vkDev, m_renderer.rt().hdrColor.image(), m_renderer.rt().hdrColor.format(), m_renderer.rt().extent.width, m_renderer.rt().extent.height,
             VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
             VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_READ_BIT,
@@ -1025,7 +1041,7 @@ void App::recordPostProcessing(VkCommandBuffer cmd) {
             // swapImage 已被 TAA/SMAA pass 写入为 GENERAL
             if (!fgHandlesPostAA) {
                 m_renderer.rt().ensureAaResources(*m_device);
-                transitionImage(cmd, m_renderer.rt().aaHdr.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                rhiTransitionImage(rhiCmd, vkDev, m_renderer.rt().aaHdr.image(), m_renderer.rt().aaHdr.format(), m_renderer.rt().extent.width, m_renderer.rt().extent.height,
                     VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
                     VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
                     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
@@ -1034,12 +1050,12 @@ void App::recordPostProcessing(VkCommandBuffer cmd) {
                 m_renderer.writeTimestamp(rhiCmd, m_renderer.kTsTonemap);
 
                 // aaHdr: Tonemap 写入后布局为 GENERAL → SR_O 供 TAA/SMAA 读取
-                transitionImage(cmd, m_renderer.rt().aaHdr.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                rhiTransitionImage(rhiCmd, vkDev, m_renderer.rt().aaHdr.image(), m_renderer.rt().aaHdr.format(), m_renderer.rt().extent.width, m_renderer.rt().extent.height,
                     VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
                     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT);
 
-                transitionImage(cmd, m_frameCtx.swapImage, VK_IMAGE_ASPECT_COLOR_BIT,
+                rhiTransitionImage(rhiCmd, vkDev, m_frameCtx.swapImage, m_swap->format(), m_swap->extent().width, m_swap->extent().height,
                     VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
                     VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
                     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
@@ -1050,11 +1066,11 @@ void App::recordPostProcessing(VkCommandBuffer cmd) {
                     m_renderer.taa().record(rhiCmd, m_renderer.rt(), m_jitter, m_prevJitter,
                                 m_frameCtx.invViewProj, m_prevViewProj, m_frameCtx.frameInFlight, m_taaBlendAlpha);
                     // Copy aaHdr → aaHistory for next frame
-                    transitionImage(cmd, m_renderer.rt().aaHdr.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                    rhiTransitionImage(rhiCmd, vkDev, m_renderer.rt().aaHdr.image(), m_renderer.rt().aaHdr.format(), m_renderer.rt().extent.width, m_renderer.rt().extent.height,
                         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                         VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
                         VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
-                    transitionImage(cmd, m_renderer.rt().aaHistory.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                    rhiTransitionImage(rhiCmd, vkDev, m_renderer.rt().aaHistory.image(), m_renderer.rt().aaHistory.format(), m_renderer.rt().extent.width, m_renderer.rt().extent.height,
                         VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                         VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
                         VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
@@ -1065,11 +1081,11 @@ void App::recordPostProcessing(VkCommandBuffer cmd) {
                         m_renderer.rt().aaHistory.image(), rhi::toRhiFormat(m_renderer.rt().aaHistory.format()),
                         m_renderer.rt().extent.width, m_renderer.rt().extent.height);
                     rhiCmd.copyTexture(*aaHdrTex, *aaHistTex);
-                    transitionImage(cmd, m_renderer.rt().aaHdr.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                    rhiTransitionImage(rhiCmd, vkDev, m_renderer.rt().aaHdr.image(), m_renderer.rt().aaHdr.format(), m_renderer.rt().extent.width, m_renderer.rt().extent.height,
                         VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                         VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_READ_BIT,
                         VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
-                    transitionImage(cmd, m_renderer.rt().aaHistory.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                    rhiTransitionImage(rhiCmd, vkDev, m_renderer.rt().aaHistory.image(), m_renderer.rt().aaHistory.format(), m_renderer.rt().extent.width, m_renderer.rt().extent.height,
                         VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                         VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
                         VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
@@ -1083,7 +1099,7 @@ void App::recordPostProcessing(VkCommandBuffer cmd) {
             }
         } else {
             // No AA: tonemap writes directly to swapchain
-            transitionImage(cmd, m_frameCtx.swapImage, VK_IMAGE_ASPECT_COLOR_BIT,
+            rhiTransitionImage(rhiCmd, vkDev, m_frameCtx.swapImage, m_swap->format(), m_swap->extent().width, m_swap->extent().height,
                 VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
                 VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
                 VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
@@ -1094,7 +1110,7 @@ void App::recordPostProcessing(VkCommandBuffer cmd) {
         }
 
         // Transition swapchain to COLOR_ATTACHMENT for ImGui
-        transitionImage(cmd, m_frameCtx.swapImage, VK_IMAGE_ASPECT_COLOR_BIT,
+        rhiTransitionImage(rhiCmd, vkDev, m_frameCtx.swapImage, m_swap->format(), m_swap->extent().width, m_swap->extent().height,
             VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
             VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
             VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
@@ -1104,7 +1120,7 @@ void App::recordPostProcessing(VkCommandBuffer cmd) {
             m_renderer.rt().ensureAaResources(*m_device);
 
             // Tonemap writes to aaHdr
-            transitionImage(cmd, m_renderer.rt().aaHdr.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+            rhiTransitionImage(rhiCmd, vkDev, m_renderer.rt().aaHdr.image(), m_renderer.rt().aaHdr.format(), m_renderer.rt().extent.width, m_renderer.rt().extent.height,
                 VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
                 VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
                 VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
@@ -1112,25 +1128,25 @@ void App::recordPostProcessing(VkCommandBuffer cmd) {
             m_renderer.tonemap().record(rhiCmd, m_renderer.rt(), m_frameCtx.frameInFlight);
             m_renderer.writeTimestamp(rhiCmd, m_renderer.kTsTonemap);
 
-            transitionImage(cmd, m_renderer.rt().aaHdr.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+            rhiTransitionImage(rhiCmd, vkDev, m_renderer.rt().aaHdr.image(), m_renderer.rt().aaHdr.format(), m_renderer.rt().extent.width, m_renderer.rt().extent.height,
                 VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                 VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
                 VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT);
 
-            transitionImage(cmd, m_renderer.rt().ldrTonemap.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+            rhiTransitionImage(rhiCmd, vkDev, m_renderer.rt().ldrTonemap.image(), m_renderer.rt().ldrTonemap.format(), m_renderer.rt().extent.width, m_renderer.rt().extent.height,
                 VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
                 VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
                 VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
 
             if (m_aaMethod == AAMethod::TAA) {
                 if (m_renderer.aaHistoryNeedsInit()) {
-                    transitionImage(cmd, m_renderer.rt().aaHistory.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                    rhiTransitionImage(rhiCmd, vkDev, m_renderer.rt().aaHistory.image(), m_renderer.rt().aaHistory.format(), m_renderer.rt().extent.width, m_renderer.rt().extent.height,
                         VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                         VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
                         VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
                     m_renderer.aaHistoryNeedsInit() = false;
                 }
-                transitionImage(cmd, m_renderer.rt().depth.image(), VK_IMAGE_ASPECT_DEPTH_BIT,
+                rhiTransitionImage(rhiCmd, vkDev, m_renderer.rt().depth.image(), m_renderer.rt().depth.format(), m_renderer.rt().extent.width, m_renderer.rt().extent.height,
                     VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
                     VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                     VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
@@ -1142,11 +1158,11 @@ void App::recordPostProcessing(VkCommandBuffer cmd) {
                             m_frameCtx.invViewProj, m_prevViewProj, m_frameCtx.frameInFlight, m_taaBlendAlpha);
 
                 // Copy aaHdr → aaHistory for next frame
-                transitionImage(cmd, m_renderer.rt().aaHdr.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                rhiTransitionImage(rhiCmd, vkDev, m_renderer.rt().aaHdr.image(), m_renderer.rt().aaHdr.format(), m_renderer.rt().extent.width, m_renderer.rt().extent.height,
                     VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
                     VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
-                transitionImage(cmd, m_renderer.rt().aaHistory.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                rhiTransitionImage(rhiCmd, vkDev, m_renderer.rt().aaHistory.image(), m_renderer.rt().aaHistory.format(), m_renderer.rt().extent.width, m_renderer.rt().extent.height,
                     VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                     VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
                     VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
@@ -1157,11 +1173,11 @@ void App::recordPostProcessing(VkCommandBuffer cmd) {
                     m_renderer.rt().aaHistory.image(), rhi::toRhiFormat(m_renderer.rt().aaHistory.format()),
                     m_renderer.rt().extent.width, m_renderer.rt().extent.height);
                 rhiCmd.copyTexture(*aaHdrTex, *aaHistTex);
-                transitionImage(cmd, m_renderer.rt().aaHdr.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                rhiTransitionImage(rhiCmd, vkDev, m_renderer.rt().aaHdr.image(), m_renderer.rt().aaHdr.format(), m_renderer.rt().extent.width, m_renderer.rt().extent.height,
                     VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                     VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_READ_BIT,
                     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
-                transitionImage(cmd, m_renderer.rt().aaHistory.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+                rhiTransitionImage(rhiCmd, vkDev, m_renderer.rt().aaHistory.image(), m_renderer.rt().aaHistory.format(), m_renderer.rt().extent.width, m_renderer.rt().extent.height,
                     VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                     VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
                     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
@@ -1173,13 +1189,13 @@ void App::recordPostProcessing(VkCommandBuffer cmd) {
             m_renderer.writeTimestamp(rhiCmd, m_renderer.kTsAA);
 
             // Barrier: ldrTonemap GENERAL → TRANSFER_SRC for blit
-            transitionImage(cmd, m_renderer.rt().ldrTonemap.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+            rhiTransitionImage(rhiCmd, vkDev, m_renderer.rt().ldrTonemap.image(), m_renderer.rt().ldrTonemap.format(), m_renderer.rt().extent.width, m_renderer.rt().extent.height,
                 VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                 VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
                 VK_PIPELINE_STAGE_2_BLIT_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
         } else {
             // No AA: tonemap writes directly to ldrTonemap
-            transitionImage(cmd, m_renderer.rt().ldrTonemap.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+            rhiTransitionImage(rhiCmd, vkDev, m_renderer.rt().ldrTonemap.image(), m_renderer.rt().ldrTonemap.format(), m_renderer.rt().extent.width, m_renderer.rt().extent.height,
                 VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
                 VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
                 VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
@@ -1189,7 +1205,7 @@ void App::recordPostProcessing(VkCommandBuffer cmd) {
             m_renderer.writeTimestamp(rhiCmd, m_renderer.kTsAA);
 
             // Barrier: ldrTonemap GENERAL → TRANSFER_SRC for blit
-            transitionImage(cmd, m_renderer.rt().ldrTonemap.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+            rhiTransitionImage(rhiCmd, vkDev, m_renderer.rt().ldrTonemap.image(), m_renderer.rt().ldrTonemap.format(), m_renderer.rt().extent.width, m_renderer.rt().extent.height,
                 VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                 VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
                 VK_PIPELINE_STAGE_2_BLIT_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
@@ -1219,14 +1235,14 @@ void App::recordPostProcessing(VkCommandBuffer cmd) {
     }
 
     // 恢复 hdrColor 到 TRANSFER_SRC，匹配 Copy-hdrPrev 的 descriptor layout
-    transitionImage(cmd, m_renderer.rt().hdrColor.image(), VK_IMAGE_ASPECT_COLOR_BIT,
+    rhiTransitionImage(rhiCmd, vkDev, m_renderer.rt().hdrColor.image(), m_renderer.rt().hdrColor.format(), m_renderer.rt().extent.width, m_renderer.rt().extent.height,
         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
         VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
         VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT, 0);
 
     // Final timestamp + transition to present
     m_renderer.writeTimestamp(rhiCmd, m_renderer.kTsEnd);
-    transitionImage(cmd, m_frameCtx.swapImage, VK_IMAGE_ASPECT_COLOR_BIT,
+    rhiTransitionImage(rhiCmd, vkDev, m_frameCtx.swapImage, m_swap->format(), m_swap->extent().width, m_swap->extent().height,
         VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
         VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
         VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT, 0);
