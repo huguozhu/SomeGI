@@ -39,7 +39,7 @@ using namespace somegi;
 // ════════════════════════════════════════════════════════════════
 // 后端选择状态（全局，因为 ImGui 回调需要静态访问）
 // ════════════════════════════════════════════════════════════════
-static rhi::Backend  s_currentBackend = rhi::Backend::Vulkan;
+static rhi::Backend  s_currentBackend = rhi::Backend::D3D12;
 static bool          s_pendingSwitch  = false;   // 本帧检测到切换请求
 
 // ════════════════════════════════════════════════════════════════
