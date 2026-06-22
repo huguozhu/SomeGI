@@ -19,6 +19,7 @@
 #include "core/window.h"
 #include "core/device.h"
 #include "core/swapchain.h"
+#include "rhi/vulkan/vk_common.h"  // fromVkLayout/fromVkStage/fromVkAccess
 #include "rhi/vulkan/vk_device.h"
 #include "rhi/vulkan/vk_command.h"
 #include "rhi/vulkan/vk_texture.h"
@@ -1283,12 +1284,19 @@ void App::renderDebugWindow() {
     if (f.needsResize) { m_imguiSwap->recreate(); return; }
 
     VkCommandBuffer c = m_imguiCmds[f.frameInFlight];
+    rhi::VkRHICommandBuffer rhiCmdDbg(static_cast<rhi::VkRHIDevice&>(*m_rhiDevice), c);
     vkResetCommandBuffer(c, 0);
     VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO, nullptr, VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT};
     VK_CHECK(vkBeginCommandBuffer(c, &bi));
-    transitionImage(c, f.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
+    rhiTransitionImage(rhiCmdDbg, static_cast<rhi::VkRHIDevice&>(*m_rhiDevice), f.image, f.format, f.extent.width, f.extent.height,
+        VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+        VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
+        VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
     m_renderer.imgui().render(c, f.view, f.extent);
-    transitionImage(c, f.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT, 0);
+    rhiTransitionImage(rhiCmdDbg, static_cast<rhi::VkRHIDevice&>(*m_rhiDevice), f.image, f.format, f.extent.width, f.extent.height,
+        VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+        VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+        VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT, 0);
     VK_CHECK(vkEndCommandBuffer(c));
     VkCommandBufferSubmitInfo cs{VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO, nullptr, c};
     VkSemaphoreSubmitInfo ws{VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO, nullptr, f.sync->imageAvailable, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT};

@@ -70,27 +70,9 @@ inline rhi::BufferAccess fromVkAccess(VkAccessFlags2 a) {
     return (rhi::BufferAccess)r;
 }
 
-// Vulkan 图像布局转换辅助函数 —— 内部委托到 RHI barrier API。
-// (注：rhiCmd 必须由调用方通过 VkRHICommandBuffer(vkDev, cmd) 构造并提供)
-namespace rhi { class VkRHICommandBuffer; class VkRHIDevice; class VkRHITexture; }
-
-// 旧接口：仅 VkCommandBuffer（保留兼容，内部直接调用 vkCmdPipelineBarrier2）
-inline void transitionImage(VkCommandBuffer cmd, VkImage image,
-                            VkImageAspectFlags aspect,
-                            VkImageLayout oldLayout, VkImageLayout newLayout,
-                            VkPipelineStageFlags2 srcStage, VkAccessFlags2 srcAccess,
-                            VkPipelineStageFlags2 dstStage, VkAccessFlags2 dstAccess) {
-    VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
-    b.srcStageMask  = srcStage;  b.srcAccessMask = srcAccess;
-    b.dstStageMask  = dstStage;  b.dstAccessMask = dstAccess;
-    b.oldLayout = oldLayout;     b.newLayout = newLayout;
-    b.image = image;
-    b.subresourceRange = {aspect, 0, 1, 0, 1};
-
-    VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-    di.imageMemoryBarrierCount = 1;
-    di.pImageMemoryBarriers = &b;
-    vkCmdPipelineBarrier2(cmd, &di);
-}
+// ════════════════════════════════════════════════════════════════
+// 提示：fromVkLayout/fromVkStage/fromVkAccess 已迁入 rhi/vulkan/vk_common.h
+//       transitionImage 已被 rhiTransitionImage 系列替代，不再使用
+// ════════════════════════════════════════════════════════════════
 
 }
