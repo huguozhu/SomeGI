@@ -18,12 +18,11 @@ struct AcquiredFrame {
     VkImageView view = VK_NULL_HANDLE;
     VkExtent2D extent{};
     VkFormat format = VK_FORMAT_UNDEFINED;
-    const FrameSync* sync = nullptr;            // for inFlight + imageAvailable
-    VkSemaphore renderFinished = VK_NULL_HANDLE; // per-swapchain-image
+    const FrameSync* sync = nullptr;
+    VkSemaphore renderFinished = VK_NULL_HANDLE;
     uint32_t frameInFlight = 0;
     bool needsResize = false;
 
-    // Void* 访问器（便于逐步迁移到 RHI 通用类型）
     void* nativeImage() const             { return (void*)image; }
     void* nativeView() const              { return (void*)view; }
     void* nativeImageAvailable() const    { return sync ? (void*)sync->imageAvailable : nullptr; }
@@ -51,15 +50,12 @@ public:
     void setHdrEnabled(bool on);
 
 private:
-    void init(VkDevice device, VkPhysicalDevice physDev, VkInstance instance, VkQueue gq);
+    void init();
     void create();
     void destroy();
 
+    rhi::VkRHIDevice* m_rhiDev = nullptr;  // RHI 设备指针（不拥有）
     Window& m_window;
-    VkDevice m_vkDevice = VK_NULL_HANDLE;
-    VkPhysicalDevice m_physDevice = VK_NULL_HANDLE;
-    VkInstance m_vkInstance = VK_NULL_HANDLE;
-    VkQueue m_graphicsQueue = VK_NULL_HANDLE;
     VkSurfaceKHR m_surface = VK_NULL_HANDLE;
     VkSwapchainKHR m_swapchain = VK_NULL_HANDLE;
     VkFormat m_format = VK_FORMAT_UNDEFINED;

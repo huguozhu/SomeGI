@@ -4,14 +4,10 @@
 struct VmaAllocation_T;
 typedef VmaAllocation_T* VmaAllocation;
 
-struct VmaAllocator_T;
-typedef VmaAllocator_T* VmaAllocator;
-
 namespace somegi {
 
-class Device;
-
 namespace rhi { class VkRHIDevice; }
+class Device;
 
 class Buffer {
 public:
@@ -37,8 +33,10 @@ public:
     void* mapped() const { return m_mapped; }
 
 private:
-    VkDevice m_vkDev = VK_NULL_HANDLE;
-    VmaAllocator m_vma = VK_NULL_HANDLE;
+    void createBuffer(VkDeviceSize size, VkBufferUsageFlags usage,
+                      VkMemoryPropertyFlags memProps, VkDeviceSize alignment);
+
+    rhi::VkRHIDevice* m_rhiDev = nullptr;  // RHI 设备指针（不拥有）
     VkBuffer m_buffer = VK_NULL_HANDLE;
     VmaAllocation m_allocation = VK_NULL_HANDLE;
     VkDeviceSize m_size = 0;
