@@ -118,8 +118,9 @@ SwapchainFrame D3D12RHISwapchain::acquireNextFrame() {
     f.width  = m_width;
     f.height = m_height;
 
-    // 创建 back buffer 的 RTV 视图（非拥有型）
+    // 创建 back buffer 的非拥有型包装（texture + view）
     uint32_t idx = m_frameIndex % kFrameCount;
+    f.texture = D3D12RHITexture::createNonOwning(m_device, m_backBuffers[idx], m_format, m_width, m_height, 1);
     auto* bbView = new D3D12RHITextureView();
     bbView->m_isRTV = true;
     bbView->m_rtvHandle = rtvHandle(idx);
