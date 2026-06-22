@@ -24,7 +24,7 @@ public:
     VkShaderModule handle() const { return m_module; }
 
 private:
-    VkDevice m_vkDev = VK_NULL_HANDLE;
+    rhi::VkRHIDevice* m_rhiDev = nullptr;  // RHI 设备指针（不拥有）
     VkShaderModule m_module = VK_NULL_HANDLE;
 };
 

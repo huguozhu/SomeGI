@@ -4,9 +4,6 @@
 struct VmaAllocation_T;
 typedef VmaAllocation_T* VmaAllocation;
 
-struct VmaAllocator_T;
-typedef VmaAllocator_T* VmaAllocator;
-
 namespace somegi {
 namespace rhi { class VkRHIDevice; }
 class Device;
@@ -47,8 +44,7 @@ public:
     uint32_t arrayLayers() const { return m_desc.arrayLayers; }
 
 private:
-    VkDevice m_vkDev = VK_NULL_HANDLE;
-    VmaAllocator m_vma = VK_NULL_HANDLE;
+    rhi::VkRHIDevice* m_rhiDev = nullptr;  // RHI 设备指针（不拥有），所有 Vulkan 调用委托给它
     VkImage m_image = VK_NULL_HANDLE;
     VkImageView m_view = VK_NULL_HANDLE;
     VmaAllocation m_allocation = VK_NULL_HANDLE;

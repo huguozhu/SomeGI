@@ -6,9 +6,8 @@
 
 namespace somegi {
 
-ShaderModule::ShaderModule(rhi::VkRHIDevice& vkDev, const std::filesystem::path& spvPath) {
-    m_vkDev = vkDev.vkDevice();
-
+ShaderModule::ShaderModule(rhi::VkRHIDevice& vkDev, const std::filesystem::path& spvPath)
+    : m_rhiDev(&vkDev) {
     std::ifstream f(spvPath, std::ios::binary | std::ios::ate);
     if (!f) throw std::runtime_error("shader open failed: " + spvPath.string());
     auto size = static_cast<size_t>(f.tellg());
@@ -20,12 +19,11 @@ ShaderModule::ShaderModule(rhi::VkRHIDevice& vkDev, const std::filesystem::path&
     VkShaderModuleCreateInfo ci{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
     ci.codeSize = size;
     ci.pCode = data.data();
-    VK_CHECK(vkCreateShaderModule(m_vkDev, &ci, nullptr, &m_module));
+    VK_CHECK(vkCreateShaderModule(m_rhiDev->vkDevice(), &ci, nullptr, &m_module));
 }
 
-ShaderModule::ShaderModule(Device& d, const std::filesystem::path& spvPath) {
-    m_vkDev = d.device();
-
+ShaderModule::ShaderModule(Device& d, const std::filesystem::path& spvPath)
+    : m_rhiDev(&d.rhiDev()) {
     std::ifstream f(spvPath, std::ios::binary | std::ios::ate);
     if (!f) throw std::runtime_error("shader open failed: " + spvPath.string());
     auto size = static_cast<size_t>(f.tellg());
@@ -37,22 +35,22 @@ ShaderModule::ShaderModule(Device& d, const std::filesystem::path& spvPath) {
     VkShaderModuleCreateInfo ci{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
     ci.codeSize = size;
     ci.pCode = data.data();
-    VK_CHECK(vkCreateShaderModule(m_vkDev, &ci, nullptr, &m_module));
+    VK_CHECK(vkCreateShaderModule(m_rhiDev->vkDevice(), &ci, nullptr, &m_module));
 }
 
 ShaderModule::~ShaderModule() {
-    if (m_vkDev && m_module) vkDestroyShaderModule(m_vkDev, m_module, nullptr);
+    if (m_rhiDev && m_module) vkDestroyShaderModule(m_rhiDev->vkDevice(), m_module, nullptr);
 }
 
 ShaderModule::ShaderModule(ShaderModule&& o) noexcept
-    : m_vkDev(o.m_vkDev), m_module(o.m_module) {
-    o.m_vkDev = VK_NULL_HANDLE; o.m_module = VK_NULL_HANDLE;
+    : m_rhiDev(o.m_rhiDev), m_module(o.m_module) {
+    o.m_rhiDev = nullptr; o.m_module = VK_NULL_HANDLE;
 }
 ShaderModule& ShaderModule::operator=(ShaderModule&& o) noexcept {
     if (this != &o) {
-        if (m_vkDev && m_module) vkDestroyShaderModule(m_vkDev, m_module, nullptr);
-        m_vkDev = o.m_vkDev; m_module = o.m_module;
-        o.m_vkDev = VK_NULL_HANDLE; o.m_module = VK_NULL_HANDLE;
+        if (m_rhiDev && m_module) vkDestroyShaderModule(m_rhiDev->vkDevice(), m_module, nullptr);
+        m_rhiDev = o.m_rhiDev; m_module = o.m_module;
+        o.m_rhiDev = nullptr; o.m_module = VK_NULL_HANDLE;
     }
     return *this;
 }
