@@ -62,11 +62,7 @@ static void rhiTransitionImage(rhi::RHICommandBuffer& rhiCmd, rhi::VkRHIDevice& 
 App::App() {
     WindowDesc wd; wd.title = "SomeGI"; wd.width = 800; wd.height = 450;
     m_window = std::make_unique<Window>(wd);
-
-    // 创建 RHI Vulkan 设备（独立模式，拥有所有 Vulkan 对象）
-    m_rhiDevice = rhi::RHIDevice::createVulkan(m_window.get(), true);
-    // 用薄包装器桥接：core::Device → rhi::VkRHIDevice（兼容 96 个 Device& 调用方）
-    m_device = std::make_unique<Device>(static_cast<rhi::VkRHIDevice&>(*m_rhiDevice));
+    m_rhiDevice = rhi::RHIDevice::createVulkan(m_window.get(), true); m_device = std::make_unique<Device>(static_cast<rhi::VkRHIDevice&>(*m_rhiDevice));
 
     // 从文件恢复全局渲染设置（基础字段在 renderer.init() 前应用，
     // shadow/mesh-shader 等依赖 renderer 的字段在 init() 之后应用）
@@ -1059,7 +1055,7 @@ void App::recordPostProcessing(VkCommandBuffer cmd) {
                     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
                     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT);
 
-                rhiTransitionImage(rhiCmd, vkDev, m_frameCtx.swapImage, rhiFmtToVk(m_swap->format()), m_swap->width(), m_swap->height(),
+                rhiTransitionImage(rhiCmd, vkDev, m_frameCtx.swapImage, m_swap->format(), m_swap->extent().width, m_swap->extent().height,
                     VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
                     VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
                     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
@@ -1103,7 +1099,7 @@ void App::recordPostProcessing(VkCommandBuffer cmd) {
             }
         } else {
             // No AA: tonemap writes directly to swapchain
-            rhiTransitionImage(rhiCmd, vkDev, m_frameCtx.swapImage, rhiFmtToVk(m_swap->format()), m_swap->width(), m_swap->height(),
+            rhiTransitionImage(rhiCmd, vkDev, m_frameCtx.swapImage, m_swap->format(), m_swap->extent().width, m_swap->extent().height,
                 VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
                 VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
                 VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
@@ -1114,7 +1110,7 @@ void App::recordPostProcessing(VkCommandBuffer cmd) {
         }
 
         // Transition swapchain to COLOR_ATTACHMENT for ImGui
-        rhiTransitionImage(rhiCmd, vkDev, m_frameCtx.swapImage, rhiFmtToVk(m_swap->format()), m_swap->width(), m_swap->height(),
+        rhiTransitionImage(rhiCmd, vkDev, m_frameCtx.swapImage, m_swap->format(), m_swap->extent().width, m_swap->extent().height,
             VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
             VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
             VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
@@ -1220,7 +1216,7 @@ void App::recordPostProcessing(VkCommandBuffer cmd) {
             m_renderer.rt().ldrTonemap.image(), rhi::toRhiFormat(m_renderer.rt().ldrTonemap.format()),
             m_renderer.rt().extent.width, m_renderer.rt().extent.height);
         auto swapTex = rhi::VkRHITexture::createNonOwning(vkDev,
-            m_frameCtx.swapImage, m_swap->format(),
+            m_frameCtx.swapImage, rhi::toRhiFormat(m_swap->format()),
             m_frameCtx.swapExtent.width, m_frameCtx.swapExtent.height);
         rhiCmd.textureBarrier(*swapTex, rhi::TextureLayout::Undefined, rhi::TextureLayout::TransferDst);
 
@@ -1246,7 +1242,7 @@ void App::recordPostProcessing(VkCommandBuffer cmd) {
 
     // Final timestamp + transition to present
     m_renderer.writeTimestamp(rhiCmd, m_renderer.kTsEnd);
-    rhiTransitionImage(rhiCmd, vkDev, m_frameCtx.swapImage, rhiFmtToVk(m_swap->format()), m_swap->width(), m_swap->height(),
+    rhiTransitionImage(rhiCmd, vkDev, m_frameCtx.swapImage, m_swap->format(), m_swap->extent().width, m_swap->extent().height,
         VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
         VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
         VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT, 0);

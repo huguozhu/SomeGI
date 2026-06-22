@@ -1,5 +1,5 @@
 #pragma once
-#include "rhi/base/common.h"
+#include "core/vk_common.h"
 #include "core/screenshot.h"
 #include "scene/scene.h"
 #include "scene/camera.h"
@@ -9,7 +9,7 @@
 #include "renderer/core/frame_renderer.h"
 #include "renderer/fg/fg_graph.h"
 #include "rhi/base/context.h"
-#include "rhi/base/device.h"  // for m_rhiDevice (unique_ptr<rhi::RHIDevice>)
+#include "rhi/base/device.h"  // for unique_ptr<rhi::RHIDevice> m_rhiDevice
 #include "app/benchmark_runner.h"
 #include <map>
 #include <memory>
@@ -21,7 +21,6 @@ namespace somegi {
 class Window;
 class Device;
 class Swapchain;
-namespace rhi { class RHIDevice; class RHIContext; }
 class IGITechnique;
 
 // Per-scene persisted view + lighting.
@@ -74,7 +73,7 @@ private:
     // ---- Platform ----
     std::unique_ptr<Window> m_window;
     std::unique_ptr<rhi::RHIDevice> m_rhiDevice;
-    std::unique_ptr<Device> m_device;             // 薄包装器（从 m_rhiDevice 构造）
+    std::unique_ptr<Device> m_device;
     std::unique_ptr<Swapchain> m_swap;
     // RHI 命令上下文（管理命令池 + cmd buffer + fence，替代直接 Vulkan 调用）
     std::unique_ptr<rhi::RHIContext> m_context;
