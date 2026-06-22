@@ -4,7 +4,11 @@
 struct VmaAllocation_T;
 typedef VmaAllocation_T* VmaAllocation;
 
+struct VmaAllocator_T;
+typedef VmaAllocator_T* VmaAllocator;
+
 namespace somegi {
+namespace rhi { class VkRHIDevice; }
 class Device;
 
 struct ImageDesc {
@@ -23,6 +27,7 @@ class Image {
 public:
     Image() = default;
     Image(Device& d, const ImageDesc& desc);
+    Image(rhi::VkRHIDevice& vkDev, const ImageDesc& desc);
     ~Image();
 
     Image(const Image&) = delete;
@@ -42,7 +47,8 @@ public:
     uint32_t arrayLayers() const { return m_desc.arrayLayers; }
 
 private:
-    Device* m_device = nullptr;
+    VkDevice m_vkDev = VK_NULL_HANDLE;
+    VmaAllocator m_vma = VK_NULL_HANDLE;
     VkImage m_image = VK_NULL_HANDLE;
     VkImageView m_view = VK_NULL_HANDLE;
     VmaAllocation m_allocation = VK_NULL_HANDLE;

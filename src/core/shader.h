@@ -7,10 +7,13 @@ namespace somegi {
 
 class Device;
 
+namespace rhi { class VkRHIDevice; }
+
 class ShaderModule {
 public:
     ShaderModule() = default;
     ShaderModule(Device& d, const std::filesystem::path& spvPath);
+    ShaderModule(rhi::VkRHIDevice& vkDev, const std::filesystem::path& spvPath);
     ~ShaderModule();
 
     ShaderModule(const ShaderModule&) = delete;
@@ -21,7 +24,7 @@ public:
     VkShaderModule handle() const { return m_module; }
 
 private:
-    Device* m_device = nullptr;
+    VkDevice m_vkDev = VK_NULL_HANDLE;
     VkShaderModule m_module = VK_NULL_HANDLE;
 };
 
