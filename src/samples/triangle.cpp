@@ -10,8 +10,6 @@
 #include "rhi/base/texture.h"
 #include "rhi/base/fence.h"
 #include "rhi/vulkan/vk_device.h"
-#include "rhi/vulkan/vk_swapchain.h"
-#include "rhi/vulkan/vk_texture.h"
 #include "rhi/vulkan/vk_fence.h"
 #include "rhi/vulkan/vk_command.h"
 #include "rhi/d3d12/d3d12_device.h"
@@ -306,28 +304,10 @@ int main() {
         cmd.reset();
         cmd.begin();
 
-        // ── 创建交换链图像的非拥有型纹理包装（用于 barrier） ──
-        std::unique_ptr<rhi::RHITexture> swTex;
-        if (s_currentBackend == rhi::Backend::Vulkan) {
-            auto& vkSw = static_cast<rhi::VkRHISwapchain&>(*swapchain);
-            swTex = rhi::VkRHITexture::createNonOwning(
-                static_cast<rhi::VkRHIDevice&>(*rhiDevice),
-                vkSw.vkImage(frame.imageIndex),
-                swapchain->format(), frame.width, frame.height, 1);
-        } else {
-#ifdef WIN32
-            auto& d3dSw = static_cast<rhi::D3D12RHISwapchain&>(*swapchain);
-            auto& d3dDev = static_cast<rhi::D3D12RHIDevice&>(*rhiDevice);
-            swTex = rhi::D3D12RHITexture::createNonOwning(
-                d3dDev, d3dSw.backBuffer(frame.frameInFlight),
-                swapchain->format(), frame.width, frame.height, 1);
-#endif
-        }
-
-        // ── 屏障：转换到颜色附件布局 ──
+        // ── 屏障：转换到颜色附件布局（frame.texture 由 swapchain 提供） ──
         rhi::TextureLayout initialLayout = (s_currentBackend == rhi::Backend::Vulkan)
             ? rhi::TextureLayout::Undefined : rhi::TextureLayout::Present;
-        cmd.textureBarrier(*swTex, initialLayout, rhi::TextureLayout::ColorAttachment);
+        cmd.textureBarrier(*frame.texture, initialLayout, rhi::TextureLayout::ColorAttachment);
 
         // ── 渲染通道 1：清除背景 + 绘制三角形 ──
         {
@@ -360,7 +340,7 @@ int main() {
         }
 
         // ── 屏障：转换到呈现布局 ──
-        cmd.textureBarrier(*swTex, rhi::TextureLayout::ColorAttachment,
+        cmd.textureBarrier(*frame.texture, rhi::TextureLayout::ColorAttachment,
                            rhi::TextureLayout::Present);
 
         cmd.end();
