@@ -106,9 +106,24 @@ std::unique_ptr<RHITextureView> VkRHITextureView::createNonOwning(VkDevice devic
 
 std::unique_ptr<RHITextureView> VkRHITextureView::create(VkRHIDevice& device, const RHITexture& tex, const TextureViewDesc& desc) {
     auto v = std::unique_ptr<VkRHITextureView>(new VkRHITextureView(device));
+
+    // 推断视图类型
+    VkImageViewType viewType = VK_IMAGE_VIEW_TYPE_2D;
+    switch (desc.viewType) {
+        case TextureViewType::Texture2D:        viewType = VK_IMAGE_VIEW_TYPE_2D; break;
+        case TextureViewType::Texture2DArray:   viewType = VK_IMAGE_VIEW_TYPE_2D_ARRAY; break;
+        case TextureViewType::TextureCube:      viewType = VK_IMAGE_VIEW_TYPE_CUBE; break;
+        case TextureViewType::TextureCubeArray: viewType = VK_IMAGE_VIEW_TYPE_CUBE_ARRAY; break;
+        case TextureViewType::Texture3D:        viewType = VK_IMAGE_VIEW_TYPE_3D; break;
+        default:
+            // Default: 根据 layerCount 自动推断
+            viewType = desc.layerCount > 1 ? VK_IMAGE_VIEW_TYPE_2D_ARRAY : VK_IMAGE_VIEW_TYPE_2D;
+            break;
+    }
+
     VkImageViewCreateInfo ci{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
     ci.image = (VkImage)(uintptr_t)tex.nativeHandle();
-    ci.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    ci.viewType = viewType;
     ci.format = desc.format != Format::Unknown ? toVkFormat(desc.format) : toVkFormat(tex.format());
     ci.subresourceRange = {toVkAspect(tex.format()), desc.baseMip, desc.mipCount, desc.baseLayer, desc.layerCount};
     vkCreateImageView(device.vkDevice(), &ci, nullptr, &v->m_view);

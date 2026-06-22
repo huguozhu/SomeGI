@@ -120,8 +120,19 @@ struct TextureDesc {
     const char* debugName = nullptr;
 };
 
+// 纹理视图类型（与 VkImageViewType 对应，默认根据纹理属性自动推断）
+enum class TextureViewType : uint32_t {
+    Default = 0,  // 自动推断：cubemap→Cube, layerCount>1→2DArray, 否则→2D
+    Texture2D,
+    Texture2DArray,
+    TextureCube,
+    TextureCubeArray,
+    Texture3D,
+};
+
 struct TextureViewDesc {
-    Format format = Format::Unknown;  // Unknown = inherit
+    Format format = Format::Unknown;       // Unknown = inherit from texture
+    TextureViewType viewType = TextureViewType::Default;
     uint32_t baseMip = 0;
     uint32_t mipCount = 1;
     uint32_t baseLayer = 0;
