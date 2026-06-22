@@ -22,6 +22,14 @@ struct AcquiredFrame {
     VkSemaphore renderFinished = VK_NULL_HANDLE; // per-swapchain-image
     uint32_t frameInFlight = 0;
     bool needsResize = false;
+
+    // Void* 访问器（便于逐步迁移到 RHI 通用类型）
+    void* nativeImage() const             { return (void*)image; }
+    void* nativeView() const              { return (void*)view; }
+    void* nativeImageAvailable() const    { return sync ? (void*)sync->imageAvailable : nullptr; }
+    void* nativeRenderFinished() const    { return (void*)renderFinished; }
+    void* nativeInFlightFence() const     { return sync ? (void*)sync->inFlight : nullptr; }
+    VkExtent2D nativeExtent() const       { return extent; }
 };
 
 class Swapchain {

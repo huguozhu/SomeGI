@@ -106,12 +106,17 @@ D3D12RHIDevice::D3D12RHIDevice() {
     // ── 填充设备限制 ──
     m_limits.maxTextureSize       = D3D12_REQ_TEXTURE2D_U_OR_V_DIMENSION;
     m_limits.maxSampledTextures   = 128;
+    m_limits.maxSampledImages     = 128;
     m_limits.maxUniformBufferSize = 65536;
     m_limits.maxStorageBufferSize = 256 * 1024 * 1024;
     m_limits.maxPushConstantsSize = 256;
     m_limits.timestampPeriod      = 1.0f;
-    m_limits.meshShaderSupported  = false;
+    m_limits.meshShaderSupported  = false;  // D3D12 mesh shader 需要额外能力查询
     m_limits.rayTracingSupported  = false;
+    m_limits.maxMeshOutputVertices = 0;
+    m_limits.maxMeshOutputPrimitives = 0;
+    m_limits.maxMeshWorkGroupInvocations = 0;
+    m_limits.supportedSampleCounts = 0xF;  // 1, 2, 4, 8 (假设标准支持)
 
     std::printf("[d3d12] device created successfully\n");
 

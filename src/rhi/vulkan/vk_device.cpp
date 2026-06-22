@@ -163,12 +163,26 @@ VkRHIDevice::VkRHIDevice(void* nativeWindowHandle, bool enableValidation)
     auto& props = vkbPD.properties;
     m_limits.maxTextureSize = props.limits.maxImageDimension2D;
     m_limits.maxSampledTextures = props.limits.maxPerStageDescriptorSampledImages;
+    m_limits.maxSampledImages = props.limits.maxPerStageDescriptorSampledImages;
     m_limits.maxUniformBufferSize = props.limits.maxUniformBufferRange;
     m_limits.maxStorageBufferSize = props.limits.maxStorageBufferRange;
     m_limits.maxPushConstantsSize = props.limits.maxPushConstantsSize;
     m_limits.timestampPeriod = props.limits.timestampPeriod;
     m_limits.meshShaderSupported = meshAvail;
     m_limits.rayTracingSupported = (hasAS && hasRQ && hasDHO);
+    // 网格着色器扩展限制
+    if (meshAvail) {
+        VkPhysicalDeviceMeshShaderPropertiesEXT meshProps{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_PROPERTIES_EXT};
+        VkPhysicalDeviceProperties2 p2{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
+        p2.pNext = &meshProps;
+        vkGetPhysicalDeviceProperties2(m_vkPhysicalDevice, &p2);
+        m_limits.maxMeshOutputVertices = meshProps.maxMeshOutputVertices;
+        m_limits.maxMeshOutputPrimitives = meshProps.maxMeshOutputPrimitives;
+        m_limits.maxMeshWorkGroupInvocations = meshProps.maxMeshWorkGroupInvocations;
+    }
+    // MSAA 采样数支持
+    m_limits.supportedSampleCounts = (uint32_t)props.limits.framebufferColorSampleCounts
+                                   & (uint32_t)props.limits.framebufferDepthSampleCounts;
 
     // ── 提取完毕，清除 vkb 管理的句柄防止其析构时销毁 Vulkan 对象 ──
     // C++ 局部变量按声明逆序析构：vkbDevice → vkbPD → vkbInst

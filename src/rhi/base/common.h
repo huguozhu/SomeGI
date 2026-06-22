@@ -270,14 +270,23 @@ enum class TextureLayout : uint32_t {
 // 设备限制
 // ════════════════════════════════════════════════════════════════
 struct DeviceLimits {
+    // 基础限制
     uint32_t maxTextureSize = 0;
-    uint32_t maxSampledTextures = 0;
+    uint32_t maxSampledTextures = 0;       // 单 set 最大采样纹理数
+    uint32_t maxSampledImages = 0;          // 单 set 最大采样图像数（Vulkan descriptor count）
     uint32_t maxUniformBufferSize = 0;
     uint32_t maxStorageBufferSize = 0;
     uint32_t maxPushConstantsSize = 0;
     float timestampPeriod = 1.0f;
+    // 能力标志
     bool meshShaderSupported = false;
     bool rayTracingSupported = false;
+    // 网格着色器限制
+    uint32_t maxMeshOutputVertices = 0;
+    uint32_t maxMeshOutputPrimitives = 0;
+    uint32_t maxMeshWorkGroupInvocations = 0;
+    // MSAA 支持的采样数位掩码
+    uint32_t supportedSampleCounts = 0;
 };
 
 } // namespace rhi
