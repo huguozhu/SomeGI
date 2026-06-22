@@ -1,5 +1,6 @@
 // rhi/vulkan/vk_buffer.cpp
 #include "vk_buffer.h"
+#include "vk_common.h"
 #include <VulkanMemoryAllocator/vk_mem_alloc.h>
 
 namespace somegi {
@@ -23,33 +24,72 @@ std::unique_ptr<RHIBuffer> VkRHIBuffer::create(VkRHIDevice& device, const Buffer
     VkBufferCreateInfo ci{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
     ci.size = desc.size;
     ci.usage = toVkUsage(desc.usage) | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
-    VmaAllocationCreateInfo ai{};
-    if (desc.memory == MemoryType::HostVisible) {
-        ai.usage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST;
-        ai.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
-    } else if (desc.memory == MemoryType::HostCached) {
-        ai.usage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST;
-        ai.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
+    ci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+    if (desc.alignment > 0) {
+        // 手动对齐分配路径（用于 AS scratch buffer 等需要大对齐的场景）
+        VK_CHECK(vkCreateBuffer(device.vkDevice(), &ci, nullptr, &buf->m_buffer));
+        VkMemoryRequirements mr;
+        vkGetBufferMemoryRequirements(device.vkDevice(), buf->m_buffer, &mr);
+        if (desc.alignment > mr.alignment) mr.alignment = desc.alignment;
+
+        VkMemoryAllocateFlagsInfo maiFlags{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_FLAGS_INFO};
+        maiFlags.flags = VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT;
+        VkMemoryAllocateInfo mai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+        mai.pNext = &maiFlags;
+        mai.allocationSize = mr.size;
+
+        VkPhysicalDeviceMemoryProperties mp;
+        vkGetPhysicalDeviceMemoryProperties(device.vkPhysicalDevice(), &mp);
+        uint32_t typeIndex = UINT32_MAX;
+        for (uint32_t i = 0; i < mp.memoryTypeCount; ++i) {
+            if ((mr.memoryTypeBits & (1u << i)) &&
+                (mp.memoryTypes[i].propertyFlags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT)) {
+                typeIndex = i; break;
+            }
+        }
+        mai.memoryTypeIndex = typeIndex;
+        VkDeviceMemory mem;
+        VK_CHECK(vkAllocateMemory(device.vkDevice(), &mai, nullptr, &mem));
+        VK_CHECK(vkBindBufferMemory(device.vkDevice(), buf->m_buffer, mem, 0));
+        buf->m_allocation = nullptr;   // 非 VMA 管理
+        buf->m_manualMem = mem;        // 析构时手动释放
+        buf->m_mapped = nullptr;
+        buf->m_ownsBuffer = true;
     } else {
-        ai.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
+        VmaAllocationCreateInfo ai{};
+        if (desc.memory == MemoryType::HostVisible) {
+            ai.usage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST;
+            ai.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
+        } else if (desc.memory == MemoryType::HostCached) {
+            ai.usage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST;
+            ai.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
+        } else {
+            ai.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
+        }
+        VmaAllocationInfo allocInfo{};
+        vmaCreateBuffer(device.vma(), &ci, &ai, &buf->m_buffer, &buf->m_allocation, &allocInfo);
+        // VMA_ALLOCATION_CREATE_MAPPED_BIT 已使 VMA 持久映射
+        if (ai.flags & VMA_ALLOCATION_CREATE_MAPPED_BIT) {
+            buf->m_mapped = allocInfo.pMappedData;
+        }
     }
-    VmaAllocationInfo allocInfo{};
-    vmaCreateBuffer(device.vma(), &ci, &ai, &buf->m_buffer, &buf->m_allocation, &allocInfo);
+
     buf->m_size = desc.size;
-    if (desc.usage == BufferUsage::Storage || desc.usage == BufferUsage::Indirect || (uint32_t)desc.usage & (uint32_t)BufferUsage::AccelStruct) {
-        VkBufferDeviceAddressInfo ai2{VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO, nullptr, buf->m_buffer};
-        buf->m_address = vkGetBufferDeviceAddress(device.vkDevice(), &ai2);
-    }
-    // VMA_ALLOCATION_CREATE_MAPPED_BIT 已使 VMA 持久映射，直接用 allocInfo.pMappedData
-    // 不可再调 vmaMapMemory（会导致 map count 翻倍 → 析构时断言失败）
-    if (ai.flags & VMA_ALLOCATION_CREATE_MAPPED_BIT) {
-        buf->m_mapped = allocInfo.pMappedData;
-    }
+    VkBufferDeviceAddressInfo ai2{VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO, nullptr, buf->m_buffer};
+    buf->m_address = vkGetBufferDeviceAddress(device.vkDevice(), &ai2);
     return buf;
 }
 
 VkRHIBuffer::~VkRHIBuffer() {
-    if (m_buffer && m_ownsBuffer) vmaDestroyBuffer(m_device.vma(), m_buffer, m_allocation);
+    if (m_buffer && m_ownsBuffer) {
+        if (m_manualMem) {
+            vkDestroyBuffer(m_device.vkDevice(), m_buffer, nullptr);
+            vkFreeMemory(m_device.vkDevice(), m_manualMem, nullptr);
+        } else {
+            vmaDestroyBuffer(m_device.vma(), m_buffer, m_allocation);
+        }
+    }
 }
 void* VkRHIBuffer::map() { return m_mapped; }
 void VkRHIBuffer::unmap() { vmaFlushAllocation(m_device.vma(), m_allocation, 0, m_size); }

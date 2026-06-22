@@ -7,6 +7,8 @@
 namespace somegi {
 namespace rhi {
 
+constexpr uint32_t kFramesInFlight = 2;
+
 // ════════════════════════════════════════════════════════════════
 // 后端枚举
 // ════════════════════════════════════════════════════════════════
@@ -291,11 +293,15 @@ struct DeviceLimits {
     float timestampPeriod = 1.0f;
     // 能力标志
     bool meshShaderSupported = false;
+    bool taskShaderSupported = false;
     bool rayTracingSupported = false;
+    bool accelStructSupported = false;
+    bool rayQuerySupported = false;
     // 网格着色器限制
     uint32_t maxMeshOutputVertices = 0;
     uint32_t maxMeshOutputPrimitives = 0;
     uint32_t maxMeshWorkGroupInvocations = 0;
+    uint32_t maxMeshWorkGroupSize = 0;  // Mesh Shader 工作组大小（第一维）
     // MSAA 支持的采样数位掩码
     uint32_t supportedSampleCounts = 0;
 };

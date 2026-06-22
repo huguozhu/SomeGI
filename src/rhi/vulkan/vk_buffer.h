@@ -32,6 +32,7 @@ private:
     uint64_t m_address = 0;
     void* m_mapped = nullptr;
     bool m_ownsBuffer = true;
+    VkDeviceMemory m_manualMem = VK_NULL_HANDLE;  // 非 VMA 路径的手动分配 memory
 };
 
 } // namespace rhi

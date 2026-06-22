@@ -1,5 +1,6 @@
 // rhi/vulkan/vk_device.cpp
 #include "vk_device.h"
+#include "vk_common.h"
 #include "vk_buffer.h"
 #include "vk_texture.h"
 #include "vk_shader.h"
@@ -98,12 +99,22 @@ VkRHIDevice::VkRHIDevice(void* nativeWindowHandle, bool enableValidation)
     // Device fault
     vkbPD.enable_extension_if_present(VK_EXT_DEVICE_FAULT_EXTENSION_NAME);
 
-    // Mesh shader
-    bool meshAvail = false;
+    // Mesh shader: 先查询物理设备的实际能力再决定启用什么
+    bool meshAvail = false, taskAvail = false;
     for (auto& e : vkbPD.get_available_extensions()) {
         if (e == VK_EXT_MESH_SHADER_EXTENSION_NAME) meshAvail = true;
     }
-    if (meshAvail) vkbPD.enable_extension_if_present(VK_EXT_MESH_SHADER_EXTENSION_NAME);
+    if (meshAvail) {
+        vkbPD.enable_extension_if_present(VK_EXT_MESH_SHADER_EXTENSION_NAME);
+        // 查询实际硬件支持
+        VkPhysicalDeviceMeshShaderFeaturesEXT meshQuery{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_FEATURES_EXT};
+        VkPhysicalDeviceFeatures2 f2{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
+        f2.pNext = &meshQuery;
+        vkGetPhysicalDeviceFeatures2(m_vkPhysicalDevice, &f2);
+        meshAvail = (meshQuery.meshShader == VK_TRUE);
+        taskAvail = (meshQuery.taskShader == VK_TRUE);
+        std::printf("[rhi] Mesh Shader query: mesh=%d task=%d\n", meshAvail, taskAvail);
+    }
 
     // ── Features ──
     VkPhysicalDeviceVulkan13Features f13{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES};
@@ -133,8 +144,11 @@ VkRHIDevice::VkRHIDevice(void* nativeWindowHandle, bool enableValidation)
     }
     if (meshAvail) {
         msFeat.meshShader = VK_TRUE;
-        msFeat.taskShader = meshAvail ? VK_TRUE : VK_FALSE;
+        msFeat.taskShader = taskAvail ? VK_TRUE : VK_FALSE;
         db.add_pNext(&msFeat);
+        std::printf("[rhi] Mesh Shader enabled: mesh=%d task=%d\n", meshAvail, taskAvail);
+    } else {
+        std::printf("[rhi] Mesh Shader NOT available\n");
     }
 
     auto devRet = db.build();
@@ -169,7 +183,10 @@ VkRHIDevice::VkRHIDevice(void* nativeWindowHandle, bool enableValidation)
     m_limits.maxPushConstantsSize = props.limits.maxPushConstantsSize;
     m_limits.timestampPeriod = props.limits.timestampPeriod;
     m_limits.meshShaderSupported = meshAvail;
+    m_limits.taskShaderSupported = taskAvail;
     m_limits.rayTracingSupported = (hasAS && hasRQ && hasDHO);
+    m_limits.accelStructSupported = (hasAS && hasRQ && hasDHO);
+    m_limits.rayQuerySupported = (hasAS && hasRQ && hasDHO);
     // 网格着色器扩展限制
     if (meshAvail) {
         VkPhysicalDeviceMeshShaderPropertiesEXT meshProps{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_PROPERTIES_EXT};
@@ -179,10 +196,17 @@ VkRHIDevice::VkRHIDevice(void* nativeWindowHandle, bool enableValidation)
         m_limits.maxMeshOutputVertices = meshProps.maxMeshOutputVertices;
         m_limits.maxMeshOutputPrimitives = meshProps.maxMeshOutputPrimitives;
         m_limits.maxMeshWorkGroupInvocations = meshProps.maxMeshWorkGroupInvocations;
+        m_limits.maxMeshWorkGroupSize = meshProps.maxMeshWorkGroupSize[0];
     }
     // MSAA 采样数支持
     m_limits.supportedSampleCounts = (uint32_t)props.limits.framebufferColorSampleCounts
                                    & (uint32_t)props.limits.framebufferDepthSampleCounts;
+
+    // ── 加载扩展函数指针 ──
+    if (meshAvail) {
+        vkCmdDrawMeshTasksEXT = (PFN_vkCmdDrawMeshTasksEXT)
+            vkGetDeviceProcAddr(m_vkDevice, "vkCmdDrawMeshTasksEXT");
+    }
 
     // ── 提取完毕，清除 vkb 管理的句柄防止其析构时销毁 Vulkan 对象 ──
     // C++ 局部变量按声明逆序析构：vkbDevice → vkbPD → vkbInst

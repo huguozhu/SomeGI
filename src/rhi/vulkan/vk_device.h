@@ -59,6 +59,9 @@ public:
     const vkb::DispatchTable& dispatch() const { return m_dispatch; }
     VkSurfaceKHR surface() const { return m_surface; }
 
+    // Mesh Shader 扩展函数指针（vkGetDeviceProcAddr 加载）
+    PFN_vkCmdDrawMeshTasksEXT vkCmdDrawMeshTasksEXT = nullptr;
+
 private:
     bool m_ownsDevice = true;  // 是否拥有 Vulkan 句柄（决定析构时是否销毁）
 
