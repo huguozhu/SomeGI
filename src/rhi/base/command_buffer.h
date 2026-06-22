@@ -117,13 +117,38 @@ public:
         uint32_t baseLayer = 0;
         uint32_t layerCount = 1;
     };
-    // 全纹理屏障
+
+    // 批量纹理屏障描述符（带显式管线阶段/访问掩码）
+    struct TextureBarrierDesc {
+        const RHITexture* texture = nullptr;
+        TextureLayout oldLayout = TextureLayout::Undefined;
+        TextureLayout newLayout = TextureLayout::Undefined;
+        PipelineStage srcStage = PipelineStage::TopOfPipe;
+        BufferAccess  srcAccess = BufferAccess::None;
+        PipelineStage dstStage = PipelineStage::BottomOfPipe;
+        BufferAccess  dstAccess = BufferAccess::None;
+        TextureBarrierRange range = {0, 0, 0, 1};
+    };
+
+    // 全纹理屏障（简便重载）
     void textureBarrier(const RHITexture& tex, TextureLayout oldLayout, TextureLayout newLayout) {
-        textureBarrier(tex, oldLayout, newLayout, {0, tex.mipLevels(), 0, 1});
+        textureBarrier(tex, oldLayout, newLayout,
+                       PipelineStage::AllCommands, BufferAccess::MemoryRead | BufferAccess::MemoryWrite,
+                       PipelineStage::AllCommands, BufferAccess::MemoryRead | BufferAccess::MemoryWrite,
+                       {0, tex.mipLevels(), 0, 1});
     }
-    // 子资源级纹理屏障（指定 mip/layer 范围）
+    // 带显式管线阶段/访问的纹理屏障
+    virtual void textureBarrier(const RHITexture& tex,
+                                 TextureLayout oldLayout, TextureLayout newLayout,
+                                 PipelineStage srcStage, BufferAccess srcAccess,
+                                 PipelineStage dstStage, BufferAccess dstAccess,
+                                 const TextureBarrierRange& range = {0, 0, 0, 1}) = 0;
+    // 子资源级纹理屏障（保留兼容旧接口）
     virtual void textureBarrier(const RHITexture& tex, TextureLayout oldLayout, TextureLayout newLayout,
                                  const TextureBarrierRange& range) = 0;
+    // 批量纹理屏障（单次 vkCmdPipelineBarrier2 提交多个 image barrier）
+    virtual void textureBarriers(uint32_t count, const TextureBarrierDesc* barriers) = 0;
+
     // Buffer 屏障（需要显式指定源/目标阶段和访问类型）
     virtual void bufferBarrier(const RHIBuffer& buf,
                                PipelineStage srcStage, PipelineStage dstStage,

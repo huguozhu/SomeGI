@@ -443,15 +443,15 @@ ID3D12CommandSignature* D3D12RHICommandBuffer::getDrawIndexedCountSignature() {
 // Barrier
 // ════════════════════════════════════════════════════════════════
 
+// 新接口：带管线阶段/访问的纹理屏障（D3D12 忽略阶段参数，仅做布局转换）
 void D3D12RHICommandBuffer::textureBarrier(const RHITexture& tex,
                                             TextureLayout oldLayout,
                                             TextureLayout newLayout,
+                                            PipelineStage, BufferAccess,
+                                            PipelineStage, BufferAccess,
                                             const TextureBarrierRange& /*range*/) {
-    // 注：D3D12 子资源级 barrier 需要单独追踪每个 subresource 的状态，
-    // 当前状态追踪器仅支持全纹理粒度。range 参数保留供未来实现。
     auto& d3dTex = static_cast<const D3D12RHITexture&>(tex);
 
-    // 从状态追踪器获取当前状态（而非始终 COMMON）
     D3D12_RESOURCE_STATES before = m_device.getResourceState(d3dTex.resource());
     D3D12_RESOURCE_STATES after  = before;
 
@@ -466,7 +466,6 @@ void D3D12RHICommandBuffer::textureBarrier(const RHITexture& tex,
         default: break;
     }
 
-    // 状态未变化则跳过
     if (before == after) return;
 
     D3D12_RESOURCE_BARRIER rb{};
@@ -477,8 +476,61 @@ void D3D12RHICommandBuffer::textureBarrier(const RHITexture& tex,
     rb.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
     m_cmdList->ResourceBarrier(1, &rb);
 
-    // 更新追踪状态
     m_device.trackResourceState(d3dTex.resource(), after);
+}
+
+// 旧接口兼容
+void D3D12RHICommandBuffer::textureBarrier(const RHITexture& tex,
+                                            TextureLayout oldLayout,
+                                            TextureLayout newLayout,
+                                            const TextureBarrierRange& range) {
+    textureBarrier(tex, oldLayout, newLayout,
+                   PipelineStage::None, BufferAccess::None,
+                   PipelineStage::None, BufferAccess::None,
+                   range);
+}
+
+// 批量屏障
+void D3D12RHICommandBuffer::textureBarriers(uint32_t count, const TextureBarrierDesc* barriers) {
+    if (count == 0 || !barriers) return;
+    constexpr uint32_t kMaxBarriers = 16;
+    D3D12_RESOURCE_BARRIER buf[kMaxBarriers];
+    D3D12_RESOURCE_BARRIER* barray = (count <= kMaxBarriers) ? buf : new D3D12_RESOURCE_BARRIER[count];
+    uint32_t validCount = 0;
+
+    for (uint32_t i = 0; i < count; ++i) {
+        auto& desc = barriers[i];
+        auto& d3dTex = static_cast<const D3D12RHITexture&>(*desc.texture);
+        D3D12_RESOURCE_STATES before = m_device.getResourceState(d3dTex.resource());
+        D3D12_RESOURCE_STATES after  = before;
+
+        switch (desc.newLayout) {
+            case TextureLayout::ColorAttachment: after = D3D12_RESOURCE_STATE_RENDER_TARGET; break;
+            case TextureLayout::DepthAttachment: after = D3D12_RESOURCE_STATE_DEPTH_WRITE; break;
+            case TextureLayout::ShaderReadOnly:  after = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE; break;
+            case TextureLayout::TransferDst:     after = D3D12_RESOURCE_STATE_COPY_DEST; break;
+            case TextureLayout::TransferSrc:     after = D3D12_RESOURCE_STATE_COPY_SOURCE; break;
+            case TextureLayout::Present:         after = D3D12_RESOURCE_STATE_PRESENT; break;
+            case TextureLayout::General:         after = D3D12_RESOURCE_STATE_UNORDERED_ACCESS; break;
+            default: break;
+        }
+
+        if (before == after) continue;
+
+        barray[validCount] = D3D12_RESOURCE_BARRIER{};
+        barray[validCount].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        barray[validCount].Transition.pResource = d3dTex.resource();
+        barray[validCount].Transition.StateBefore = before;
+        barray[validCount].Transition.StateAfter = after;
+        barray[validCount].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+        m_device.trackResourceState(d3dTex.resource(), after);
+        ++validCount;
+    }
+
+    if (validCount > 0)
+        m_cmdList->ResourceBarrier(validCount, barray);
+
+    if (count > kMaxBarriers) delete[] barray;
 }
 
 // ════════════════════════════════════════════════════════════════

@@ -219,30 +219,44 @@ enum class ResolveMode { Average, Min, Max };
 // ════════════════════════════════════════════════════════════════
 enum class PipelineStage : uint32_t {
     None             = 0,
+    TopOfPipe        = 1 << 7,   // 管线顶部
     VertexShader     = 1 << 0,
-    FragmentShader   = 1 << 1,
+    FragmentShader   = 1 << 1,   // 包含 ColorAttachmentOutput
     ComputeShader    = 1 << 2,
     MeshShader       = 1 << 3,
     TaskShader       = 1 << 4,
     RayTracingShader = 1 << 5,
     Transfer         = 1 << 6,
+    BottomOfPipe     = 1 << 8,   // 管线底部
     AllCommands      = 0xFFFFFFFF,
 };
+inline constexpr PipelineStage operator|(PipelineStage a, PipelineStage b) {
+    return static_cast<PipelineStage>(static_cast<uint32_t>(a) | static_cast<uint32_t>(b));
+}
 
 // ════════════════════════════════════════════════════════════════
 // Buffer 访问类型（用于 buffer barrier）
 // ════════════════════════════════════════════════════════════════
 enum class BufferAccess : uint32_t {
-    None            = 0,
-    UniformRead     = 1 << 0,  // UBO 读取
-    StorageRead     = 1 << 1,  // SSBO 读取
-    StorageWrite    = 1 << 2,  // SSBO 写入
-    IndexRead       = 1 << 3,  // 索引缓冲读取
-    VertexRead      = 1 << 4,  // 顶点缓冲读取
-    IndirectRead    = 1 << 5,  // 间接绘制参数读取
-    TransferRead    = 1 << 6,  // 传输/复制源
-    TransferWrite   = 1 << 7,  // 传输/复制目标
+    None              = 0,
+    UniformRead       = 1 << 0,  // UBO 读取
+    StorageRead       = 1 << 1,  // SSBO 读取
+    StorageWrite      = 1 << 2,  // SSBO 写入
+    IndexRead         = 1 << 3,  // 索引缓冲读取
+    VertexRead        = 1 << 4,  // 顶点缓冲读取
+    IndirectRead      = 1 << 5,  // 间接绘制参数读取
+    TransferRead      = 1 << 6,  // 传输/复制源
+    TransferWrite     = 1 << 7,  // 传输/复制目标
+    ColorAttachmentRead  = 1 << 8,  // 颜色附件读取
+    ColorAttachmentWrite = 1 << 9,  // 颜色附件写入
+    DepthStencilRead  = 1 << 10, // 深度/模板读取
+    DepthStencilWrite = 1 << 11, // 深度/模板写入
+    MemoryRead        = 1u << 30, // 通用内存读取（用于屏障）
+    MemoryWrite       = 1u << 31, // 通用内存写入（用于屏障）
 };
+inline constexpr BufferAccess operator|(BufferAccess a, BufferAccess b) {
+    return static_cast<BufferAccess>(static_cast<uint32_t>(a) | static_cast<uint32_t>(b));
+}
 
 // ════════════════════════════════════════════════════════════════
 // 纹理布局（用于 texture barrier）

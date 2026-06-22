@@ -25,6 +25,9 @@ static VkImageLayout toVkLayout(TextureLayout l) {
 }
 
 static VkPipelineStageFlags2 toVkStage(PipelineStage s) {
+    if (s == PipelineStage::AllCommands) return VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+    if (s == PipelineStage::TopOfPipe)   return VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
+    if (s == PipelineStage::BottomOfPipe)return VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT;
     VkPipelineStageFlags2 f = 0;
     if ((uint32_t)s & (uint32_t)PipelineStage::VertexShader)     f |= VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT;
     if ((uint32_t)s & (uint32_t)PipelineStage::FragmentShader)   f |= VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
@@ -33,20 +36,26 @@ static VkPipelineStageFlags2 toVkStage(PipelineStage s) {
     if ((uint32_t)s & (uint32_t)PipelineStage::TaskShader)       f |= VK_PIPELINE_STAGE_2_TASK_SHADER_BIT_EXT;
     if ((uint32_t)s & (uint32_t)PipelineStage::RayTracingShader) f |= VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
     if ((uint32_t)s & (uint32_t)PipelineStage::Transfer)         f |= VK_PIPELINE_STAGE_2_COPY_BIT;
-    if (s == PipelineStage::AllCommands)                         f = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+    if (f == 0) f = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;  // None 等未知值兜底
     return f;
 }
 
 static VkAccessFlags2 toVkAccess(BufferAccess a) {
     VkAccessFlags2 f = 0;
-    if ((uint32_t)a & (uint32_t)BufferAccess::UniformRead)   f |= VK_ACCESS_2_UNIFORM_READ_BIT;
-    if ((uint32_t)a & (uint32_t)BufferAccess::StorageRead)   f |= VK_ACCESS_2_SHADER_STORAGE_READ_BIT;
-    if ((uint32_t)a & (uint32_t)BufferAccess::StorageWrite)  f |= VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-    if ((uint32_t)a & (uint32_t)BufferAccess::IndexRead)     f |= VK_ACCESS_2_INDEX_READ_BIT;
-    if ((uint32_t)a & (uint32_t)BufferAccess::VertexRead)    f |= VK_ACCESS_2_VERTEX_ATTRIBUTE_READ_BIT;
-    if ((uint32_t)a & (uint32_t)BufferAccess::IndirectRead)  f |= VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT;
-    if ((uint32_t)a & (uint32_t)BufferAccess::TransferRead)  f |= VK_ACCESS_2_TRANSFER_READ_BIT;
-    if ((uint32_t)a & (uint32_t)BufferAccess::TransferWrite) f |= VK_ACCESS_2_TRANSFER_WRITE_BIT;
+    if ((uint32_t)a & (uint32_t)BufferAccess::UniformRead)         f |= VK_ACCESS_2_UNIFORM_READ_BIT;
+    if ((uint32_t)a & (uint32_t)BufferAccess::StorageRead)         f |= VK_ACCESS_2_SHADER_STORAGE_READ_BIT;
+    if ((uint32_t)a & (uint32_t)BufferAccess::StorageWrite)        f |= VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+    if ((uint32_t)a & (uint32_t)BufferAccess::IndexRead)           f |= VK_ACCESS_2_INDEX_READ_BIT;
+    if ((uint32_t)a & (uint32_t)BufferAccess::VertexRead)          f |= VK_ACCESS_2_VERTEX_ATTRIBUTE_READ_BIT;
+    if ((uint32_t)a & (uint32_t)BufferAccess::IndirectRead)        f |= VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT;
+    if ((uint32_t)a & (uint32_t)BufferAccess::TransferRead)        f |= VK_ACCESS_2_TRANSFER_READ_BIT;
+    if ((uint32_t)a & (uint32_t)BufferAccess::TransferWrite)       f |= VK_ACCESS_2_TRANSFER_WRITE_BIT;
+    if ((uint32_t)a & (uint32_t)BufferAccess::ColorAttachmentRead) f |= VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT;
+    if ((uint32_t)a & (uint32_t)BufferAccess::ColorAttachmentWrite)f |= VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+    if ((uint32_t)a & (uint32_t)BufferAccess::DepthStencilRead)    f |= VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT;
+    if ((uint32_t)a & (uint32_t)BufferAccess::DepthStencilWrite)   f |= VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+    if ((uint32_t)a & (uint32_t)BufferAccess::MemoryRead)          f |= VK_ACCESS_2_MEMORY_READ_BIT;
+    if ((uint32_t)a & (uint32_t)BufferAccess::MemoryWrite)         f |= VK_ACCESS_2_MEMORY_WRITE_BIT;
     return f;
 }
 
@@ -279,13 +288,16 @@ void VkRHICommandBuffer::clearDepth(const RHITexture& tex, float depth, uint32_t
     vkCmdClearDepthStencilImage(m_cmd, (VkImage)(uintptr_t)tex.nativeHandle(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &cv, 1, &range);
 }
 
+// 新接口：带显式管线阶段/访问的纹理屏障
 void VkRHICommandBuffer::textureBarrier(const RHITexture& tex, TextureLayout oldLayout, TextureLayout newLayout,
+                                         PipelineStage srcStage, BufferAccess srcAccess,
+                                         PipelineStage dstStage, BufferAccess dstAccess,
                                          const TextureBarrierRange& range) {
     VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
-    b.srcStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
-    b.srcAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT;
-    b.dstStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
-    b.dstAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT;
+    b.srcStageMask  = toVkStage(srcStage);
+    b.srcAccessMask = toVkAccess(srcAccess);
+    b.dstStageMask  = toVkStage(dstStage);
+    b.dstAccessMask = toVkAccess(dstAccess);
     b.oldLayout = toVkLayout(oldLayout);
     b.newLayout = toVkLayout(newLayout);
     b.image = (VkImage)(uintptr_t)tex.nativeHandle();
@@ -296,6 +308,49 @@ void VkRHICommandBuffer::textureBarrier(const RHITexture& tex, TextureLayout old
     di.imageMemoryBarrierCount = 1; di.pImageMemoryBarriers = &b;
     vkCmdPipelineBarrier2(m_cmd, &di);
 }
+
+// 旧接口兼容（委托到新接口，使用 AllCommands 作为阶段/访问）
+void VkRHICommandBuffer::textureBarrier(const RHITexture& tex, TextureLayout oldLayout, TextureLayout newLayout,
+                                         const TextureBarrierRange& range) {
+    textureBarrier(tex, oldLayout, newLayout,
+                   PipelineStage::AllCommands, BufferAccess::MemoryRead | BufferAccess::MemoryWrite,
+                   PipelineStage::AllCommands, BufferAccess::MemoryRead | BufferAccess::MemoryWrite,
+                   range);
+}
+
+// 批量纹理屏障
+void VkRHICommandBuffer::textureBarriers(uint32_t count, const TextureBarrierDesc* barriers) {
+    if (count == 0 || !barriers) return;
+    // VkImageMemoryBarrier2 用栈分配，最大支持 16 个批量屏障
+    constexpr uint32_t kMaxBarriers = 16;
+    VkImageMemoryBarrier2 buf[kMaxBarriers];
+    VkImageMemoryBarrier2* barray = (count <= kMaxBarriers) ? buf : new VkImageMemoryBarrier2[count];
+
+    for (uint32_t i = 0; i < count; ++i) {
+        auto& desc = barriers[i];
+        auto& b = barray[i];
+        b = VkImageMemoryBarrier2{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+        b.srcStageMask  = toVkStage(desc.srcStage);
+        b.srcAccessMask = toVkAccess(desc.srcAccess);
+        b.dstStageMask  = toVkStage(desc.dstStage);
+        b.dstAccessMask = toVkAccess(desc.dstAccess);
+        b.oldLayout = toVkLayout(desc.oldLayout);
+        b.newLayout = toVkLayout(desc.newLayout);
+        b.image = (VkImage)(uintptr_t)desc.texture->nativeHandle();
+        const auto& r = desc.range;
+        b.subresourceRange = {toVkAspect(desc.texture->format()), r.baseMip,
+                              r.mipCount > 0 ? r.mipCount : desc.texture->mipLevels() - r.baseMip,
+                              r.baseLayer, r.layerCount};
+    }
+
+    VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+    di.imageMemoryBarrierCount = count;
+    di.pImageMemoryBarriers = barray;
+    vkCmdPipelineBarrier2(m_cmd, &di);
+
+    if (count > kMaxBarriers) delete[] barray;
+}
+
 void VkRHICommandBuffer::globalBarrier() {
     VkMemoryBarrier2 b{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
     b.srcStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
