@@ -67,6 +67,9 @@ public:
 
     VmaAllocator allocator() const { return m_allocator; }
 
+    // RHI 设备限制（从 VkRHIDevice 拷贝，供需要 DeviceLimits 的代码使用）
+    rhi::DeviceLimits limits() const { return m_limits; }
+
 private:
     VkInstance m_instance = VK_NULL_HANDLE;
     VkPhysicalDevice m_physicalDevice = VK_NULL_HANDLE;
@@ -79,6 +82,7 @@ private:
     uint32_t m_supportedSampleCounts = 0;
     vkb::DispatchTable m_dispatch{};
     VmaAllocator m_allocator = VK_NULL_HANDLE;
+    rhi::DeviceLimits m_limits{};
 };
 
 }

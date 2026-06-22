@@ -21,20 +21,9 @@ void FrameRenderer::init(Device& d, VkCommandPool pool, VkExtent2D extent,
 
     // ── 创建 RHI Device（共享 core::Device 的底层 Vulkan 句柄） ──
     {
-        VkPhysicalDeviceProperties props;
-        vkGetPhysicalDeviceProperties(d.physicalDevice(), &props);
-        rhi::DeviceLimits rhiLimits;
-        rhiLimits.maxTextureSize      = props.limits.maxImageDimension2D;
-        rhiLimits.maxSampledTextures  = props.limits.maxPerStageDescriptorSampledImages;
-        rhiLimits.maxUniformBufferSize = props.limits.maxUniformBufferRange;
-        rhiLimits.maxStorageBufferSize = props.limits.maxStorageBufferRange;
-        rhiLimits.maxPushConstantsSize = props.limits.maxPushConstantsSize;
-        rhiLimits.timestampPeriod      = props.limits.timestampPeriod;
-        rhiLimits.meshShaderSupported  = d.features().meshShader;
-        rhiLimits.rayTracingSupported  = d.features().accelStruct && d.features().rayQuery;
         m_rhiDevice = std::make_unique<rhi::VkRHIDevice>(
             d.instance(), d.physicalDevice(), d.device(), d.allocator(),
-            d.graphicsQueue(), d.graphicsQueueFamily(), d.dispatch(), rhiLimits);
+            d.graphicsQueue(), d.graphicsQueueFamily(), d.dispatch(), d.limits());
     }
 
     // Timestamp query pool

@@ -14,6 +14,7 @@ Device::Device(rhi::VkRHIDevice& vkDev) {
     m_graphicsQueueFamily = vkDev.queueFamily();
     m_dispatch = vkDev.dispatch();
     m_allocator = vkDev.vma();
+    m_limits = limits;
     m_timestampPeriod = limits.timestampPeriod;
     m_supportedSampleCounts = limits.supportedSampleCounts;
 
