@@ -508,10 +508,7 @@ void App::cleanup() {
     m_sceneGpu.images.clear();
     m_sceneGpu.whiteTex.reset();
     m_sceneGpu.normalTex.reset();
-    if (m_sceneGpu.linearSampler) {
-        vkDestroySampler(m_device->device(), m_sceneGpu.linearSampler, nullptr);
-        m_sceneGpu.linearSampler = VK_NULL_HANDLE;
-    }
+    // linearSampler 已由 destroySceneSamplers 通过 RHI 销毁
     // 显式释放 indirect buffer
     m_indirectBuf.reset();
     m_indirectBufSun.reset();
