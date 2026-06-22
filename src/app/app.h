@@ -148,9 +148,9 @@ private:
     // ---- ImGui debug window ----
     std::unique_ptr<Window> m_imguiWin;
     std::unique_ptr<Swapchain> m_imguiSwap;
-    VkCommandPool m_imguiPool = VK_NULL_HANDLE;
-    VkCommandBuffer m_imguiCmds[kFramesInFlight]{};
-    VkFence m_imguiFence = VK_NULL_HANDLE;
+    std::unique_ptr<rhi::RHICommandPool> m_imguiPool;
+    rhi::RHICommandBuffer* m_imguiCmds[kFramesInFlight]{};
+    std::unique_ptr<rhi::RHIFence> m_imguiFence;
 
     // ---- Live lighting values ----
     glm::vec3 m_sunDir{-0.4f, -1.0f, -0.3f};

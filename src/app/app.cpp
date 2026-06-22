@@ -105,16 +105,10 @@ App::App() {
         WindowDesc iwd; iwd.title = "SomeGI Debug"; iwd.width = 600; iwd.height = 900;
         m_imguiWin = std::make_unique<Window>(iwd);
         m_imguiSwap = std::make_unique<Swapchain>(*m_device, *m_imguiWin);
-        VkCommandPoolCreateInfo pci{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
-        pci.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
-        pci.queueFamilyIndex = m_device->graphicsQueueFamily();
-        VK_CHECK(vkCreateCommandPool(m_device->device(), &pci, nullptr, &m_imguiPool));
-        VkCommandBufferAllocateInfo ai{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
-        ai.commandPool = m_imguiPool; ai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-        ai.commandBufferCount = kFramesInFlight;
-        VK_CHECK(vkAllocateCommandBuffers(m_device->device(), &ai, m_imguiCmds));
-        VkFenceCreateInfo fci{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO, nullptr, VK_FENCE_CREATE_SIGNALED_BIT};
-        VK_CHECK(vkCreateFence(m_device->device(), &fci, nullptr, &m_imguiFence));
+        m_imguiPool = m_rhiDevice->createCommandPool();
+        for (uint32_t i = 0; i < kFramesInFlight; ++i)
+            m_imguiCmds[i] = m_imguiPool->allocateRaw();
+        m_imguiFence = m_rhiDevice->createFence(true);
     }
 
     // M9：检测 HW RT 支持并更新 dropdown 实现状态。
@@ -523,9 +517,9 @@ void App::cleanup() {
     m_indirectBufSun.reset();
     m_countBuf.reset();
     m_context.reset();  // 销毁命令上下文（自动清理 pool + cmd buffers + fence）
-    if (m_imguiFence) vkDestroyFence(m_device->device(), m_imguiFence, nullptr);
-    if (m_imguiCmds[0]) vkFreeCommandBuffers(m_device->device(), m_imguiPool, kFramesInFlight, m_imguiCmds);
-    if (m_imguiPool) vkDestroyCommandPool(m_device->device(), m_imguiPool, nullptr);
+    for (auto& c : m_imguiCmds) c = nullptr;
+    m_imguiFence.reset();
+    m_imguiPool.reset();
     m_imguiSwap.reset();
     m_imguiWin.reset();
 }
@@ -1283,11 +1277,11 @@ void App::renderDebugWindow() {
     auto f = m_imguiSwap->acquireNextFrame();
     if (f.needsResize) { m_imguiSwap->recreate(); return; }
 
-    VkCommandBuffer c = m_imguiCmds[f.frameInFlight];
+    auto& imguiCmd = *m_imguiCmds[f.frameInFlight];
+    VkCommandBuffer c = (VkCommandBuffer)(uintptr_t)imguiCmd.nativeHandle();
     rhi::VkRHICommandBuffer rhiCmdDbg(static_cast<rhi::VkRHIDevice&>(*m_rhiDevice), c);
-    vkResetCommandBuffer(c, 0);
-    VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO, nullptr, VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT};
-    VK_CHECK(vkBeginCommandBuffer(c, &bi));
+    imguiCmd.reset();
+    imguiCmd.begin();
     rhiTransitionImage(rhiCmdDbg, static_cast<rhi::VkRHIDevice&>(*m_rhiDevice), f.image, f.format, f.extent.width, f.extent.height,
         VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
         VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
@@ -1297,7 +1291,9 @@ void App::renderDebugWindow() {
         VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
         VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
         VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT, 0);
-    VK_CHECK(vkEndCommandBuffer(c));
+    imguiCmd.end();
+    // 注: submit 使用原生同步原语（AcquiredFrame 中的 VkSemaphore/Fence），
+    // 待 Swapchain 完全迁移到 RHI 后可改用 rhiDevice->submit()
     VkCommandBufferSubmitInfo cs{VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO, nullptr, c};
     VkSemaphoreSubmitInfo ws{VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO, nullptr, f.sync->imageAvailable, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT};
     VkSemaphoreSubmitInfo ss{VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO, nullptr, f.renderFinished, VK_PIPELINE_STAGE_2_ALL_GRAPHICS_BIT};
