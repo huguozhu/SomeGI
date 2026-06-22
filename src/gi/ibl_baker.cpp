@@ -240,7 +240,7 @@ void IblBaker::bake(Device& d, VkCommandPool pool, const EnvCpu& env, IblResourc
         cubeMip0CI.viewType = VK_IMAGE_VIEW_TYPE_2D_ARRAY;
         cubeMip0CI.format = VK_FORMAT_R16G16B16A16_SFLOAT;
         cubeMip0CI.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 6};
-        auto cubeMip0 = rhi::VkRHITextureView::createNonOwning(vkDev.vkDevice(), cubeMip0CI);
+        auto cubeMip0 = rhi::VkRHITextureView::createNonOwning(vkDev, cubeMip0CI);
 
         // RHI: 描述符写入
         descSet->write({
@@ -366,7 +366,7 @@ void IblBaker::bake(Device& d, VkCommandPool pool, const EnvCpu& env, IblResourc
         cvi.viewType = VK_IMAGE_VIEW_TYPE_CUBE;
         cvi.format = VK_FORMAT_R16G16B16A16_SFLOAT;
         cvi.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, kEnvCubeMips, 0, 6};
-        auto envCubeView = rhi::VkRHITextureView::createNonOwning(vkDev.vkDevice(), cvi);
+        auto envCubeView = rhi::VkRHITextureView::createNonOwning(vkDev, cvi);
 
         // RHI: diffuseCube per-mip array view
         VkImageViewCreateInfo diffMip0CI{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
@@ -374,7 +374,7 @@ void IblBaker::bake(Device& d, VkCommandPool pool, const EnvCpu& env, IblResourc
         diffMip0CI.viewType = VK_IMAGE_VIEW_TYPE_2D_ARRAY;
         diffMip0CI.format = VK_FORMAT_R16G16B16A16_SFLOAT;
         diffMip0CI.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 6};
-        auto diffMip0 = rhi::VkRHITextureView::createNonOwning(vkDev.vkDevice(), diffMip0CI);
+        auto diffMip0 = rhi::VkRHITextureView::createNonOwning(vkDev, diffMip0CI);
 
         // RHI: 描述符写入
         descSet->write({
@@ -426,7 +426,7 @@ void IblBaker::bake(Device& d, VkCommandPool pool, const EnvCpu& env, IblResourc
         cvi.viewType = VK_IMAGE_VIEW_TYPE_CUBE;
         cvi.format = VK_FORMAT_R16G16B16A16_SFLOAT;
         cvi.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, kEnvCubeMips, 0, 6};
-        auto envCubeView = rhi::VkRHITextureView::createNonOwning(vkDev.vkDevice(), cvi);
+        auto envCubeView = rhi::VkRHITextureView::createNonOwning(vkDev, cvi);
 
         // RHI: 为每个 mip 创建视图 + 描述符集（预先分配，避免在 submit 内分配）
         std::vector<std::unique_ptr<rhi::RHITextureView>> mipViews(kSpecularMips);
@@ -437,7 +437,7 @@ void IblBaker::bake(Device& d, VkCommandPool pool, const EnvCpu& env, IblResourc
             mipCI.viewType = VK_IMAGE_VIEW_TYPE_2D_ARRAY;
             mipCI.format = VK_FORMAT_R16G16B16A16_SFLOAT;
             mipCI.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, lvl, 1, 0, 6};
-            mipViews[lvl] = rhi::VkRHITextureView::createNonOwning(vkDev.vkDevice(), mipCI);
+            mipViews[lvl] = rhi::VkRHITextureView::createNonOwning(vkDev, mipCI);
 
             descSets[lvl] = rhiDevice->createDescriptorSet(*dsl);
             descSets[lvl]->write({

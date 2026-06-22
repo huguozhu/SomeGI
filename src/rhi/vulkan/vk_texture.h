@@ -59,6 +59,10 @@ public:
     // 从原生 Vulkan 句柄创建并拥有 VkImageView（适配仍用原生 VkImage 的旧代码路径）
     // 内部调用 vkCreateImageView，析构时自动 vkDestroyImageView
     static std::unique_ptr<RHITextureView> createNonOwning(VkDevice device, const VkImageViewCreateInfo& ci);
+    // 便捷重载：接受 VkRHIDevice& 替代裸 VkDevice
+    static std::unique_ptr<RHITextureView> createNonOwning(VkRHIDevice& device, const VkImageViewCreateInfo& ci) {
+        return createNonOwning(device.vkDevice(), ci);
+    }
     ~VkRHITextureView() override;
     void* nativeHandle() const override { return (void*)m_view; }
     void setView(VkImageView v) { m_view = v; }
