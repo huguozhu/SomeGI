@@ -16,11 +16,9 @@ constexpr VkDeviceSize alignUp(VkDeviceSize val, VkDeviceSize align) {
     return (val + align - 1) & ~(align - 1);
 }
 
-// Helper: get VkDeviceAddress from a VkBuffer handle.
-VkDeviceAddress getBufferAddress(VkDevice dev, VkBuffer buf) {
-    VkBufferDeviceAddressInfo bdi{VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO};
-    bdi.buffer = buf;
-    return vkGetBufferDeviceAddress(dev, &bdi);
+// Helper: get VkDeviceAddress from a Buffer (uses cached device address).
+VkDeviceAddress getBufferAddress(const Buffer& buf) {
+    return buf.deviceAddress();
 }
 }
 
@@ -60,8 +58,8 @@ void SceneRtAS::build(Device& d, rhi::RHIDevice& rhiDevice, VkCommandPool pool,
     auto dev = d.device();
     auto& dispatch = d.dispatch();
 
-    VkDeviceAddress vertAddr = getBufferAddress(dev, sceneGpu.vertexBuffer.handle());
-    VkDeviceAddress idxAddr  = getBufferAddress(dev, sceneGpu.indexBuffer.handle());
+    VkDeviceAddress vertAddr = getBufferAddress(sceneGpu.vertexBuffer);
+    VkDeviceAddress idxAddr  = getBufferAddress(sceneGpu.indexBuffer);
 
     // ---- Step 1: enumerate primitives ----
     struct PrimInfo {
