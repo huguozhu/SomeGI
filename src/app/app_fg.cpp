@@ -320,14 +320,10 @@ void App::setupFrameGraph() {
                             rhi::TextureLayout::ShaderReadOnly, rhi::TextureLayout::TransferDst);
                         transImg(*srcTex,
                             rhi::TextureLayout::General, rhi::TextureLayout::TransferSrc);
-                        VkImageCopy region{};
-                        region.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-                        region.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-                        region.extent = {m_renderer.kVxgiResolution, m_renderer.kVxgiResolution, m_renderer.kVxgiResolution};
-                        vkCmdCopyImage(cmd,
-                            srcImg, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                            m_renderer.vxgi().image().image(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                            1, &region);
+                        rhi::TextureBlitRegion region{};
+                        region.srcExtentWidth = vxgiRes; region.srcExtentHeight = vxgiRes; region.srcExtentDepth = vxgiRes;
+                        region.dstExtentWidth = vxgiRes; region.dstExtentHeight = vxgiRes; region.dstExtentDepth = vxgiRes;
+                        rhiCmd.blitTexture(*srcTex, *vxgiTex, region);
                         transImg(*vxgiTex,
                             rhi::TextureLayout::TransferDst, rhi::TextureLayout::ShaderReadOnly);
                     };
