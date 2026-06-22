@@ -1,12 +1,12 @@
 #pragma once
 #include "vk_common.h"
-
-struct VmaAllocation_T;
-typedef VmaAllocation_T* VmaAllocation;
+#include "rhi/base/device.h"
+#include "rhi/base/buffer.h"
+#include <memory>
 
 namespace somegi {
 
-namespace rhi { class VkRHIDevice; }
+namespace rhi { class VkRHIDevice; class RHIBuffer; }
 class Device;
 
 class Buffer {
@@ -27,22 +27,17 @@ public:
     void swap(Buffer& o) noexcept;
     void reset();
 
-    VkBuffer handle() const { return m_buffer; }
-    VkDeviceSize size() const { return m_size; }
-    VkDeviceAddress deviceAddress() const { return m_address; }
-    void* mapped() const { return m_mapped; }
+    VkBuffer handle() const;
+    VkDeviceSize size() const;
+    VkDeviceAddress deviceAddress() const;
+    void* mapped() const;
 
 private:
-    void createBuffer(VkDeviceSize size, VkBufferUsageFlags usage,
-                      VkMemoryPropertyFlags memProps, VkDeviceSize alignment);
+    void init(rhi::RHIDevice& device, VkDeviceSize size, VkBufferUsageFlags usage,
+              VkMemoryPropertyFlags memProps, VkDeviceSize alignment);
 
-    rhi::VkRHIDevice* m_rhiDev = nullptr;  // RHI 设备指针（不拥有）
-    VkBuffer m_buffer = VK_NULL_HANDLE;
-    VmaAllocation m_allocation = VK_NULL_HANDLE;
+    std::unique_ptr<rhi::RHIBuffer> m_rhiBuffer;  // RHI 拥有实际 VkBuffer
     VkDeviceSize m_size = 0;
-    VkDeviceAddress m_address = 0;
-    void* m_mapped = nullptr;
-    VkDeviceMemory m_manualMem = VK_NULL_HANDLE;
 };
 
 }

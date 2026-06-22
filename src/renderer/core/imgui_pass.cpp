@@ -25,7 +25,7 @@ void ImGuiPass::init(Device& d, rhi::RHIDevice& rhiDev, GLFWwindow* window, VkFo
     pci.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
     pci.maxSets = 1024;
     pci.poolSizeCount = (uint32_t)(sizeof(ps) / sizeof(ps[0])); pci.pPoolSizes = ps;
-    VK_CHECK(vkCreateDescriptorPool(d.device(), &pci, nullptr, &m_pool));
+    VK_CHECK(vkCreateDescriptorPool((VkDevice)rhiDev.nativeDevice(), &pci, nullptr, &m_pool));  // RHI 提供原生 VkDevice
 
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
@@ -64,7 +64,7 @@ void ImGuiPass::destroy() {
     ImGui_ImplVulkan_Shutdown();
     ImGui_ImplGlfw_Shutdown();
     ImGui::DestroyContext();
-    if (m_pool) vkDestroyDescriptorPool(m_device->device(), m_pool, nullptr);
+    if (m_pool) vkDestroyDescriptorPool((VkDevice)m_rhiDevice->nativeDevice(), m_pool, nullptr);  // RHI 提供原生 VkDevice
     m_pool = VK_NULL_HANDLE;
     m_inited = false;
 }
