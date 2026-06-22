@@ -228,7 +228,8 @@ void D3D12RHIPipelineState::createGraphicsPSO(const GraphicsPSODesc& desc) {
     psd.DepthStencilState.DepthWriteMask = desc.depthStencil.depthWrite
         ? D3D12_DEPTH_WRITE_MASK_ALL : D3D12_DEPTH_WRITE_MASK_ZERO;
     psd.DepthStencilState.DepthFunc = toD3D12Cmp(desc.depthStencil.depthCompare);
-    psd.DSVFormat = DXGI_FORMAT_D32_FLOAT; // 暂时硬编码
+    psd.DSVFormat = desc.renderTargets.depthFormat != Format::Unknown
+        ? toDxgiFormat(desc.renderTargets.depthFormat) : DXGI_FORMAT_UNKNOWN;
 
     psd.BlendState.AlphaToCoverageEnable = FALSE;
     psd.BlendState.IndependentBlendEnable = FALSE;
@@ -246,10 +247,8 @@ void D3D12RHIPipelineState::createGraphicsPSO(const GraphicsPSODesc& desc) {
 
     psd.NumRenderTargets = (UINT)desc.renderTargets.colorFormats.size();
     for (size_t i = 0; i < desc.renderTargets.colorFormats.size() && i < 8; ++i) {
-        // 忽略深度格式
+        psd.RTVFormats[i] = toDxgiFormat(desc.renderTargets.colorFormats[i]);
     }
-    psd.RTVFormats[0] = DXGI_FORMAT_R16G16B16A16_FLOAT; // 暂时硬编码
-    if (psd.NumRenderTargets > 1) psd.RTVFormats[1] = DXGI_FORMAT_R8G8B8A8_UNORM;
 
     psd.SampleDesc = { desc.renderTargets.sampleCount, 0 };
     psd.SampleMask = UINT_MAX;

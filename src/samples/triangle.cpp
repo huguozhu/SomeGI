@@ -203,6 +203,9 @@ struct TriangleResources {
 // 主函数
 // ════════════════════════════════════════════════════════════════
 int main() {
+#ifdef WIN32
+    SetConsoleOutputCP(CP_UTF8);  // 中文日志不乱码
+#endif
     // ── 创建窗口 ──
     WindowDesc wd; wd.title = "RHI Triangle"; wd.width = 800; wd.height = 600;
     Window window(wd);
@@ -210,8 +213,9 @@ int main() {
     // ── 全局资源持有者（unique_ptr 自动管理生命周期） ──
     std::unique_ptr<rhi::RHIDevice>       rhiDevice;
     std::unique_ptr<rhi::RHISwapchain>    swapchain;
-    std::unique_ptr<rhi::RHICommandPool>  cmdPool;
-    rhi::RHICommandBuffer*                cmd0 = nullptr;  // 双缓冲命令缓冲
+    std::unique_ptr<rhi::RHICommandPool>  cmdPool0;  // 每帧独立 pool（D3D12 allocator 不能共享）
+    std::unique_ptr<rhi::RHICommandPool>  cmdPool1;
+    rhi::RHICommandBuffer*                cmd0 = nullptr;
     rhi::RHICommandBuffer*                cmd1 = nullptr;
     TriangleResources                     triRes;
     RhiImGuiRenderer                      imgui;
@@ -225,9 +229,10 @@ int main() {
         triRes.createShaders(*rhiDevice);
         triRes.createPSO(*rhiDevice, swapchain->format());
 
-        cmdPool = rhiDevice->createCommandPool();
-        cmd0 = cmdPool->allocateRaw();
-        cmd1 = cmdPool->allocateRaw();
+        cmdPool0 = rhiDevice->createCommandPool();
+        cmdPool1 = rhiDevice->createCommandPool();
+        cmd0 = cmdPool0->allocateRaw();
+        cmd1 = cmdPool1->allocateRaw();
 
         imgui.init(*rhiDevice, window.handle(), swapchain->format(), 2);
         frameIdx = 0;
@@ -240,7 +245,8 @@ int main() {
         // 先释放命令缓冲（在 cmdPool 析构前）
         delete cmd0; cmd0 = nullptr;
         delete cmd1; cmd1 = nullptr;
-        cmdPool.reset();
+        cmdPool0.reset();
+        cmdPool1.reset();
         triRes.reset();
         swapchain.reset();
         rhiDevice.reset();
@@ -301,8 +307,7 @@ int main() {
 
         // ── 选择命令缓冲（双缓冲交替） ──
         auto& cmd = (frame.frameInFlight == 0) ? *cmd0 : *cmd1;
-        cmd.reset();
-        cmd.begin();
+        cmd.reset();  // 内部调用 end() + begin()，无需再调用 begin()
 
         // ── 屏障：转换到颜色附件布局（frame.texture 由 swapchain 提供） ──
         rhi::TextureLayout initialLayout = (s_currentBackend == rhi::Backend::Vulkan)

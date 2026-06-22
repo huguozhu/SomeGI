@@ -29,6 +29,7 @@ public:
     ID3D12PipelineState* pipeline() const { return m_pipeline; }
     ID3D12RootSignature* rootSignature() const { return m_rootSig; }
     bool isCompute() const { return m_isCompute; }
+    D3D12_PRIMITIVE_TOPOLOGY topology() const { return m_topology; }
 
     // 获取 Vulkan 描述符集 → D3D12 根参数索引映射
     uint32_t getResourceParamForSet(uint32_t setIdx) const {

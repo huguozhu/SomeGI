@@ -107,8 +107,10 @@ void D3D12RHICommandBuffer::bindPipelineState(const RHIPipelineState& pso) {
     m_cmdList->SetPipelineState(d3dPso.pipeline());
     if (d3dPso.isCompute())
         m_cmdList->SetComputeRootSignature(d3dPso.rootSignature());
-    else
+    else {
         m_cmdList->SetGraphicsRootSignature(d3dPso.rootSignature());
+        m_cmdList->IASetPrimitiveTopology(d3dPso.topology());
+    }
     m_boundPSO = &d3dPso; // 记录用于 descriptor set 根参数映射
 }
 

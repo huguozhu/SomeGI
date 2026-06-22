@@ -7,21 +7,6 @@
 namespace somegi {
 namespace rhi {
 
-// ── Format 映射 ──
-static DXGI_FORMAT toDxgiFormat(Format f) {
-    switch (f) {
-        case Format::R8_UNORM:            return DXGI_FORMAT_R8_UNORM;
-        case Format::R8G8B8A8_UNORM:      return DXGI_FORMAT_R8G8B8A8_UNORM;
-        case Format::R16G16_SFLOAT:       return DXGI_FORMAT_R16G16_FLOAT;
-        case Format::R16G16B16A16_SFLOAT: return DXGI_FORMAT_R16G16B16A16_FLOAT;
-        case Format::R32_UINT:            return DXGI_FORMAT_R32_UINT;
-        case Format::R32_SFLOAT:          return DXGI_FORMAT_R32_FLOAT;
-        case Format::R32G32_SFLOAT:       return DXGI_FORMAT_R32G32_FLOAT;
-        case Format::D32_SFLOAT:          return DXGI_FORMAT_D32_FLOAT;
-        case Format::B8G8R8A8_UNORM:      return DXGI_FORMAT_B8G8R8A8_UNORM;
-        default: return DXGI_FORMAT_R8G8B8A8_UNORM;
-    }
-}
 
 // ════════════════════════════════════════════════════════════════
 // D3D12RHITexture
