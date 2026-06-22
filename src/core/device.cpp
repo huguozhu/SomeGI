@@ -3,35 +3,33 @@
 
 namespace somegi {
 
-Device::Device(rhi::VkRHIDevice& vkDev) {
-    auto limits = vkDev.limits();
+Device::Device(rhi::VkRHIDevice& vkDev) : m_rhiDev(&vkDev) {
+    m_limits = vkDev.limits();
+    m_timestampPeriod = m_limits.timestampPeriod;
+    m_supportedSampleCounts = m_limits.supportedSampleCounts;
 
-    m_instance = vkDev.vkInstance();
-    m_physicalDevice = vkDev.vkPhysicalDevice();
-    m_device = vkDev.vkDevice();
-    m_surface = vkDev.surface();
-    m_graphicsQueue = vkDev.vkQueue();
-    m_graphicsQueueFamily = vkDev.queueFamily();
-    m_dispatch = vkDev.dispatch();
-    m_allocator = vkDev.vma();
-    m_limits = limits;
-    m_timestampPeriod = limits.timestampPeriod;
-    m_supportedSampleCounts = limits.supportedSampleCounts;
+    m_features.meshShader = m_limits.meshShaderSupported;
+    m_features.taskShader = m_limits.taskShaderSupported;
+    m_features.rayTracing = m_limits.rayTracingSupported;
+    m_features.accelStruct = m_limits.accelStructSupported;
+    m_features.rayQuery = m_limits.rayQuerySupported;
+    m_features.maxMeshOutputVertices = m_limits.maxMeshOutputVertices;
+    m_features.maxMeshOutputPrimitives = m_limits.maxMeshOutputPrimitives;
+    m_features.maxMeshWorkGroupSize = m_limits.maxMeshWorkGroupSize;
 
-    // 将 rhi::DeviceLimits 映射到 core::DeviceFeatures
-    m_features.meshShader = limits.meshShaderSupported;
-    m_features.taskShader = limits.taskShaderSupported;
-    m_features.rayTracing = limits.rayTracingSupported;
-    m_features.accelStruct = limits.accelStructSupported;
-    m_features.rayQuery = limits.rayQuerySupported;
-    m_features.maxMeshOutputVertices = limits.maxMeshOutputVertices;
-    m_features.maxMeshOutputPrimitives = limits.maxMeshOutputPrimitives;
-    m_features.maxMeshWorkGroupSize = limits.maxMeshWorkGroupSize;
-
-    // 扩展函数指针
     vkCmdDrawMeshTasksEXT = vkDev.vkCmdDrawMeshTasksEXT;
 
-    std::printf("[device] thin-wrapper initialized from VkRHIDevice\n");
+    std::printf("[device] thin-wrapper delegates to VkRHIDevice\n");
 }
+
+VkInstance Device::instance() const          { return m_rhiDev->vkInstance(); }
+VkPhysicalDevice Device::physicalDevice() const { return m_rhiDev->vkPhysicalDevice(); }
+VkDevice Device::device() const              { return m_rhiDev->vkDevice(); }
+VkSurfaceKHR Device::surface() const         { return m_rhiDev->surface(); }
+VkQueue Device::graphicsQueue() const        { return m_rhiDev->vkQueue(); }
+uint32_t Device::graphicsQueueFamily() const { return m_rhiDev->queueFamily(); }
+const vkb::DispatchTable& Device::dispatch() const { return m_rhiDev->dispatch(); }
+VmaAllocator Device::allocator() const       { return m_rhiDev->vma(); }
+void Device::waitIdle() const                { m_rhiDev->waitIdle(); }
 
 }
