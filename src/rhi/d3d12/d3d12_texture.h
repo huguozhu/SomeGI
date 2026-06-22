@@ -33,6 +33,11 @@ public:
     D3D12RHITexture(D3D12RHIDevice& device, const TextureDesc& desc);
     ~D3D12RHITexture() override;
 
+    // 非拥有型包装：不创建/销毁 ID3D12Resource，用于包装 swapchain back buffer
+    static std::unique_ptr<RHITexture> createNonOwning(D3D12RHIDevice& device, ID3D12Resource* resource,
+                                                        Format format, uint32_t width, uint32_t height,
+                                                        uint32_t mipLevels = 1);
+
     std::unique_ptr<RHITextureView> createView(const TextureViewDesc& desc) override;
     Format format() const override { return m_desc.format; }
     uint32_t width() const override  { return m_desc.width; }
@@ -50,6 +55,10 @@ private:
     TextureDesc m_desc{};
     DXGI_FORMAT m_dxgiFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
     D3D12_RESOURCE_STATES m_defaultState = D3D12_RESOURCE_STATE_COMMON;
+    bool m_ownsResource = true;  // 是否在析构时释放资源
+
+    // 空构造函（createNonOwning 专用，不创建资源）
+    explicit D3D12RHITexture(D3D12RHIDevice& d) : m_device(d) {}
 };
 
 // D3D12 纹理视图（即 SRV/RTV/DSV/UAV descriptor handle）

@@ -15,9 +15,9 @@ add_custom_command(OUTPUT ${FRAG_SPV}
 )
 
 # Main executable
-add_executable(RhiTriangle triangle.cpp ${VERT_SPV} ${FRAG_SPV})
+add_executable(RhiTriangle triangle.cpp rhi_imgui.cpp ${VERT_SPV} ${FRAG_SPV})
 target_include_directories(RhiTriangle PRIVATE ${CMAKE_SOURCE_DIR}/src)
-target_link_libraries(RhiTriangle PRIVATE somegi_rhi)
+target_link_libraries(RhiTriangle PRIVATE somegi_rhi imgui)
 
 # Copy SPIR-V to output dir
 add_custom_command(TARGET RhiTriangle POST_BUILD

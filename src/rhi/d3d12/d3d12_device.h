@@ -79,6 +79,9 @@ public:
     DescAlloc allocDescriptors(uint32_t count);
     void resetDescriptorHeap();
 
+    // 持久描述符分配（堆末尾区域，不受帧重置影响，用于 ImGui 字体 SRV 等）
+    DescAlloc allocPersistentDescriptors(uint32_t count);
+
     // CPU 端描述符堆（用于 RTV/DSV/SRV 持久视图，非 shader 可见）
     ID3D12DescriptorHeap* cpuRtvHeap()    { return m_cpuRtvHeap; }
     ID3D12DescriptorHeap* cpuDsvHeap()    { return m_cpuDsvHeap; }
@@ -128,6 +131,8 @@ private:
     D3D12_GPU_DESCRIPTOR_HANDLE m_gpuDescStartGPU{};
     uint32_t m_gpuDescOffset = 0;
     static constexpr uint32_t kGpuDescHeapSize = 65536;
+    static constexpr uint32_t kPersistentDescCount = 64;  // 持久描述符槽位（ImGui 字体 SRV 等）
+    uint32_t m_persistentDescCursor = 0;  // 持久区域游标（设备析构/重建时归零）
 };
 
 } // namespace rhi

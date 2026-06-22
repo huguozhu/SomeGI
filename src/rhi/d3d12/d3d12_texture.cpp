@@ -77,10 +77,27 @@ D3D12RHITexture::D3D12RHITexture(D3D12RHIDevice& device, const TextureDesc& desc
 }
 
 D3D12RHITexture::~D3D12RHITexture() {
-    if (m_resource) {
+    if (m_resource && m_ownsResource) {
         m_device.removeResourceState(m_resource);
         m_resource->Release();
     }
+}
+
+// 非拥有型包装：用于 swapchain back buffer 等外部管理的资源
+std::unique_ptr<RHITexture> D3D12RHITexture::createNonOwning(D3D12RHIDevice& device,
+                                                               ID3D12Resource* resource,
+                                                               Format format, uint32_t width,
+                                                               uint32_t height, uint32_t mipLevels) {
+    auto tex = std::unique_ptr<D3D12RHITexture>(new D3D12RHITexture(device));
+    tex->m_resource = resource;
+    tex->m_desc.format = format;
+    tex->m_desc.width = width;
+    tex->m_desc.height = height;
+    tex->m_desc.mipLevels = mipLevels;
+    tex->m_dxgiFormat = toDxgiFormat(format);
+    tex->m_defaultState = D3D12_RESOURCE_STATE_COMMON;
+    tex->m_ownsResource = false;
+    return tex;
 }
 
 std::unique_ptr<RHITextureView> D3D12RHITexture::createView(const TextureViewDesc& desc) {

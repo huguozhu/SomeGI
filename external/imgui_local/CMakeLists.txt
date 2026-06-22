@@ -8,6 +8,11 @@ add_library(imgui STATIC
     ../imgui/backends/imgui_impl_vulkan.cpp
 )
 
+# D3D12 后端（仅 Windows）
+if(WIN32)
+    target_sources(imgui PRIVATE ../imgui/backends/imgui_impl_dx12.cpp)
+endif()
+
 target_include_directories(imgui
     PUBLIC
         ../imgui
@@ -17,3 +22,8 @@ target_include_directories(imgui
 target_link_libraries(imgui
     PUBLIC Vulkan::Vulkan glfw
 )
+
+# D3D12 链接（仅 Windows）
+if(WIN32)
+    target_link_libraries(imgui PUBLIC d3d12 dxgi)
+endif()

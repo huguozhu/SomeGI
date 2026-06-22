@@ -181,8 +181,8 @@ D3D12RHIDevice::DescAlloc D3D12RHIDevice::allocDescriptors(uint32_t count) {
     uint32_t offset = m_gpuDescOffset;
     m_gpuDescOffset += count;
 
-    // Ensure we don't exceed heap capacity
-    assert(offset + count <= kGpuDescHeapSize);
+    // 确保不超过堆容量（末尾保留区域除外）
+    assert(offset + count <= kGpuDescHeapSize - kPersistentDescCount);
 
     DescAlloc a;
     a.offset = offset;
@@ -195,6 +195,23 @@ D3D12RHIDevice::DescAlloc D3D12RHIDevice::allocDescriptors(uint32_t count) {
 
 void D3D12RHIDevice::resetDescriptorHeap() {
     m_gpuDescOffset = 0;
+}
+
+// 持久描述符分配（堆末尾保留区域，不受帧重置影响）
+// 用于 ImGui 字体 SRV 等需要跨帧存活的描述符
+D3D12RHIDevice::DescAlloc D3D12RHIDevice::allocPersistentDescriptors(uint32_t count) {
+    uint32_t baseSlot = kGpuDescHeapSize - kPersistentDescCount;
+    uint32_t offset = baseSlot + m_persistentDescCursor;
+    m_persistentDescCursor += count;
+    assert(m_persistentDescCursor <= kPersistentDescCount && "持久描述符槽位不足");
+
+    DescAlloc a;
+    a.offset = offset;
+    a.cpu = m_gpuDescStartCPU;
+    a.cpu.ptr += static_cast<SIZE_T>(offset) * m_gpuDescIncrement;
+    a.gpu = m_gpuDescStartGPU;
+    a.gpu.ptr += static_cast<SIZE_T>(offset) * m_gpuDescIncrement;
+    return a;
 }
 
 D3D12RHIDevice::DescAlloc D3D12RHIDevice::allocSamplerDescriptors(uint32_t count) {
