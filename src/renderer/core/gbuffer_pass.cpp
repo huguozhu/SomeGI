@@ -63,47 +63,31 @@ void GBufferPass::init(Device& d, rhi::RHIDevice& rhiDevice,
 
     buildPipeline();
 
-    // ── Mesh Shader descriptor set layout（set=0，bindings 0-11）────
-    //     保留完整 VK 实现（与 ForwardPass 一致）
+    // ── Mesh Shader 描述符集布局（set=0，bindings 0-11）────
     {
-        const VkShaderStageFlags kTS = VK_SHADER_STAGE_TASK_BIT_EXT | VK_SHADER_STAGE_MESH_BIT_EXT;
-        std::array<VkDescriptorSetLayoutBinding, 12> mb{};
-        mb[0] = {0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, kTS, nullptr};
-        mb[1] = {1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, kTS, nullptr};  // MeshGroup 映射
-        for (uint32_t i = 0; i < 4; ++i)
-            mb[2+i] = {2+i, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, kTS, nullptr};
-        mb[6] = {6, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, kTS | VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
-        mb[7] = {7, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, kTS, nullptr};
-        mb[8] = {8, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, kTS, nullptr};
-        mb[9] = {9, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
-        mb[10]= {10, VK_DESCRIPTOR_TYPE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
-        mb[11]= {11, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, m_maxTextures, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
+        using DS = rhi::ShaderStage;
+        using DT = rhi::DescriptorType;
+        const auto kMS = DS::Mesh | DS::Task;       // Mesh/Task 阶段可见
+        const auto kFS = DS::Fragment;               // Fragment 阶段可见
 
-        std::array<VkDescriptorBindingFlags, 12> mbf{};
-        mbf[11] = VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT;
-        VkDescriptorSetLayoutBindingFlagsCreateInfo mbfci{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO};
-        mbfci.bindingCount = (uint32_t)mbf.size(); mbfci.pBindingFlags = mbf.data();
-
-        VkDescriptorSetLayoutCreateInfo mli{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-        mli.pNext = &mbfci;
-        mli.bindingCount = (uint32_t)mb.size(); mli.pBindings = mb.data();
-        VK_CHECK(vkCreateDescriptorSetLayout(d.device(), &mli, nullptr, &m_meshSetLayout));
-
-        uint32_t storageCount = 5u;   // bindings 0,1,7,8,9
-        uint32_t uniformCount = 1u;   // binding 6
-        std::array<VkDescriptorPoolSize, 4> mps{{
-            {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, storageCount},
-            {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, uniformCount},
-            {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, m_maxTextures + 4},
-            {VK_DESCRIPTOR_TYPE_SAMPLER, 1},
-        }};
-        VkDescriptorPoolCreateInfo mpci{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
-        mpci.maxSets = 1; mpci.poolSizeCount = (uint32_t)mps.size(); mpci.pPoolSizes = mps.data();
-        VK_CHECK(vkCreateDescriptorPool(d.device(), &mpci, nullptr, &m_meshPool));
-
-        VkDescriptorSetAllocateInfo mdai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
-        mdai.descriptorPool = m_meshPool; mdai.descriptorSetCount = 1; mdai.pSetLayouts = &m_meshSetLayout;
-        VK_CHECK(vkAllocateDescriptorSets(d.device(), &mdai, &m_meshSet));
+        rhi::DescSetLayoutDesc md; md.debugName = "GBuffer_Mesh";
+        md.bindings = {
+            {0,  DT::StorageBuffer, 1, kMS},
+            {1,  DT::StorageBuffer, 1, kMS},                    // MeshGroup 映射
+            {2,  DT::SampledImage,  1, kMS},
+            {3,  DT::SampledImage,  1, kMS},
+            {4,  DT::SampledImage,  1, kMS},
+            {5,  DT::SampledImage,  1, kMS},
+            {6,  DT::UniformBuffer, 1, kMS | kFS},
+            {7,  DT::StorageBuffer, 1, kMS},
+            {8,  DT::StorageBuffer, 1, kMS},
+            {9,  DT::StorageBuffer, 1, kFS},
+            {10, DT::Sampler,       1, kFS},
+            {11, DT::SampledImage,  m_maxTextures, kFS},
+        };
+        md.bindings[11].partiallyBound = true;  // 纹理数组可能部分绑定
+        m_meshSetLayout = rhiDevice.createDescriptorSetLayout(md);
+        m_meshSet = rhiDevice.createDescriptorSet(*m_meshSetLayout);
 
         m_cullUbo = Buffer(d, sizeof(glm::vec4)*6 + sizeof(glm::vec2) + sizeof(uint32_t)*2,
             VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
@@ -162,103 +146,55 @@ void GBufferPass::setMsaaSamples(VkSampleCountFlagBits samples) {
 void GBufferPass::destroyPipeline() {
     if (!m_device) return;
     m_pipeline.reset();
-    if (m_meshPipeline)       vkDestroyPipeline(m_device->device(), m_meshPipeline, nullptr);
-    if (m_meshPipelineLayout) vkDestroyPipelineLayout(m_device->device(), m_meshPipelineLayout, nullptr);
-    m_meshPipeline = VK_NULL_HANDLE; m_meshPipelineLayout = VK_NULL_HANDLE;
+    m_meshPipeline.reset();
 }
 
 // ──────────────────────────────────────────────────────────────────
-// Mesh Shader Pipeline（保留完整 VK 实现）
+// Mesh Shader Pipeline（RHI 路径）
 // ──────────────────────────────────────────────────────────────────
 void GBufferPass::buildMeshPipeline() {
-    auto& d = *m_device;
-    m_meshPipelineLayout = VK_NULL_HANDLE;
-
-    VkPipelineLayoutCreateInfo plci{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
-    plci.setLayoutCount = 1; plci.pSetLayouts = &m_meshSetLayout;
-    VK_CHECK(vkCreatePipelineLayout(d.device(), &plci, nullptr, &m_meshPipelineLayout));
-
+    auto& vkD = static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
     auto sd = shaderDir();
-    ShaderModule meshMod(d, sd / "gbuffer/gbuffer_mesh_no_task_mesh.spv");
-    ShaderModule fragMod(d, sd / "gbuffer" / "gbuffer_mesh_no_task_frag.spv");
 
-    std::vector<VkPipelineShaderStageCreateInfo> si;
-    {
-        VkPipelineShaderStageCreateInfo s{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
-        s.stage = VK_SHADER_STAGE_MESH_BIT_EXT; s.module = meshMod.handle(); s.pName = "main";
-        si.push_back(s);
-    }
-    {
-        VkPipelineShaderStageCreateInfo s{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
-        s.stage = VK_SHADER_STAGE_FRAGMENT_BIT; s.module = fragMod.handle(); s.pName = "main";
-        si.push_back(s);
-    }
+    // 加载 Mesh + Fragment 着色器
+    rhi::ShaderDesc msd, fsd;
+    msd.stage = rhi::ShaderStage::Mesh; msd.entryPoint = "main";
+    auto ms = rhi::VkRHIShader::createFromFile(vkD, msd,
+        sd / "gbuffer" / "gbuffer_mesh_no_task_mesh.spv");
+    fsd.stage = rhi::ShaderStage::Fragment; fsd.entryPoint = "main";
+    auto fs = rhi::VkRHIShader::createFromFile(vkD, fsd,
+        sd / "gbuffer" / "gbuffer_mesh_no_task_frag.spv");
 
-    VkPipelineVertexInputStateCreateInfo vi{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
-    vi.vertexBindingDescriptionCount = 0; vi.vertexAttributeDescriptionCount = 0;
+    rhi::GraphicsPSODesc pd; pd.debugName = "GBuffer_Mesh";
+    pd.meshShader = ms.get(); pd.fragmentShader = fs.get();
+    pd.topology = rhi::PrimitiveTopology::TriangleList;
+    pd.rasterization = {rhi::FillMode::Solid, rhi::CullMode::Back, true};
+    pd.depthStencil = {true, true, rhi::CompareFunc::LessEqual};
+    pd.renderTargets.colorFormats = {toRF(m_rt0Fmt), toRF(m_rt1Fmt), toRF(m_rt2Fmt)};
+    pd.renderTargets.depthFormat = toRF(m_depthFmt);
+    pd.renderTargets.sampleCount = (uint32_t)m_msaaSamples;
+    pd.descriptorSetLayouts = {m_meshSetLayout.get()};
 
-    VkPipelineInputAssemblyStateCreateInfo ia{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
-    ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
-
-    VkPipelineViewportStateCreateInfo vp{VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};
-    vp.viewportCount = 1; vp.scissorCount = 1;
-
-    VkPipelineRasterizationStateCreateInfo rs{VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
-    rs.cullMode = VK_CULL_MODE_BACK_BIT;
-    rs.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
-    rs.lineWidth = 1.0f;
-
-    VkPipelineMultisampleStateCreateInfo ms{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
-    ms.rasterizationSamples = m_msaaSamples;
-
-    VkPipelineDepthStencilStateCreateInfo ds{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
-    ds.depthTestEnable = VK_TRUE; ds.depthWriteEnable = VK_TRUE;
-    ds.depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
-
-    std::array<VkPipelineColorBlendAttachmentState, 3> ba{};
-    for (auto& a : ba) a.colorWriteMask = 0xF;
-    VkPipelineColorBlendStateCreateInfo cb{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
-    cb.attachmentCount = 3; cb.pAttachments = ba.data();
-
-    VkDynamicState dyn[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
-    VkPipelineDynamicStateCreateInfo dyni{VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};
-    dyni.dynamicStateCount = 2; dyni.pDynamicStates = dyn;
-
-    std::array<VkFormat, 3> colorFmts{m_rt0Fmt, m_rt1Fmt, m_rt2Fmt};
-    VkPipelineRenderingCreateInfo rci{VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO};
-    rci.colorAttachmentCount = 3; rci.pColorAttachmentFormats = colorFmts.data();
-    rci.depthAttachmentFormat = m_depthFmt;
-
-    VkGraphicsPipelineCreateInfo gpci{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
-    gpci.pNext = &rci;
-    gpci.stageCount = (uint32_t)si.size(); gpci.pStages = si.data();
-    gpci.pVertexInputState = &vi; gpci.pInputAssemblyState = &ia;
-    gpci.pViewportState = &vp; gpci.pRasterizationState = &rs;
-    gpci.pMultisampleState = &ms; gpci.pDepthStencilState = &ds;
-    gpci.pColorBlendState = &cb; gpci.pDynamicState = &dyni;
-    gpci.layout = m_meshPipelineLayout;
-    VK_CHECK(vkCreateGraphicsPipelines(d.device(), VK_NULL_HANDLE, 1, &gpci, nullptr, &m_meshPipeline));
+    m_meshPipeline = m_rhiDevice->createGraphicsPSO(pd);
 }
 
 void GBufferPass::setMeshShaderEnabled(bool v) {
-    if (v && m_meshPipeline == VK_NULL_HANDLE) buildMeshPipeline();
+    if (v && !m_meshPipeline) buildMeshPipeline();
     m_useMeshShader = v;
 }
 
 void GBufferPass::bindHiZViews(VkImageView mip1, VkImageView mip2, VkImageView mip3, VkImageView mip4) {
-    auto hiZInfo = [](VkImageView v) {
-        VkDescriptorImageInfo i{};
-        i.imageView = v; i.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL; return i;
-    };
-    VkDescriptorImageInfo hz1 = hiZInfo(mip1), hz2 = hiZInfo(mip2), hz3 = hiZInfo(mip3), hz4 = hiZInfo(mip4);
-    std::array<VkWriteDescriptorSet, 4> w{};
-    for (uint32_t i = 0; i < 4; ++i) {
-        w[i] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-        w[i].dstSet = m_meshSet; w[i].dstBinding = 2 + i; w[i].descriptorCount = 1;
-        w[i].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
-        w[i].pImageInfo = (i==0?&hz1:i==1?&hz2:i==2?&hz3:&hz4);
-    }
-    vkUpdateDescriptorSets(m_device->device(), 4, w.data(), 0, nullptr);
+    auto& vkD = static_cast<rhi::VkRHIDevice&>(*m_rhiDevice);
+    auto v1 = rhi::VkRHITextureView::createNonOwning(vkD, mip1);
+    auto v2 = rhi::VkRHITextureView::createNonOwning(vkD, mip2);
+    auto v3 = rhi::VkRHITextureView::createNonOwning(vkD, mip3);
+    auto v4 = rhi::VkRHITextureView::createNonOwning(vkD, mip4);
+    m_meshSet->write({
+        {2, rhi::DescriptorType::SampledImage, v1.get()},
+        {3, rhi::DescriptorType::SampledImage, v2.get()},
+        {4, rhi::DescriptorType::SampledImage, v3.get()},
+        {5, rhi::DescriptorType::SampledImage, v4.get()},
+    });
 }
 
 // ──────────────────────────────────────────────────────────────────
@@ -268,12 +204,9 @@ void GBufferPass::destroy() {
     if (!m_device) return;
     destroyPipeline();
     auto dev = m_device->device();
-    // RHI 对象自动析构（m_setLayout, m_set, m_pipeline）
+    // RHI 对象自动析构（m_setLayout, m_set, m_pipeline, m_meshSetLayout, m_meshSet, m_meshPipeline）
     m_setLayout.reset(); m_set.reset(); m_pipeline.reset();
-    // Mesh Shader 路径（VK 手动清理）
-    if (m_meshPool)      vkDestroyDescriptorPool(dev, m_meshPool, nullptr);
-    if (m_meshSetLayout) vkDestroyDescriptorSetLayout(dev, m_meshSetLayout, nullptr);
-    m_meshPool = VK_NULL_HANDLE; m_meshSetLayout = VK_NULL_HANDLE;
+    m_meshSetLayout.reset(); m_meshSet.reset(); m_meshPipeline.reset();
     m_rhiFrameUbo.reset();
     m_frameUbo.reset();
     m_cullUbo.reset();
@@ -309,47 +242,24 @@ void GBufferPass::bindScene(Device& d, const SceneGpu& gpu, uint32_t textureCoun
         // binding 10 (DrawData) 在 bindDrawData 中写入
     });
 
-    // ── Mesh Shader 的 set=0 描述符（仅在启用 mesh 时写入，避免 Intel 驱动崩溃）──
+    // ── Mesh Shader 的 set=0 描述符（RHI write）──
     if (m_useMeshShader) {
-        VkDescriptorBufferInfo vbInfo{gpu.vertexBuffer.handle(), 0, VK_WHOLE_SIZE};
-        VkDescriptorBufferInfo ibInfo{gpu.indexBuffer.handle(), 0, VK_WHOLE_SIZE};
-        VkDescriptorImageInfo samplerInfo{};
-        samplerInfo.sampler = gpu.linearSampler;
+        auto meshGroupRHI = rhi::VkRHIBuffer::createNonOwning(vkD, m_meshGroupBuf.handle(), m_meshGroupBuf.size());
+        auto vertRHI = rhi::VkRHIBuffer::createNonOwning(vkD, gpu.vertexBuffer.handle(), VK_WHOLE_SIZE);
+        auto idxRHI  = rhi::VkRHIBuffer::createNonOwning(vkD, gpu.indexBuffer.handle(), VK_WHOLE_SIZE);
 
-        std::vector<VkDescriptorImageInfo> imgs;
-        imgs.reserve(m_maxTextures);
-        for (uint32_t i = 0; i < m_maxTextures; ++i) {
-            VkDescriptorImageInfo ii{};
-            ii.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-            ii.imageView = (i < textureCount && i < gpu.images.size())
-                ? gpu.images[i].view() : gpu.whiteTex.view();
-            imgs.push_back(ii);
-        }
-
-        VkDescriptorBufferInfo uboInfo{m_frameUbo.handle(), 0, VK_WHOLE_SIZE};
-        VkDescriptorBufferInfo matInfo{gpu.materialBuffer.handle(), 0, VK_WHOLE_SIZE};
-
-        std::array<VkWriteDescriptorSet, 6> mw{};  // bindings 6-11
-        mw[0] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-        mw[0].dstSet=m_meshSet;mw[0].dstBinding=6;mw[0].descriptorCount=1;
-        mw[0].descriptorType=VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;mw[0].pBufferInfo=&uboInfo;
-        mw[1] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-        mw[1].dstSet=m_meshSet;mw[1].dstBinding=7;mw[1].descriptorCount=1;
-        mw[1].descriptorType=VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;mw[1].pBufferInfo=&vbInfo;
-        mw[2] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-        mw[2].dstSet=m_meshSet;mw[2].dstBinding=8;mw[2].descriptorCount=1;
-        mw[2].descriptorType=VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;mw[2].pBufferInfo=&ibInfo;
-        mw[3] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-        mw[3].dstSet=m_meshSet;mw[3].dstBinding=9;mw[3].descriptorCount=1;
-        mw[3].descriptorType=VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;mw[3].pBufferInfo=&matInfo;
-        mw[4] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-        mw[4].dstSet=m_meshSet;mw[4].dstBinding=10;mw[4].descriptorCount=1;
-        mw[4].descriptorType=VK_DESCRIPTOR_TYPE_SAMPLER;mw[4].pImageInfo=&samplerInfo;
-        mw[5] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-        mw[5].dstSet=m_meshSet;mw[5].dstBinding=11;mw[5].descriptorCount=m_maxTextures;
-        mw[5].descriptorType=VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;mw[5].pImageInfo=imgs.data();
-        // binding 0 (DrawData) 在 bindDrawData 中写入
-        vkUpdateDescriptorSets(d.device(), (uint32_t)mw.size(), mw.data(), 0, nullptr);
+        std::vector<rhi::DescriptorWrite> mw;
+        mw.push_back({1,  rhi::DescriptorType::StorageBuffer, nullptr, meshGroupRHI.get()});
+        mw.push_back({6,  rhi::DescriptorType::UniformBuffer,  nullptr, m_rhiFrameUbo.get()});
+        mw.push_back({7,  rhi::DescriptorType::StorageBuffer,  nullptr, vertRHI.get()});
+        mw.push_back({8,  rhi::DescriptorType::StorageBuffer,  nullptr, idxRHI.get()});
+        mw.push_back({9,  rhi::DescriptorType::StorageBuffer,  nullptr, matRHI});
+        // binding 10: Sampler
+        { rhi::DescriptorWrite w; w.binding=10; w.type=rhi::DescriptorType::Sampler; w.sampler=sampRHI.get(); mw.push_back(w); }
+        // binding 11: Texture array
+        { rhi::DescriptorWrite w; w.binding=11; w.type=rhi::DescriptorType::SampledImage;
+          w.textureArrayCount=(uint32_t)texViewPtrs.size(); w.textureViewArray=texViewPtrs.data(); mw.push_back(w); }
+        m_meshSet->write(mw);
     }
 }
 
@@ -365,11 +275,7 @@ void GBufferPass::bindDrawData(Device& d, VkBuffer drawDataBuf) {
 
     // ── Mesh 路径 binding 0 ──（同一 buffer，不同 binding）
     if (m_useMeshShader) {
-        VkDescriptorBufferInfo dd{drawDataBuf, 0, VK_WHOLE_SIZE};
-        VkWriteDescriptorSet mw{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-        mw.dstSet=m_meshSet;mw.dstBinding=0;mw.descriptorCount=1;
-        mw.descriptorType=VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;mw.pBufferInfo=&dd;
-        vkUpdateDescriptorSets(d.device(), 1, &mw, 0, nullptr);
+        m_meshSet->write({{0, rhi::DescriptorType::StorageBuffer, nullptr, ddRHI.get()}});
     }
 }
 
@@ -397,11 +303,13 @@ void GBufferPass::buildMeshGroups(const std::vector<DrawEntry>& entries) {
         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
     std::memcpy(m_meshGroupBuf.mapped(), groups.data(), m_meshGroupCount * sizeof(MeshGroup));
-    VkDescriptorBufferInfo gi{m_meshGroupBuf.handle(), 0, VK_WHOLE_SIZE};
-    VkWriteDescriptorSet w{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-    w.dstSet = m_meshSet; w.dstBinding = 1; w.descriptorCount = 1;
-    w.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; w.pBufferInfo = &gi;
-    vkUpdateDescriptorSets(m_device->device(), 1, &w, 0, nullptr);
+    // RHI：mesh group buffer 的 binding 1 在 bindScene 中已写入，此处更新 binding 1
+    if (m_meshGroupCount > 0) {
+        m_rhiMeshGroupBuf = rhi::VkRHIBuffer::createNonOwning(
+            static_cast<rhi::VkRHIDevice&>(*m_rhiDevice),
+            m_meshGroupBuf.handle(), m_meshGroupBuf.size());
+        m_meshSet->write({{1, rhi::DescriptorType::StorageBuffer, nullptr, m_rhiMeshGroupBuf.get()}});
+    }
 }
 
 void GBufferPass::updateCullUbo(const glm::mat4& viewProj, const glm::vec4 frustum[6],
@@ -478,13 +386,11 @@ void GBufferPass::record(rhi::RHICommandBuffer& cmd, const RenderTargets& rt,
     cmd.setViewport(0, 0, (float)rt.extent.width, (float)rt.extent.height);
     cmd.setScissor(0, 0, rt.extent.width, rt.extent.height);
 
-    // Mesh shader 路径
-    if (m_useMeshShader && m_meshPipeline != VK_NULL_HANDLE) {
-        auto vkCmd = static_cast<rhi::VkRHICommandBuffer&>(cmd).vkCmd();
-        vkCmdBindPipeline(vkCmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_meshPipeline);
-        vkCmdBindDescriptorSets(vkCmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-            m_meshPipelineLayout, 0, 1, &m_meshSet, 0, nullptr);
-        m_device->vkCmdDrawMeshTasksEXT(vkCmd, m_meshGroupCount, 1, 1);
+    // Mesh shader 路径（RHI）
+    if (m_useMeshShader && m_meshPipeline) {
+        cmd.bindPipelineState(*m_meshPipeline);
+        cmd.bindDescriptorSet(0, *m_meshSet);
+        cmd.drawMeshTasks(m_meshGroupCount, 1, 1);
     } else {
         // 顶点/索引缓冲路径（RHI）
         cmd.bindPipelineState(*m_pipeline);

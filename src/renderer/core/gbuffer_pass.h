@@ -65,15 +65,14 @@ private:
     std::unique_ptr<rhi::RHIDescriptorSet> m_set;
     std::unique_ptr<rhi::RHIPipelineState> m_pipeline;
 
-    // ── Mesh Shader 路径（VK，保留）──
+    // ── Mesh Shader 路径（RHI）──
     bool m_useMeshShader = false;
-    VkPipelineLayout m_meshPipelineLayout = VK_NULL_HANDLE;
-    VkPipeline m_meshPipeline = VK_NULL_HANDLE;
-    VkDescriptorSetLayout m_meshSetLayout = VK_NULL_HANDLE;
-    VkDescriptorPool m_meshPool = VK_NULL_HANDLE;
-    VkDescriptorSet m_meshSet = VK_NULL_HANDLE;
+    std::unique_ptr<rhi::RHIDescriptorSetLayout> m_meshSetLayout;
+    std::unique_ptr<rhi::RHIDescriptorSet> m_meshSet;
+    std::unique_ptr<rhi::RHIPipelineState> m_meshPipeline;
     Buffer m_cullUbo;
     Buffer m_meshGroupBuf;
+    std::unique_ptr<rhi::RHIBuffer> m_rhiMeshGroupBuf;  // 非拥有型包装
     uint32_t m_meshGroupCount = 0;
 
     Buffer m_frameUbo;
