@@ -33,9 +33,12 @@ public:
     virtual RHICommandBuffer& beginFrame(uint32_t frameIndex) = 0;
 
     // 结束命令录制，提交到队列，并触发 fence
+    // externalFence: 额外信号的原生 fence（void* 指向 VkFence / ID3D12Fence*），
+    // 用于同步 swapchain acquireNextFrame。传 nullptr 表示不需要。
     virtual void endFrame(uint32_t frameIndex,
                           const RHISemaphore* waitSemaphore,
-                          const RHISemaphore* signalSemaphore) = 0;
+                          const RHISemaphore* signalSemaphore,
+                          void* externalFence = nullptr) = 0;
 
     // 直接获取已录制的命令缓冲区（用于额外命令，如 ImGui）
     virtual RHICommandBuffer& commandBuffer(uint32_t frameIndex) = 0;

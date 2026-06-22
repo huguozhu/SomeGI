@@ -26,7 +26,8 @@ public:
     RHICommandBuffer& beginFrame(uint32_t frameIndex) override;
     void endFrame(uint32_t frameIndex,
                   const RHISemaphore* waitSemaphore,
-                  const RHISemaphore* signalSemaphore) override;
+                  const RHISemaphore* signalSemaphore,
+                  void* externalFence = nullptr) override;
     RHICommandBuffer& commandBuffer(uint32_t frameIndex) override;
     void waitIdle() override;
     RHIDevice& device() override { return m_device; }
@@ -54,15 +55,10 @@ public:
         return m_device.createQueryPool(count);
     }
 
-    // Vulkan 专用访问器（ImGui 等需要原生句柄 / 尚未迁移到 RHI 的调用方）
+    // Vulkan 专用访问器（过渡期：ImGui 等需要原生句柄）
     VkCommandBuffer vkCommandBuffer(uint32_t frameIndex) const;
     VkCommandPool vkCommandPool() const { return m_pool; }
     VkRHIDevice& vkDevice() { return m_device; }
-    // 直接使用 VkSemaphore 的 endFrame 重载（swapchain 尚未迁移到 RHI）
-    // externalFence: 额外信号此 fence（通常为 swapchain inFlight），
-    // 在内部 fence 之后通过空 submit 发出，保证 acquireNextFrame 同步
-    void endFrame(uint32_t frameIndex, VkSemaphore waitSem, VkSemaphore signalSem,
-                  VkFence externalFence = VK_NULL_HANDLE);
 
 private:
     VkRHIDevice& m_device;

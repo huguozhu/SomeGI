@@ -76,8 +76,18 @@ RHICommandBuffer& VkContext::beginFrame(uint32_t frameIndex) {
 
 void VkContext::endFrame(uint32_t frameIndex,
                               const RHISemaphore* waitSemaphore,
-                              const RHISemaphore* signalSemaphore) {
+                              const RHISemaphore* signalSemaphore,
+                              void* externalFence) {
     auto& fr = m_frames[frameIndex % m_framesInFlight];
+
+    // 从 RHI 对象（或 void* 回退）获取原生句柄
+    auto getVkSem = [](const RHISemaphore* s) -> VkSemaphore {
+        return s ? (VkSemaphore)(uintptr_t)s->nativeHandle() : VK_NULL_HANDLE;
+    };
+    VkSemaphore vkWait   = getVkSem(waitSemaphore);
+    VkSemaphore vkSignal = getVkSem(signalSemaphore);
+    // externalFence 已经是原生 VkFence（由调用方传入 nativeInFlightFence()）
+    VkFence vkExtFence = (VkFence)externalFence;
 
     // 结束录制
     vkEndCommandBuffer(fr.cmd);
@@ -87,21 +97,20 @@ void VkContext::endFrame(uint32_t frameIndex,
     csi.commandBuffer = fr.cmd;
 
     VkSemaphoreSubmitInfo waitInfo{VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO};
-    VkSemaphoreSubmitInfo signalInfo{VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO};
-
     uint32_t waitCount = 0;
     const VkSemaphoreSubmitInfo* pWait = nullptr;
-    if (waitSemaphore) {
-        waitInfo.semaphore = (VkSemaphore)(uintptr_t)waitSemaphore->nativeHandle();
+    if (vkWait != VK_NULL_HANDLE) {
+        waitInfo.semaphore = vkWait;
         waitInfo.stageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
         waitCount = 1;
         pWait = &waitInfo;
     }
 
+    VkSemaphoreSubmitInfo signalInfo{VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO};
     uint32_t signalCount = 0;
     const VkSemaphoreSubmitInfo* pSignal = nullptr;
-    if (signalSemaphore) {
-        signalInfo.semaphore = (VkSemaphore)(uintptr_t)signalSemaphore->nativeHandle();
+    if (vkSignal != VK_NULL_HANDLE) {
+        signalInfo.semaphore = vkSignal;
         signalInfo.stageMask = VK_PIPELINE_STAGE_2_ALL_GRAPHICS_BIT;
         signalCount = 1;
         pSignal = &signalInfo;
@@ -116,6 +125,12 @@ void VkContext::endFrame(uint32_t frameIndex,
     si.pSignalSemaphoreInfos = pSignal;
 
     VK_CHECK(vkQueueSubmit2(m_device.vkQueue(), 1, &si, fr.fence));
+
+    // 额外信号外部 fence（swapchain inFlight），防止 acquireNextFrame 死锁
+    if (vkExtFence != VK_NULL_HANDLE) {
+        VkSubmitInfo2 extSi{VK_STRUCTURE_TYPE_SUBMIT_INFO_2};
+        VK_CHECK(vkQueueSubmit2(m_device.vkQueue(), 1, &extSi, vkExtFence));
+    }
 }
 
 RHICommandBuffer& VkContext::commandBuffer(uint32_t frameIndex) {
@@ -130,53 +145,6 @@ void VkContext::waitIdle() {
 
 VkCommandBuffer VkContext::vkCommandBuffer(uint32_t frameIndex) const {
     return m_frames[frameIndex % m_framesInFlight].cmd;
-}
-
-void VkContext::endFrame(uint32_t frameIndex, VkSemaphore waitSem, VkSemaphore signalSem,
-                          VkFence externalFence) {
-    auto& fr = m_frames[frameIndex % m_framesInFlight];
-
-    vkEndCommandBuffer(fr.cmd);
-
-    VkCommandBufferSubmitInfo csi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO};
-    csi.commandBuffer = fr.cmd;
-
-    VkSemaphoreSubmitInfo waitInfo{VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO};
-    uint32_t waitCount = 0;
-    const VkSemaphoreSubmitInfo* pWait = nullptr;
-    if (waitSem != VK_NULL_HANDLE) {
-        waitInfo.semaphore = waitSem;
-        waitInfo.stageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
-        waitCount = 1;
-        pWait = &waitInfo;
-    }
-
-    VkSemaphoreSubmitInfo signalInfo{VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO};
-    uint32_t signalCount = 0;
-    const VkSemaphoreSubmitInfo* pSignal = nullptr;
-    if (signalSem != VK_NULL_HANDLE) {
-        signalInfo.semaphore = signalSem;
-        signalInfo.stageMask = VK_PIPELINE_STAGE_2_ALL_GRAPHICS_BIT;
-        signalCount = 1;
-        pSignal = &signalInfo;
-    }
-
-    VkSubmitInfo2 si{VK_STRUCTURE_TYPE_SUBMIT_INFO_2};
-    si.waitSemaphoreInfoCount = waitCount;
-    si.pWaitSemaphoreInfos = pWait;
-    si.commandBufferInfoCount = 1;
-    si.pCommandBufferInfos = &csi;
-    si.signalSemaphoreInfoCount = signalCount;
-    si.pSignalSemaphoreInfos = pSignal;
-
-    VK_CHECK(vkQueueSubmit2(m_device.vkQueue(), 1, &si, fr.fence));
-
-    // 额外信号外部 fence（通常为 swapchain inFlight）
-    // 空 submit 确保在内部 cmd buffer 完成后才 signal
-    if (externalFence != VK_NULL_HANDLE) {
-        VkSubmitInfo2 extSi{VK_STRUCTURE_TYPE_SUBMIT_INFO_2};
-        VK_CHECK(vkQueueSubmit2(m_device.vkQueue(), 1, &extSi, externalFence));
-    }
 }
 
 } // namespace rhi

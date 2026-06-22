@@ -9,6 +9,7 @@
 #include "rhi/base/descriptor.h"
 #include "rhi/base/buffer.h"
 #include "rhi/vulkan/vk_context.h"
+#include "rhi/vulkan/vk_fence.h"
 #include "renderer/core/render_targets.h"
 #include "renderer/core/tonemap_pass.h"
 #define GLFW_EXPOSE_NATIVE_WIN32
@@ -1465,9 +1466,16 @@ void App::run() {
 
         // ---- Finalize + submit main window (via RHI context) ----
         m_renderer.timestampValid(m_frameCtx.frameInFlight) = true;
-        rhiCtx.endFrame(frame.frameInFlight,
-            frame.sync->imageAvailable, frame.renderFinished,
-            frame.sync->inFlight);  // externalFence: 同步 swapchain acquireNextFrame
+        {
+            // 用非拥有型 RHI 包装器桥接原生 VkSemaphore
+            auto waitW = rhi::VkRHISemaphore::createNonOwning(
+                static_cast<rhi::VkRHIDevice&>(rhiCtx.device()), frame.sync->imageAvailable);
+            auto sigW  = rhi::VkRHISemaphore::createNonOwning(
+                static_cast<rhi::VkRHIDevice&>(rhiCtx.device()), frame.renderFinished);
+            rhiCtx.endFrame(frame.frameInFlight,
+                waitW.get(), sigW.get(),
+                (void*)frame.sync->inFlight);  // externalFence
+        }
 
         // ---- Screenshot capture (post-submit, pre-present) ----
         if (m_screenshot.shouldCapture() && !m_swap->hdrEnabled()) {
