@@ -101,8 +101,8 @@ SwapchainFrame VkRHISwapchain::acquireNextFrame() {
     VK_CHECK(r);
 
     f.imageIndex = imgIdx;
-    f.texture = nullptr; // swapchain images are not RHITexture wrappers
-    // 使用非拥有型包装，避免 SwapchainFrame 析构时误销毁 swapchain 内部的 VkImageView
+    // 非拥有型包装：不持有 VkImage/VkImageView，仅用于 barrier/copy 等 RHI 操作
+    f.texture = VkRHITexture::createNonOwning(m_device, m_images[imgIdx], m_format, m_extent.width, m_extent.height, 1);
     f.view = VkRHITextureView::createNonOwning(m_device, m_views[imgIdx]->vkView());
     f.width = m_extent.width; f.height = m_extent.height;
     f.imageAvailable = VkRHISemaphore::createNonOwning(m_device, sync.imageAvailable);
