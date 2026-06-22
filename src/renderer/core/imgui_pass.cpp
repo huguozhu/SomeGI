@@ -60,7 +60,7 @@ void ImGuiPass::init(Device& d, rhi::RHIDevice& rhiDev, GLFWwindow* window, VkFo
 
 void ImGuiPass::destroy() {
     if (!m_inited) return;
-    vkDeviceWaitIdle(m_device->device());
+    m_device->waitIdle();  // 委托给 rhi::VkRHIDevice::waitIdle()
     ImGui_ImplVulkan_Shutdown();
     ImGui_ImplGlfw_Shutdown();
     ImGui::DestroyContext();
