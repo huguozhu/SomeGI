@@ -40,30 +40,19 @@ constexpr uint32_t kSpecularSize      = 256;   // specularCube mip 0 边长
 constexpr uint32_t kSpecularMips      = 6;     // specular mip 数（mip 0=镜面，mip N-1=完全粗糙）
 constexpr uint32_t kBrdfLutSize       = 256;   // BRDF LUT 二维分辨率
 
-// 构造一个 VkImageMemoryBarrier2 而不立刻提交（让调用方批量打到 VkDependencyInfo）。
-// 烘焙过程中 blit 链需要复杂 barrier（多 mip / 条件 layout），此工具保留
-// 原生 Vulkan。
-VkImageMemoryBarrier2 imgBarrier(VkImage img,
-    VkImageLayout oldL, VkImageLayout newL,
-    VkPipelineStageFlags2 srcStg, VkAccessFlags2 srcAcc,
-    VkPipelineStageFlags2 dstStg, VkAccessFlags2 dstAcc,
-    uint32_t baseMip, uint32_t mipCount,
-    uint32_t baseLayer, uint32_t layerCount)
+// 创建 TextureBarrierDesc（辅助批量屏障构造）
+static rhi::RHICommandBuffer::TextureBarrierDesc mkBar(
+    const rhi::RHITexture* tex, rhi::TextureLayout oldL, rhi::TextureLayout newL,
+    rhi::PipelineStage srcStg, rhi::BufferAccess srcAcc,
+    rhi::PipelineStage dstStg, rhi::BufferAccess dstAcc,
+    uint32_t baseMip, uint32_t mipCount, uint32_t baseLayer, uint32_t layerCount)
 {
-    VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
-    b.srcStageMask = srcStg; b.srcAccessMask = srcAcc;
-    b.dstStageMask = dstStg; b.dstAccessMask = dstAcc;
-    b.oldLayout = oldL; b.newLayout = newL;
-    b.image = img;
-    b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, baseMip, mipCount, baseLayer, layerCount};
-    return b;
-}
-
-void pipelineBarrier(VkCommandBuffer cmd, std::vector<VkImageMemoryBarrier2>& b) {
-    VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-    di.imageMemoryBarrierCount = (uint32_t)b.size();
-    di.pImageMemoryBarriers = b.data();
-    vkCmdPipelineBarrier2(cmd, &di);
+    rhi::RHICommandBuffer::TextureBarrierDesc d{};
+    d.texture = tex; d.oldLayout = oldL; d.newLayout = newL;
+    d.srcStage = srcStg; d.srcAccess = srcAcc;
+    d.dstStage = dstStg; d.dstAccess = dstAcc;
+    d.range = {baseMip, mipCount, baseLayer, layerCount};
+    return d;
 }
 
 // 分配一个 cubemap（6 layer）。
@@ -187,24 +176,35 @@ void IblBaker::bake(Device& d, VkCommandPool pool, const EnvCpu& env, IblResourc
         out.brdfLut = Image(d, lutDesc);
     }
 
-    // 4. 把 4 张目标 image 全部转到 GENERAL（compute storage 写需要）。
-    //    equirect 已经在 SHADER_READ_ONLY，不需要再动。
-    //    保留原生 Vulkan（无 RHI 等效项，且 barrier 一次性批处理更简单）。
-    oneShotSubmit(*rhiDevice, [&](VkCommandBuffer cmd) {
-        std::vector<VkImageMemoryBarrier2> bs;
-        auto pushUndefToGeneral = [&](VkImage img, uint32_t mips, uint32_t layers) {
-            bs.push_back(imgBarrier(img,
-                VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
-                VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
-                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
-                0, mips, 0, layers));
-        };
-        pushUndefToGeneral(out.envCube.image(),      kEnvCubeMips,  6);
-        pushUndefToGeneral(out.diffuseCube.image(),  1,             6);
-        pushUndefToGeneral(out.specularCube.image(), kSpecularMips, 6);
-        pushUndefToGeneral(out.brdfLut.image(),      1,             1);
-        pipelineBarrier(cmd, bs);
+    // 4. 把 4 张目标 image 全部转到 GENERAL（compute storage 写需要）。RHI 批量屏障。
+    oneShotSubmitRHI(*rhiDevice, [&](rhi::RHICommandBuffer& cmd) {
+        auto envTex = rhi::VkRHITexture::createNonOwning(vkDev, out.envCube.image(),
+            rhi::toRhiFormat(VK_FORMAT_R16G16B16A16_SFLOAT), kEnvCubeSize, kEnvCubeSize, kEnvCubeMips);
+        auto diffTex = rhi::VkRHITexture::createNonOwning(vkDev, out.diffuseCube.image(),
+            rhi::toRhiFormat(VK_FORMAT_R16G16B16A16_SFLOAT), kDiffuseSize, kDiffuseSize, 1);
+        auto specTex = rhi::VkRHITexture::createNonOwning(vkDev, out.specularCube.image(),
+            rhi::toRhiFormat(VK_FORMAT_R16G16B16A16_SFLOAT), kSpecularSize, kSpecularSize, kSpecularMips);
+        auto brdfTex = rhi::VkRHITexture::createNonOwning(vkDev, out.brdfLut.image(),
+            rhi::toRhiFormat(VK_FORMAT_R16G16_SFLOAT), kBrdfLutSize, kBrdfLutSize, 1);
+
+        rhi::RHICommandBuffer::TextureBarrierDesc bs[4];
+        bs[0] = mkBar(envTex.get(),  rhi::TextureLayout::Undefined, rhi::TextureLayout::General,
+                      rhi::PipelineStage::TopOfPipe, rhi::BufferAccess::None,
+                      rhi::PipelineStage::ComputeShader, rhi::BufferAccess::StorageWrite,
+                      0, kEnvCubeMips,  0, 6);
+        bs[1] = mkBar(diffTex.get(), rhi::TextureLayout::Undefined, rhi::TextureLayout::General,
+                      rhi::PipelineStage::TopOfPipe, rhi::BufferAccess::None,
+                      rhi::PipelineStage::ComputeShader, rhi::BufferAccess::StorageWrite,
+                      0, 1,             0, 6);
+        bs[2] = mkBar(specTex.get(), rhi::TextureLayout::Undefined, rhi::TextureLayout::General,
+                      rhi::PipelineStage::TopOfPipe, rhi::BufferAccess::None,
+                      rhi::PipelineStage::ComputeShader, rhi::BufferAccess::StorageWrite,
+                      0, kSpecularMips, 0, 6);
+        bs[3] = mkBar(brdfTex.get(), rhi::TextureLayout::Undefined, rhi::TextureLayout::General,
+                      rhi::PipelineStage::TopOfPipe, rhi::BufferAccess::None,
+                      rhi::PipelineStage::ComputeShader, rhi::BufferAccess::StorageWrite,
+                      0, 1,             0, 1);
+        cmd.textureBarriers(4, bs);
     });
 
     // ===== 阶段 1：equirect → cube mip 0 =====
@@ -264,8 +264,7 @@ void IblBaker::bake(Device& d, VkCommandPool pool, const EnvCpu& env, IblResourc
     // 简单线性下采样链：mip k → mip k+1（半边长，linear filter 做 box
     // 平均）。比 compute pipeline 简单，适合 specular prefilter 的 mip 0
     // 输入需求（不需要高质量过滤，反正 prefilter 自己会按粗糙度做卷积）。
-    oneShotSubmit(*rhiDevice, [&](VkCommandBuffer cmd) {
-        rhi::VkRHICommandBuffer rhiCmd(vkDev, cmd);
+    oneShotSubmitRHI(*rhiDevice, [&](rhi::RHICommandBuffer& rhiCmd) {
         auto envCubeTex = rhi::VkRHITexture::createNonOwning(vkDev, out.envCube.image(),
             rhi::toRhiFormat(VK_FORMAT_R16G16B16A16_SFLOAT), kEnvCubeSize, kEnvCubeSize, kEnvCubeMips);
 
@@ -511,26 +510,30 @@ void IblBaker::bake(Device& d, VkCommandPool pool, const EnvCpu& env, IblResourc
         });
     }
 
-    // ===== 阶段 6：收尾 layout 转换 GENERAL → SHADER_READ_ONLY_OPTIMAL =====
-    // diffuseCube / specularCube / brdfLut 还在 GENERAL（compute 写出后没
-    // 转过），统一转 SHADER_READ_ONLY 供运行时 fragment / compute 阶段
-    // 采样。envCube 在阶段 2 mip 链生成结束时已经转好了。
-    // 保留原生 Vulkan（简单批处理 barrier，RHI 无等效批处理）。
-    oneShotSubmit(*rhiDevice, [&](VkCommandBuffer cmd) {
-        std::vector<VkImageMemoryBarrier2> bs;
-        auto toSampled = [&](VkImage img, uint32_t mips, uint32_t layers) {
-            bs.push_back(imgBarrier(img,
-                VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
-                VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
-                VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
-                0, mips, 0, layers));
-        };
-        toSampled(out.diffuseCube.image(),  1,             6);
-        toSampled(out.specularCube.image(), kSpecularMips, 6);
-        toSampled(out.brdfLut.image(),      1,             1);
-        pipelineBarrier(cmd, bs);
+    // ===== 阶段 6：收尾 layout 转换 GENERAL → SHADER_READ_ONLY =====
+    // RHI 批量屏障
+    oneShotSubmitRHI(*rhiDevice, [&](rhi::RHICommandBuffer& cmd) {
+        auto diffTex = rhi::VkRHITexture::createNonOwning(vkDev, out.diffuseCube.image(),
+            rhi::toRhiFormat(VK_FORMAT_R16G16B16A16_SFLOAT), kDiffuseSize, kDiffuseSize, 1);
+        auto specTex = rhi::VkRHITexture::createNonOwning(vkDev, out.specularCube.image(),
+            rhi::toRhiFormat(VK_FORMAT_R16G16B16A16_SFLOAT), kSpecularSize, kSpecularSize, kSpecularMips);
+        auto brdfTex = rhi::VkRHITexture::createNonOwning(vkDev, out.brdfLut.image(),
+            rhi::toRhiFormat(VK_FORMAT_R16G16_SFLOAT), kBrdfLutSize, kBrdfLutSize, 1);
+
+        rhi::RHICommandBuffer::TextureBarrierDesc bs2[3];
+        bs2[0] = mkBar(diffTex.get(), rhi::TextureLayout::General, rhi::TextureLayout::ShaderReadOnly,
+                       rhi::PipelineStage::ComputeShader, rhi::BufferAccess::StorageWrite,
+                       rhi::PipelineStage::FragmentShader, rhi::BufferAccess::MemoryRead,
+                       0, 1,             0, 6);
+        bs2[1] = mkBar(specTex.get(), rhi::TextureLayout::General, rhi::TextureLayout::ShaderReadOnly,
+                       rhi::PipelineStage::ComputeShader, rhi::BufferAccess::StorageWrite,
+                       rhi::PipelineStage::FragmentShader, rhi::BufferAccess::MemoryRead,
+                       0, kSpecularMips, 0, 6);
+        bs2[2] = mkBar(brdfTex.get(), rhi::TextureLayout::General, rhi::TextureLayout::ShaderReadOnly,
+                       rhi::PipelineStage::ComputeShader, rhi::BufferAccess::StorageWrite,
+                       rhi::PipelineStage::FragmentShader, rhi::BufferAccess::MemoryRead,
+                       0, 1,             0, 1);
+        cmd.textureBarriers(3, bs2);
     });
 }
 
