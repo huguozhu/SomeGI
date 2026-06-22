@@ -80,68 +80,52 @@ void ForwardPass::init(Device& d, rhi::RHIDevice& rhiDevice, VkFormat colorFmt, 
         m_pipeline=rhiDevice.createGraphicsPSO(pd);
     }
 
-    // Mesh Shader (Vk, 保留原实现)
+    // Mesh Shader PSO (RHI)
     if(d.features().meshShader) {
-        auto sd=shaderDir();
-        const VkShaderStageFlags kTS=VK_SHADER_STAGE_TASK_BIT_EXT|VK_SHADER_STAGE_MESH_BIT_EXT;
-        std::array<VkDescriptorSetLayoutBinding,12> mb{};
-        mb[0]={0,VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,1,kTS,nullptr}; mb[1]={1,VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,1,kTS,nullptr};
-        for(uint32_t i=0;i<4;++i) mb[2+i]={2u+i,VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,1,kTS,nullptr};
-        mb[6]={6,VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,1,kTS,nullptr}; mb[7]={7,VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,1,kTS,nullptr};
-        mb[8]={8,VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,maxTextures,kTS,nullptr};
-        for(uint32_t i=9;i<12;++i) mb[i]={i,VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,1,kTS,nullptr};
-        std::array<VkDescriptorBindingFlags,12> mbf{}; mbf[8]=VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT;
-        VkDescriptorSetLayoutBindingFlagsCreateInfo mbfci{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO};
-        mbfci.bindingCount=(uint32_t)mbf.size(); mbfci.pBindingFlags=mbf.data();
-        VkDescriptorSetLayoutCreateInfo mli{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-        mli.pNext=&mbfci; mli.bindingCount=(uint32_t)mb.size(); mli.pBindings=mb.data();
-        VK_CHECK(vkCreateDescriptorSetLayout(d.device(),&mli,nullptr,&m_meshSetLayout));
-        std::array<VkDescriptorPoolSize,2> mps{{{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,10},{VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,maxTextures+4}}};
-        VkDescriptorPoolCreateInfo mpci{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
-        mpci.maxSets=1; mpci.poolSizeCount=(uint32_t)mps.size(); mpci.pPoolSizes=mps.data();
-        VK_CHECK(vkCreateDescriptorPool(d.device(),&mpci,nullptr,&m_meshPool));
-        VkDescriptorSetAllocateInfo mdai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
-        mdai.descriptorPool=m_meshPool; mdai.descriptorSetCount=1; mdai.pSetLayouts=&m_meshSetLayout;
-        VK_CHECK(vkAllocateDescriptorSets(d.device(),&mdai,&m_meshSet));
-        VkPushConstantRange mpc{VK_SHADER_STAGE_TASK_BIT_EXT|VK_SHADER_STAGE_MESH_BIT_EXT,0,sizeof(PC)};
-        VkPipelineLayoutCreateInfo mpli{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
-        mpli.setLayoutCount=1; mpli.pSetLayouts=&m_meshSetLayout; mpli.pushConstantRangeCount=1; mpli.pPushConstantRanges=&mpc;
-        VK_CHECK(vkCreatePipelineLayout(d.device(),&mpli,nullptr,&m_meshPipelineLayout));
-        m_meshGroupBuf=Buffer(d,m_maxTextures*sizeof(uint32_t)*2,VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT|VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-        ShaderModule meshMod(d,sd/"forward"/"forward_mesh_no_task_mesh.spv"),fragMod(d,sd/"forward"/"forward_mesh_no_task_frag.spv");
-        std::vector<VkPipelineShaderStageCreateInfo> mstages;
-        mstages.push_back({VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,nullptr,0,VK_SHADER_STAGE_MESH_BIT_EXT,meshMod.handle(),"main",nullptr});
-        mstages.push_back({VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,nullptr,0,VK_SHADER_STAGE_FRAGMENT_BIT,fragMod.handle(),"main",nullptr});
-        VkGraphicsPipelineCreateInfo mgci{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
-        mgci.stageCount=(uint32_t)mstages.size(); mgci.pStages=mstages.data();
-        VkPipelineVertexInputStateCreateInfo mvi{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
-        VkPipelineInputAssemblyStateCreateInfo mia{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
-        mia.topology=VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
-        VkPipelineRasterizationStateCreateInfo mrs{VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
-        mrs.cullMode=VK_CULL_MODE_BACK_BIT; mrs.frontFace=VK_FRONT_FACE_COUNTER_CLOCKWISE; mrs.lineWidth=1.f;
-        VkPipelineMultisampleStateCreateInfo mms{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO}; mms.rasterizationSamples=VK_SAMPLE_COUNT_1_BIT;
-        VkPipelineDepthStencilStateCreateInfo mds{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
-        mds.depthTestEnable=VK_TRUE; mds.depthWriteEnable=VK_TRUE; mds.depthCompareOp=VK_COMPARE_OP_LESS_OR_EQUAL;
-        VkPipelineColorBlendAttachmentState mba{}; mba.colorWriteMask=0xF;
-        VkPipelineColorBlendStateCreateInfo mcb{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO}; mcb.attachmentCount=1; mcb.pAttachments=&mba;
-        VkPipelineViewportStateCreateInfo mvp{VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO}; mvp.viewportCount=1; mvp.scissorCount=1;
-        VkDynamicState mdyn[]={VK_DYNAMIC_STATE_VIEWPORT,VK_DYNAMIC_STATE_SCISSOR};
-        VkPipelineDynamicStateCreateInfo mdyni{VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO}; mdyni.dynamicStateCount=2; mdyni.pDynamicStates=mdyn;
-        VkPipelineRenderingCreateInfo mrci{VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO};
-        mrci.colorAttachmentCount=1; mrci.pColorAttachmentFormats=&m_colorFmt; mrci.depthAttachmentFormat=m_depthFmt;
-        mgci.pVertexInputState=&mvi; mgci.pInputAssemblyState=&mia; mgci.pRasterizationState=&mrs;
-        mgci.pMultisampleState=&mms; mgci.pDepthStencilState=&mds; mgci.pColorBlendState=&mcb;
-        mgci.pViewportState=&mvp; mgci.pDynamicState=&mdyni; mgci.layout=m_meshPipelineLayout; mgci.pNext=&mrci;
-        VK_CHECK(vkCreateGraphicsPipelines(d.device(),VK_NULL_HANDLE,1,&mgci,nullptr,&m_meshPipeline));
+        using DS=rhi::DescriptorType; using SS=rhi::ShaderStage;
+        auto kMS = static_cast<SS>(static_cast<uint32_t>(SS::Mesh)|static_cast<uint32_t>(SS::Task));
+
+        // Mesh Shader 描述符集布局
+        {
+            rhi::DescSetLayoutDesc ld; ld.debugName="ForwardMesh";
+            ld.bindings={{0,DS::StorageBuffer,1,kMS},{1,DS::StorageBuffer,1,kMS}};
+            for(uint32_t i=0;i<4;++i) ld.bindings.push_back({2u+i,DS::SampledImage,1,kMS});
+            ld.bindings.push_back({6,DS::StorageBuffer,1,kMS});
+            ld.bindings.push_back({7,DS::StorageBuffer,1,kMS});
+            ld.bindings.push_back({8,DS::SampledImage,maxTextures,kMS,true}); // PARTIALLY_BOUND
+            for(uint32_t i=9;i<12;++i) ld.bindings.push_back({i,DS::SampledImage,1,kMS});
+            m_meshSetLayoutRhi = rhiDevice.createDescriptorSetLayout(ld);
+            m_meshSetRhi = rhiDevice.createDescriptorSet(*m_meshSetLayoutRhi);
+        }
+
+        m_meshGroupBuf = Buffer(d, m_maxTextures*sizeof(uint32_t)*2, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT|VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+
+        // Mesh Shader Graphics PSO
+        auto sd = shaderDir();
+        rhi::ShaderDesc msDesc, fsDesc;
+        msDesc.stage = SS::Mesh; msDesc.entryPoint = "main";
+        fsDesc.stage = SS::Fragment; fsDesc.entryPoint = "main";
+        auto meshShader = rhi::VkRHIShader::createFromFile(vkD, msDesc, sd/"forward"/"forward_mesh_no_task_mesh.spv");
+        auto fragShader = rhi::VkRHIShader::createFromFile(vkD, fsDesc, sd/"forward"/"forward_mesh_no_task_frag.spv");
+
+        rhi::GraphicsPSODesc pd;
+        pd.debugName = "ForwardMesh";
+        pd.meshShader = meshShader.get();
+        pd.fragmentShader = fragShader.get();
+        pd.topology = rhi::PrimitiveTopology::TriangleList;
+        pd.rasterization.cull = rhi::CullMode::Back; pd.rasterization.frontCCW = false;
+        pd.depthStencil.depthTest = true; pd.depthStencil.depthWrite = true; pd.depthStencil.depthCompare = rhi::CompareFunc::LessEqual;
+        pd.renderTargets.colorFormats = {toRF(colorFmt)};
+        pd.renderTargets.depthFormat = toRF(depthFmt);
+        pd.descriptorSetLayouts = {m_meshSetLayoutRhi.get()};
+        pd.pushConstants = {{static_cast<SS>(static_cast<uint32_t>(SS::Mesh)|static_cast<uint32_t>(SS::Task)), 0, sizeof(PC)}};
+        m_meshPipelineRhi = rhiDevice.createGraphicsPSO(pd);
     }
 }
 
 void ForwardPass::destroy() {
     m_set.reset(); m_setLayout.reset(); m_iblSet.reset(); m_iblDsl.reset(); m_pipeline.reset();
-    if(m_meshPipeline) vkDestroyPipeline(m_device->device(),m_meshPipeline,nullptr);
-    if(m_meshPipelineLayout) vkDestroyPipelineLayout(m_device->device(),m_meshPipelineLayout,nullptr);
-    if(m_meshPool) vkDestroyDescriptorPool(m_device->device(),m_meshPool,nullptr);
-    if(m_meshSetLayout) vkDestroyDescriptorSetLayout(m_device->device(),m_meshSetLayout,nullptr);
+    m_meshSetRhi.reset(); m_meshSetLayoutRhi.reset(); m_meshPipelineRhi.reset();
     m_frameUbo.reset(); m_iblParamsUbo.reset(); m_dummySBuf.reset();
     m_rhiFrameUbo.reset(); m_rhiIblParamsUbo.reset(); m_rhiDummySBuf.reset();
     m_cullUbo.reset(); m_meshGroupBuf.reset();

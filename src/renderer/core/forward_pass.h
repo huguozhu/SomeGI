@@ -53,13 +53,11 @@ private:
     std::unique_ptr<rhi::RHIDescriptorSetLayout> m_iblDsl;
     std::unique_ptr<rhi::RHIDescriptorSet> m_iblSet;
 
-    // Mesh Shader (保留 Vk，过于复杂)
+    // Mesh Shader (已迁移到 RHI)
     bool m_useMeshShader = false;
-    VkPipelineLayout m_meshPipelineLayout = VK_NULL_HANDLE;
-    VkPipeline m_meshPipeline = VK_NULL_HANDLE;
-    VkDescriptorSetLayout m_meshSetLayout = VK_NULL_HANDLE;
-    VkDescriptorPool m_meshPool = VK_NULL_HANDLE;
-    VkDescriptorSet m_meshSet = VK_NULL_HANDLE;
+    std::unique_ptr<rhi::RHIPipelineState> m_meshPipelineRhi;
+    std::unique_ptr<rhi::RHIDescriptorSetLayout> m_meshSetLayoutRhi;
+    std::unique_ptr<rhi::RHIDescriptorSet> m_meshSetRhi;
     Buffer m_cullUbo, m_meshGroupBuf;
     uint32_t m_meshGroupCount = 0;
 
