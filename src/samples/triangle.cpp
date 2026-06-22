@@ -87,19 +87,44 @@ float4 main(PSInput input) : SV_TARGET {
 )";
 
 // 编译 HLSL 源码为 DXIL bytecode
+// 使用动态加载，避免 d3dcompiler DLL 导入表解析问题
 static std::vector<uint8_t> compileHlsl(const char* source, const char* entryPoint,
                                          const char* target) {
+    // 动态加载 d3dcompiler DLL（避免导入表解析问题）
+    HMODULE hD3DCompiler = LoadLibraryA("D3DCompiler_47.dll");
+    if (!hD3DCompiler) {
+        throw std::runtime_error("[D3D12] 无法加载 D3DCompiler_47.dll");
+    }
+
+    using D3DCompileFunc = HRESULT (*)(LPCVOID, SIZE_T, LPCSTR, const D3D_SHADER_MACRO*,
+                                        ID3DInclude*, LPCSTR, LPCSTR, UINT, UINT,
+                                        ID3DBlob**, ID3DBlob**);
+    auto pD3DCompile = (D3DCompileFunc)GetProcAddress(hD3DCompiler, "D3DCompile");
+    if (!pD3DCompile) {
+        FreeLibrary(hD3DCompiler);
+        throw std::runtime_error("[D3D12] 无法找到 D3DCompile 函数");
+    }
+
     ID3DBlob* codeBlob = nullptr;
     ID3DBlob* errBlob  = nullptr;
 
-    HRESULT hr = D3DCompile(source, strlen(source), nullptr, nullptr, nullptr,
-                            entryPoint, target, 0, 0, &codeBlob, &errBlob);
+    UINT compileFlags = 0;
+#if defined(_DEBUG)
+    compileFlags |= D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION;
+#endif
+
+    HRESULT hr = pD3DCompile(source, strlen(source), nullptr, nullptr, nullptr,
+                              entryPoint, target, compileFlags, 0, &codeBlob, &errBlob);
+    FreeLibrary(hD3DCompiler);
 
     if (FAILED(hr)) {
-        std::string err(static_cast<const char*>(errBlob->GetBufferPointer()),
-                        errBlob->GetBufferSize());
-        if (errBlob) errBlob->Release();
-        throw std::runtime_error("[D3D12] HLSL 编译失败:\n" + err);
+        std::string err = "HLSL 编译失败 (unknown error)";
+        if (errBlob) {
+            err = std::string(static_cast<const char*>(errBlob->GetBufferPointer()),
+                              errBlob->GetBufferSize());
+            errBlob->Release();
+        }
+        throw std::runtime_error("[D3D12] " + err);
     }
     if (errBlob) errBlob->Release();
 
@@ -136,8 +161,9 @@ struct TriangleResources {
             }
             case rhi::Backend::D3D12: {
 #ifdef WIN32
-                auto vsDxil = compileHlsl(kTriangleVS_HLSL, "main", "vs_6_0");
-                auto fsDxil = compileHlsl(kTrianglePS_HLSL, "main", "ps_6_0");
+                // D3DCompile 编译 HLSL→DXBC（vs_5_0/ps_5_0），D3D12 可消费 DXBC
+                auto vsDxil = compileHlsl(kTriangleVS_HLSL, "main", "vs_5_0");
+                auto fsDxil = compileHlsl(kTrianglePS_HLSL, "main", "ps_5_0");
                 sd.stage = rhi::ShaderStage::Vertex;
                 sd.format = rhi::ShaderFormat::DXIL;
                 vs = device.createShader(sd, vsDxil.data(), vsDxil.size());
@@ -229,7 +255,6 @@ int main() {
     // 主渲染循环
     // ════════════════════════════════════════════════════════════
     std::printf("[triangle] 进入渲染循环\n");
-    fflush(stdout);
     while (!window.shouldClose()) {
         window.pollEvents();
 
@@ -362,7 +387,6 @@ int main() {
             }
             rhiDevice->submit(sd);
         }
-
         // ── 呈现 ──
         if (s_currentBackend == rhi::Backend::Vulkan) {
             swapchain->present(frame);
@@ -377,7 +401,6 @@ int main() {
             d3dDev.resetSamplerHeap();
             // D3D12: acquireNextFrame 通过内部 fence 等待，无需显式 wait
         }
-
         ++frameIdx;
     }
 

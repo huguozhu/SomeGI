@@ -8,6 +8,10 @@
 #include "d3d12_shader.h"
 #include "d3d12_swapchain.h"
 #include "d3d12_command.h"
+#include "core/window.h"
+
+// glfwGetWin32Window 声明（避免包含 glfw3native.h，它与 HWND 前向声明冲突）
+extern "C" { HWND glfwGetWin32Window(struct GLFWwindow* window); }
 #include "d3d12_fence.h"
 #include "d3d12_pso.h"
 #include "d3d12_descriptor.h"
@@ -364,7 +368,9 @@ void D3D12RHIDevice::waitIdle() {
 // ════════════════════════════════════════════════════════════════
 
 HWND D3D12RHIDevice::getHwnd(void* nativeWindow) {
-    return static_cast<HWND>(nativeWindow);
+    // nativeWindow 是 Window*，需要通过 GLFW 获取真正的 Win32 HWND
+    auto* win = static_cast<somegi::Window*>(nativeWindow);
+    return glfwGetWin32Window(win->handle());
 }
 
 } // namespace rhi
