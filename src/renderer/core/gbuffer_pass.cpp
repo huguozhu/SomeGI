@@ -334,7 +334,6 @@ void GBufferPass::updateFrame(const FrameUBO& ubo) {
 
 // ──────────────────────────────────────────────────────────────────
 // record（VK 原生 + RHI 重载委托）
-// 注：RHI 路径通过 VkRHICommandBuffer::vkCmd() 获取原生句柄后使用 VK API，
 // RHI 路径：GBuffer MRT 渲染（3 颜色附件 + 深度，可选 MSAA resolve）
 void GBufferPass::record(rhi::RHICommandBuffer& cmd, const RenderTargets& rt,
                          const rhi::RHIBuffer& indirectBuf, uint32_t drawCount, const SceneGpu& gpu) {

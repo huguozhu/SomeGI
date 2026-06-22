@@ -37,7 +37,7 @@ public:
     FGHandle readWrite(FGHandle handle);
 
     // ---- 显式 Layout 声明（覆盖自动推导） ----
-    // 用于 vkCmdClearColorImage (需 TRANSFER_DST) / vkCmdCopyImage (需 TRANSFER_SRC/DST) 等场景
+    // 用于 clearColorImage (需 TRANSFER_DST) / copy/blit (需 TRANSFER_SRC/DST) 等场景
     FGHandle read(FGHandle handle, VkImageLayout explicitLayout);
     FGHandle write(FGHandle handle, VkImageLayout explicitLayout);
 
