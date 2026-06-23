@@ -7,7 +7,7 @@
 namespace somegi {
 
 void NdgiResources::create(Device& d, rhi::RHIDevice& rhiD) {
-    m_device = &d;
+
     auto sbuf = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
     auto hmem = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
     auto dmem = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
@@ -47,7 +47,7 @@ void NdgiResources::destroy() {
     m_rhiW3.reset(); m_rhiB3.reset();
     m_rhiSampleBuf.reset();
     m_rhiSampleCount.reset();
-    m_device = nullptr;
+    m_rhiDevice = nullptr;
 }
 
 } // namespace somegi

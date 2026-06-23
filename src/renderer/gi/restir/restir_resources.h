@@ -56,7 +56,6 @@ public:
 private:
     void createReservoirImages(Device& d, VkExtent2D ext);
 
-    Device* m_device = nullptr;
     rhi::RHIDevice* m_rhiDevice = nullptr;
     Image m_reservoirA;
     Image m_reservoirB;

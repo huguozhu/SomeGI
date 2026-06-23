@@ -14,7 +14,7 @@ uint32_t mipCountForExtent(uint32_t e) {
 }
 
 void VxgiResources::create(Device& d, rhi::RHIDevice& rhiD, uint32_t resolution) {
-    m_device = &d;
+    m_rhiDevice = &rhiD;
     m_resolution = resolution;
     uint32_t mips = mipCountForExtent(resolution);
 
@@ -136,7 +136,7 @@ void VxgiResources::destroySixAxis() {
 }
 
 void VxgiResources::destroy() {
-    if (!m_device) return;
+    if (!m_rhiDevice) return;
     // unique_ptr reset 自动销毁 VkImageView（通过 RHI VkRHITextureView 析构）
     m_mipViews.clear();
     m_anisoMipViews.clear();
@@ -149,7 +149,7 @@ void VxgiResources::destroy() {
     m_relightScratch2.reset();
     m_relightScratch2Tex.reset(); m_relightScratch2View.reset();
     m_resolution = 0;
-    m_device = nullptr;
+    m_rhiDevice = nullptr;
 }
 
 }

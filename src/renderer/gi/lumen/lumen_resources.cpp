@@ -7,7 +7,7 @@
 namespace somegi {
 
 void LumenResources::create(Device& d, rhi::RHIDevice& rhiD, VkExtent2D screenExt) {
-    m_device = &d;
+
 
     m_probeGridW = (screenExt.width  + kProbeTileSize - 1) / kProbeTileSize;
     m_probeGridH = (screenExt.height + kProbeTileSize - 1) / kProbeTileSize;
@@ -50,7 +50,7 @@ void LumenResources::destroy() {
     m_prevAtlasTex.reset(); m_prevAtlasView.reset();
     m_rayBufferRhi.reset();
     m_probeGridW = m_probeGridH = 0;
-    m_device = nullptr;
+    m_rhiDevice = nullptr;
 }
 
 }

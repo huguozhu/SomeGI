@@ -47,7 +47,7 @@ public:
     uint32_t resolution() const { return m_resolution; }
 
 private:
-    Device* m_device = nullptr;
+    rhi::RHIDevice* m_rhiDevice = nullptr;
     Image m_image;
     Image m_imageB;
     Image m_imageC;

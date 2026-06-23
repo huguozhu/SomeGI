@@ -19,7 +19,7 @@ Image makePrtSlice(Device& d, uint32_t resolution) {
 }
 
 void PrtResources::create(Device& d, rhi::RHIDevice& rhiD, uint32_t resolution) {
-    m_device = &d;
+
     m_resolution = resolution;
     m_image  = makePrtSlice(d, resolution);
     m_imageB = makePrtSlice(d, resolution);
@@ -54,7 +54,7 @@ void PrtResources::destroy() {
     m_texD.reset(); m_viewD.reset();
     m_texE.reset(); m_viewE.reset();
     m_resolution = 0;
-    m_device = nullptr;
+    m_rhiDevice = nullptr;
 }
 
 }

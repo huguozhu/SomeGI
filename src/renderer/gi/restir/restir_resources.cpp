@@ -8,7 +8,7 @@
 namespace somegi {
 
 void RestirResources::create(Device& d, rhi::RHIDevice& rhiD, VkExtent2D screenExtent, uint32_t maxLights) {
-    m_device = &d;
+
     m_rhiDevice = &rhiD;
     m_maxLights = maxLights;
     m_screenExtent = screenExtent;
@@ -58,7 +58,7 @@ void RestirResources::resize(Device& d, VkExtent2D newExtent) {
 }
 
 void RestirResources::destroy() {
-    if (!m_device) return;
+    if (!m_rhiDevice) return;
     m_reservoirA.reset();
     m_reservoirB.reset();
     m_lightBuf.reset();
@@ -68,7 +68,7 @@ void RestirResources::destroy() {
     m_screenExtent = {};
     m_maxLights = 0;
     m_lightCount = 0;
-    m_device = nullptr;
+    m_rhiDevice = nullptr;
     m_rhiDevice = nullptr;
 }
 

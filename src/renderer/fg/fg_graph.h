@@ -96,7 +96,6 @@ public:
 private:
     friend class FGBuilder;
 
-    Device* m_device = nullptr;
     rhi::RHIDevice* m_rhiDevice = nullptr;
     uint64_t m_frameIndex = 0;
     uint32_t m_resourceGeneration = 0;  // 每帧递增，用于检测悬空 FGHandle

@@ -72,7 +72,7 @@ public:
     void destroySixAxis();
 
 private:
-    Device* m_device = nullptr;
+    rhi::RHIDevice* m_rhiDevice = nullptr;
     Image m_image;
     std::unique_ptr<rhi::RHITexture> m_imageTex;
     std::unique_ptr<rhi::RHITextureView> m_imageView;

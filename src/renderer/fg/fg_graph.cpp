@@ -19,7 +19,7 @@ FrameGraph::FrameGraph() = default;
 FrameGraph::~FrameGraph() = default;
 
 void FrameGraph::init(Device& device) {
-    m_device = &device;
+
     m_executor.init(device);
 }
 

@@ -26,7 +26,6 @@ public:
 private:
     // 从 assets/imgui_style.ini 恢复控件尺寸样式
     void loadStyle();
-    Device* m_device = nullptr;
     rhi::RHIDevice* m_rhiDevice = nullptr;
     VkDescriptorPool m_pool = VK_NULL_HANDLE;
     bool m_inited = false;

@@ -91,7 +91,7 @@ FGExecutor::FGExecutor() = default;
 FGExecutor::~FGExecutor() = default;
 
 void FGExecutor::init(Device& device) {
-    m_device = &device;
+    // m_rhiDevice set in initTimestamps
 }
 
 void FGExecutor::destroy() {
@@ -273,7 +273,7 @@ Image* FGExecutor::allocateTexture(const FGResourceDesc& desc) {
     }
 
     PooledTexture pt;
-    pt.image = Image(*m_device, imgDesc);
+    pt.image = Image(static_cast<rhi::VkRHIDevice&>(*m_rhiDevice), imgDesc);
     pt.format = desc.texture.format;
     pt.extent = desc.texture.extent;
     pt.lastUsedFrame = m_currentFrame;
@@ -299,7 +299,7 @@ Buffer* FGExecutor::allocateBuffer(const FGResourceDesc& desc) {
     VkMemoryPropertyFlags memProps = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
 
     PooledBuffer pb;
-    pb.buffer = Buffer(*m_device, desc.buffer.size, desc.buffer.usage, memProps);
+    pb.buffer = Buffer(static_cast<rhi::VkRHIDevice&>(*m_rhiDevice), desc.buffer.size, desc.buffer.usage, memProps);
     pb.size = desc.buffer.size;
     pb.lastUsedFrame = m_currentFrame;
     pb.inUse = true;

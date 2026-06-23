@@ -32,7 +32,6 @@ void GBufferPass::init(Device& d, rhi::RHIDevice& rhiDevice,
                        VkFormat rt0Fmt, VkFormat rt1Fmt, VkFormat rt2Fmt,
                        VkFormat depthFmt, uint32_t maxTextures,
                        VkSampleCountFlagBits msaaSamples) {
-    m_device = &d;
     m_rhiDevice = &rhiDevice;
     m_rt0Fmt = rt0Fmt; m_rt1Fmt = rt1Fmt; m_rt2Fmt = rt2Fmt;
     m_depthFmt = depthFmt;
@@ -144,7 +143,7 @@ void GBufferPass::setMsaaSamples(VkSampleCountFlagBits samples) {
 }
 
 void GBufferPass::destroyPipeline() {
-    if (!m_device) return;
+    if (!m_rhiDevice) return;
     m_pipeline.reset();
     m_meshPipeline.reset();
 }
@@ -201,16 +200,15 @@ void GBufferPass::bindHiZViews(VkImageView mip1, VkImageView mip2, VkImageView m
 // Destroy
 // ──────────────────────────────────────────────────────────────────
 void GBufferPass::destroy() {
-    if (!m_device) return;
+    if (!m_rhiDevice) return;
     destroyPipeline();
-    auto dev = m_device->device();
-    // RHI 对象自动析构（m_setLayout, m_set, m_pipeline, m_meshSetLayout, m_meshSet, m_meshPipeline）
+    // RHI 对象自动析构
     m_setLayout.reset(); m_set.reset(); m_pipeline.reset();
     m_meshSetLayout.reset(); m_meshSet.reset(); m_meshPipeline.reset();
     m_rhiFrameUbo.reset();
     m_frameUbo.reset();
     m_cullUbo.reset();
-    m_device = nullptr;
+    m_rhiDevice = nullptr;
 }
 
 // ──────────────────────────────────────────────────────────────────
@@ -286,9 +284,9 @@ void GBufferPass::buildMeshGroups(const std::vector<DrawEntry>& entries) {
     struct MeshGroup { uint32_t drawIndex; uint32_t triOffset; };
     constexpr uint32_t kShaderMaxTris = 85;
     uint32_t kMaxTris = kShaderMaxTris;
-    if (m_device) {
-        uint32_t gpuLimit = m_device->features().maxMeshOutputPrimitives;
-        if (gpuLimit < kMaxTris) kMaxTris = gpuLimit;
+    if (m_rhiDevice) {
+        uint32_t gpuLimit = m_rhiDevice->limits().maxMeshOutputPrimitives;
+        if (gpuLimit > 0 && gpuLimit < kMaxTris) kMaxTris = gpuLimit;
     }
     std::vector<MeshGroup> groups;
     for (uint32_t d = 0; d < (uint32_t)entries.size(); ++d) {
@@ -299,7 +297,8 @@ void GBufferPass::buildMeshGroups(const std::vector<DrawEntry>& entries) {
     }
     m_meshGroupCount = (uint32_t)groups.size();
     if (m_meshGroupCount == 0) return;
-    m_meshGroupBuf = Buffer(*m_device, m_meshGroupCount * sizeof(MeshGroup),
+    m_meshGroupBuf = Buffer(static_cast<rhi::VkRHIDevice&>(*m_rhiDevice),
+        m_meshGroupCount * sizeof(MeshGroup),
         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
     std::memcpy(m_meshGroupBuf.mapped(), groups.data(), m_meshGroupCount * sizeof(MeshGroup));

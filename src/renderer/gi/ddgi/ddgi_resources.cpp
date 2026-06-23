@@ -7,7 +7,7 @@
 namespace somegi {
 
 void DdgiResources::create(Device& d, rhi::RHIDevice& rhiD) {
-    m_device = &d;
+
 
     // irradiance atlas: probesX·octaIrr 宽 × probesY·probesZ·octaIrr 高，RGBA16F
     {
@@ -66,7 +66,7 @@ void DdgiResources::destroy() {
     m_distanceTex.reset(); m_distanceView.reset();
     m_rayBufferRhi.reset();
     m_probeStatesRhi.reset();
-    m_device = nullptr;
+    m_rhiDevice = nullptr;
 }
 
 }

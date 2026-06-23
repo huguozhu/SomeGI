@@ -12,7 +12,7 @@
 namespace somegi {
 
 void ImGuiPass::init(Device& d, rhi::RHIDevice& rhiDev, GLFWwindow* window, VkFormat swapchainFormat, uint32_t imageCount) {
-    m_device = &d;
+    m_rhiDevice = &rhiDev;
     m_rhiDevice = &rhiDev;
 
     VkDescriptorPoolSize ps[] = {
@@ -60,11 +60,11 @@ void ImGuiPass::init(Device& d, rhi::RHIDevice& rhiDev, GLFWwindow* window, VkFo
 
 void ImGuiPass::destroy() {
     if (!m_inited) return;
-    m_device->waitIdle();  // 委托给 rhi::VkRHIDevice::waitIdle()
+    static_cast<rhi::VkRHIDevice&>(*m_rhiDevice).waitIdle();  // 委托给 rhi::VkRHIDevice::waitIdle()
     ImGui_ImplVulkan_Shutdown();
     ImGui_ImplGlfw_Shutdown();
     ImGui::DestroyContext();
-    if (m_pool) vkDestroyDescriptorPool(m_device->device(), m_pool, nullptr);
+    if (m_pool) vkDestroyDescriptorPool(static_cast<rhi::VkRHIDevice&>(*m_rhiDevice).vkDevice(), m_pool, nullptr);
     m_pool = VK_NULL_HANDLE;
     m_inited = false;
 }

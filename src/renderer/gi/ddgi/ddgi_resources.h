@@ -55,7 +55,7 @@ public:
     static uint32_t distanceAtlasH()   { return kProbesY * kProbesZ * kOctaDist; }
 
 private:
-    Device* m_device = nullptr;
+    rhi::RHIDevice* m_rhiDevice = nullptr;
     Image m_irradiance;
     Image m_distance;
     Buffer m_rayBuffer;   // probe×ray 共享 SSBO，存 (rayDir+pad, hitRgb+hitDist)

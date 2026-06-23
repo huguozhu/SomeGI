@@ -49,7 +49,7 @@ public:
     uint32_t instanceCount() const { return m_instanceCount; }
 
 private:
-    Device* m_device = nullptr;
+    rhi::RHIDevice* m_rhiDevice = nullptr;
 
     // Backing storage for all BLAS and the TLAS.
     std::vector<VkAccelerationStructureKHR> m_blases;

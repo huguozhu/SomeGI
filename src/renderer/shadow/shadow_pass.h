@@ -94,7 +94,6 @@ private:
     void buildPipeline_RTHard();
     void destroyPipelines();
 
-    Device* m_device = nullptr;
     rhi::RHIDevice* m_rhiDevice = nullptr;
     ShadowMethod m_method = ShadowMethod::HardShadowMap;
     uint32_t m_currentFrameIndex = 0;

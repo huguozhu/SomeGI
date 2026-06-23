@@ -84,7 +84,7 @@ void computeSunViewProj(const glm::vec3& sunDir,
 // init
 // ════════════════════════════════════════════════════════════════
 void ShadowPass::init(Device& d, rhi::RHIDevice& rhiDevice, VkExtent2D shadowMapSize, VkExtent2D outputSize) {
-    m_device = &d;
+    m_rhiDevice = &rhiDevice;
     m_rhiDevice = &rhiDevice;
     m_shadowMapSize = shadowMapSize;
     m_outputSize = outputSize;
@@ -715,7 +715,7 @@ void ShadowPass::recordRTSoft(rhi::RHICommandBuffer& cmd) {
 // Destroy
 // ════════════════════════════════════════════════════════════════
 void ShadowPass::destroy() {
-    if (!m_device) return;
+    if (!m_rhiDevice) return;
     destroyPipelines();
     m_shadowSampler.reset(); m_vsmSampler.reset();
     m_setLayout.reset(); m_set.reset();
@@ -726,7 +726,7 @@ void ShadowPass::destroy() {
     m_rhiShadowMaskView.reset(); m_rhiShadowMaskTex.reset();
     m_shadowMap.reset(); m_vsmMap.reset(); m_shadowMask.reset(); m_vsmBlur.reset();
     m_shadowUbo.reset();
-    m_device = nullptr;
+    m_rhiDevice = nullptr;
 }
 
 } // namespace somegi

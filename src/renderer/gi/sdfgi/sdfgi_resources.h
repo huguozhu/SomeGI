@@ -42,7 +42,7 @@ public:
     rhi::RHITextureView* udfRhiView() const { return m_udfView.get(); }
 
 private:
-    Device* m_device = nullptr;
+    rhi::RHIDevice* m_rhiDevice = nullptr;
     Image m_seedA;
     Image m_seedB;
     Image m_udf;

@@ -52,7 +52,6 @@ private:
     void buildMeshPipeline();   // VK Mesh Shader 路径（保留）
     void destroyPipeline();
 
-    Device* m_device = nullptr;
     rhi::RHIDevice* m_rhiDevice = nullptr;
     VkFormat m_rt0Fmt = VK_FORMAT_UNDEFINED;
     VkFormat m_rt1Fmt = VK_FORMAT_UNDEFINED;

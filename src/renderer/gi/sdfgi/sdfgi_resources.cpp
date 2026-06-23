@@ -6,7 +6,7 @@
 namespace somegi {
 
 void SdfgiResources::create(Device& d, rhi::RHIDevice& rhiD, uint32_t resolution) {
-    m_device = &d;
+
     m_resolution = resolution;
 
     // seedA / seedB：RGBA16F 3D，单 mip。STORAGE+SAMPLED；JFA 互写互读。
@@ -37,7 +37,7 @@ void SdfgiResources::create(Device& d, rhi::RHIDevice& rhiD, uint32_t resolution
 }
 
 void SdfgiResources::destroy() {
-    if (!m_device) return;
+    if (!m_rhiDevice) return;
     m_seedATex.reset(); m_seedAView.reset();
     m_seedBTex.reset(); m_seedBView.reset();
     m_udfTex.reset(); m_udfView.reset();
@@ -45,7 +45,7 @@ void SdfgiResources::destroy() {
     m_seedB.reset();
     m_udf.reset();
     m_resolution = 0;
-    m_device = nullptr;
+    m_rhiDevice = nullptr;
 }
 
 }

@@ -23,7 +23,7 @@ VkDeviceAddress getBufferAddress(const Buffer& buf) {
 }
 
 void SceneRtAS::swap(SceneRtAS& o) noexcept {
-    std::swap(m_device, o.m_device);
+    std::swap(m_rhiDevice, o.m_rhiDevice);
     std::swap(m_blases, o.m_blases);
     std::swap(m_tlasRHI, o.m_tlasRHI);
     m_blasBuf.swap(o.m_blasBuf);
@@ -35,8 +35,8 @@ void SceneRtAS::swap(SceneRtAS& o) noexcept {
 }
 
 void SceneRtAS::destroy() {
-    if (!m_device) return;
-    auto& dispatch = m_device->dispatch();
+    if (!m_rhiDevice) return;
+    auto& dispatch = static_cast<rhi::VkRHIDevice&>(*m_rhiDevice).dispatch();
     for (auto as : m_blases) {
         if (as) dispatch.destroyAccelerationStructureKHR(as, nullptr);
     }
@@ -48,13 +48,13 @@ void SceneRtAS::destroy() {
     m_instanceBuf.reset();
     m_instanceDataBuf.reset();
     m_instanceCount = 0;
-    m_device = nullptr;
+    m_rhiDevice = nullptr;
 }
 
 void SceneRtAS::build(Device& d, rhi::RHIDevice& rhiDevice, VkCommandPool pool,
                       const SceneCpu& scene, const SceneGpu& sceneGpu) {
     destroy();
-    m_device = &d;
+    m_rhiDevice = &rhiDevice;
     auto dev = d.device();
     auto& dispatch = d.dispatch();
 

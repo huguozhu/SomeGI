@@ -77,7 +77,6 @@ public:
                                                bool isWrite);
 
 private:
-    Device* m_device = nullptr;
     rhi::RHIDevice* m_rhiDevice = nullptr;
     uint64_t m_currentFrame = 0;
     bool m_autoBarriers = false;  // 默认关闭，pass 内部管理 barrier

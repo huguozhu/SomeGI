@@ -40,7 +40,6 @@ public:
                        uint32_t drawCount, uint32_t hizMaxMip, uint32_t screenW, uint32_t screenH);
 
 private:
-    Device* m_device = nullptr;
     rhi::RHIDevice* m_rhiDevice = nullptr;
     VkFormat m_colorFmt = VK_FORMAT_UNDEFINED, m_depthFmt = VK_FORMAT_UNDEFINED;
 

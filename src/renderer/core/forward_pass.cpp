@@ -27,7 +27,7 @@ static rhi::Format toRF(VkFormat f) {
 ForwardPass::~ForwardPass() = default;
 
 void ForwardPass::init(Device& d, rhi::RHIDevice& rhiDevice, VkFormat colorFmt, VkFormat depthFmt, uint32_t maxTextures) {
-    m_device=&d; m_rhiDevice=&rhiDevice; m_colorFmt=colorFmt; m_depthFmt=depthFmt; m_maxTextures=maxTextures;
+    m_rhiDevice=&rhiDevice; m_colorFmt=colorFmt; m_depthFmt=depthFmt; m_maxTextures=maxTextures;
     auto& vkD=static_cast<rhi::VkRHIDevice&>(rhiDevice);
     using DS=rhi::DescriptorType; using SS=rhi::ShaderStage;
     auto VSFS=static_cast<SS>(static_cast<uint32_t>(SS::Vertex)|static_cast<uint32_t>(SS::Fragment));
@@ -129,7 +129,7 @@ void ForwardPass::destroy() {
     m_frameUbo.reset(); m_iblParamsUbo.reset(); m_dummySBuf.reset();
     m_rhiFrameUbo.reset(); m_rhiIblParamsUbo.reset(); m_rhiDummySBuf.reset();
     m_cullUbo.reset(); m_meshGroupBuf.reset();
-    m_device=nullptr; m_rhiDevice=nullptr;
+    m_rhiDevice=nullptr;
 }
 
 void ForwardPass::bindIblResources(Device& d, const IblResources& ibl) {

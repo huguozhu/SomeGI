@@ -83,7 +83,7 @@ public:
     rhi::RHIBuffer* rhiSampleCount() const { return m_rhiSampleCount.get(); }
 
 private:
-    Device* m_device = nullptr;
+    rhi::RHIDevice* m_rhiDevice = nullptr;
     Buffer m_w1, m_b1, m_w2, m_b2, m_w3, m_b3;
     Buffer m_sampleBuf;
     Buffer m_sampleCount;

@@ -53,7 +53,7 @@ public:
     bool valid() const { return m_probeGridW != 0; }
 
 private:
-    Device* m_device = nullptr;
+    rhi::RHIDevice* m_rhiDevice = nullptr;
 
     Image  m_probeAtlas;
     Image  m_filteredAtlas;
